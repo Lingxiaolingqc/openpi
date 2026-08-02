@@ -114,6 +114,9 @@ def eval_libero(args: Args) -> None:
                     # IMPORTANT: rotate 180 degrees to match train preprocessing
                     img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
                     wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
+                    #改视频分辨率
+                    replay_images.append(img)
+                    
                     img = image_tools.convert_to_uint8(
                         image_tools.resize_with_pad(img, args.resize_size, args.resize_size)
                     )
@@ -122,7 +125,7 @@ def eval_libero(args: Args) -> None:
                     )
 
                     # Save preprocessed image for replay video
-                    replay_images.append(img)
+                    
 
                     if not action_plan:
                         # Finished executing previous action chunk -- compute new chunk
@@ -168,7 +171,12 @@ def eval_libero(args: Args) -> None:
             suffix = "success" if done else "failure"
             task_segment = task_description.replace(" ", "_")
             imageio.mimwrite(
-                pathlib.Path(args.video_out_path) / f"rollout_{task_segment}_{suffix}.mp4",
+                pathlib.Path(args.video_out_path)
+                / (
+                    f"task_{task_id + 1:02d}_"
+                    f"episode_{episode_idx + 1:03d}_"
+                    f"{task_segment}_{suffix}.mp4"
+                ),
                 [np.asarray(x) for x in replay_images],
                 fps=10,
             )

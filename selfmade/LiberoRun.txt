@@ -1,0 +1,62 @@
+1.服务端
+cd /home/data/xiaoqinchuan/projects/openpi
+
+export SUITE=libero_object
+export TRIALS=2
+export RUN_DIR="/home/data/xiaoqinchuan/results/libero/${SUITE}-${TRIALS}-seed7"
+
+mkdir -p "$RUN_DIR/videos"
+
+export CUDA_VISIBLE_DEVICES=0
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
+export OPENPI_DATA_HOME=/home/data/xiaoqinchuan/models
+
+set -o pipefail
+
+uv run scripts/serve_policy.py policy:checkpoint \
+  --policy.config=pi05_libero \
+  --policy.dir=/home/data/xiaoqinchuan/models/openpi-assets/checkpoints/pi05_libero \
+  2>&1 | tee "$RUN_DIR/server.log"
+
+2.客户端
+cd /home/data/xiaoqinchuan/projects/openpi
+
+source /home/data/xiaoqinchuan/envs/openpi-libero/bin/activate
+
+export SUITE=libero_spatial
+export TRIALS=2
+export RUN_DIR="/home/data/xiaoqinchuan/results/libero/${SUITE}-${TRIALS}-seed7"
+
+export PYTHONPATH="$PWD/third_party/libero:$PYTHONPATH"
+export LIBERO_CONFIG_PATH=/home/data/xiaoqinchuan/config/libero
+
+export CUDA_VISIBLE_DEVICES=1
+export MUJOCO_GL=egl
+export MUJOCO_EGL_DEVICE_ID=1
+
+set -o pipefail
+
+python examples/libero/main.py \
+  --args.host localhost \
+  --args.port 8000 \
+  --args.task-suite-name "$SUITE" \
+  --args.num-trials-per-task "$TRIALS" \
+  --args.seed 7 \
+  --args.resize-size 224 \
+  --args.replan-steps 5 \
+  --args.num-steps-wait 10 \
+  --args.video-out-path "$RUN_DIR/videos" \
+  2>&1 | tee "$RUN_DIR/client.log"
+
+client_exit_code=${PIPESTATUS[0]}
+echo "LIBERO client exit code: $client_exit_code" | tee -a "$RUN_DIR/client.log"
+
+3.结果转移
+scp -r "xiaoqinchuan@10.120.16.48:/home/data/xiaoqinchuan/results/libero" "D:\Documents\AILearning\EmbodiedAI\GUO\results\"
+
+4.
+grep -E "Total success rate|Total episodes|Caught exception" \
+  "$RUN_DIR/client.log"
+  查看total episodes数量对不对
+find "$RUN_DIR/videos" -type f -name "*.mp4" | wc -l
+  查看视频数量对不对
