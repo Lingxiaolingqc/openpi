@@ -55,7 +55,8 @@ ranges. Inspect the generated `q01`, `q99`, and `std` values before starting a l
 
 ## Serve the checkpoint
 
-Port 8000 was already occupied on the current shared server, so the example uses 18000:
+The example uses port 18000. Any free port may be used as long as
+the server and LeIsaac client use the same value.
 
 ```bash
 uv run scripts/serve_policy.py policy:checkpoint \
