@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
 import sys
 import time
 import traceback
-from pathlib import Path
 
 from isaaclab.app import AppLauncher
 
@@ -77,11 +77,11 @@ def main() -> int:
 
     # Isaac Sim must be launched before importing the remaining simulation modules.
     # isort: off
-    import gymnasium as gym  # noqa: E402
-    import torch  # noqa: E402
-    from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
-    import leisaac.tasks  # noqa: E402, F401
-    from leisaac.devices import SO101LeaderRemote  # noqa: E402
+    import gymnasium as gym
+    import torch
+    from isaaclab_tasks.utils import parse_env_cfg
+    import leisaac.tasks  # noqa: F401
+    from leisaac.devices import SO101LeaderRemote
     # isort: on
 
     env = None
