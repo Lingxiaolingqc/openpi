@@ -26,7 +26,6 @@ from urllib.parse import urlparse
 
 from isaaclab.app import AppLauncher
 
-
 _HTML = b"""<!doctype html>
 <html lang="en">
 <head>
