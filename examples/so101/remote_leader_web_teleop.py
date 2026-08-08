@@ -50,15 +50,15 @@ _HTML = b"""<!doctype html>
   <p><strong>Preview only:</strong> no dataset is recorded by this tool.</p>
   <img src="/stream.mjpg" alt="LeIsaac front camera">
   <div>
-    <button id="start" onclick="command('start')">Start / Resume</button>
-    <button id="success" onclick="command('success')">Success + Reset</button>
-    <button id="discard" onclick="command('discard')">Discard + Reset</button>
-    <button id="stop" onclick="command('stop')">Stop Server</button>
+    <button id="start" onclick="sendCommand('start')">Start / Resume</button>
+    <button id="success" onclick="sendCommand('success')">Success + Reset</button>
+    <button id="discard" onclick="sendCommand('discard')">Discard + Reset</button>
+    <button id="stop" onclick="sendCommand('stop')">Stop Server</button>
   </div>
   <pre id="status">Connecting...</pre>
 </main>
 <script>
-async function command(name) {
+async function sendCommand(name) {
   await fetch('/command/' + name, {method: 'POST'});
   await refresh();
 }
