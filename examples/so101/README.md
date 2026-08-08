@@ -7,13 +7,18 @@ For the tested Windows Leader publisher, SSH reverse tunnel, complete server env
 bounded LeIsaac validation commands, see [REMOTE_LEADER_RUNBOOK.md](REMOTE_LEADER_RUNBOOK.md).
 
 For headless interactive teleoperation, `remote_leader_web_teleop.py` exposes the policy front camera and
-Start/Success/Discard controls through a localhost-only browser page. It is preview-only and never records data.
+Start/Success/Discard controls through a localhost-only browser page. It remains preview-only by default;
+passing `--dataset_file` enables LeIsaac's native streaming HDF5 recorder.
 
 ## Data contract
 
-Record the LeIsaac dataset with `LeRobotDatasetCfg.action_align=True`. This is required: LeIsaac always writes
-`observation.state` in SO-101 motor coordinates, while `action_align=True` makes the recorded `action` use the
-same coordinate system. Leaving the default `False` would mix motor-coordinate states with Isaac-radian actions.
+Do not install LeRobot into the Isaac Sim environment. LeRobot 0.4.2 requires `packaging>=24.2`, while the
+tested Isaac Sim 5.1 environment requires `packaging==23.0`. Record native LeIsaac HDF5 in the stable simulator
+environment, then run `convert_leisaac_hdf5_to_lerobot.py` in OpenPI's isolated `uv` environment.
+
+Native LeIsaac HDF5 stores both state and action in USD radians. The converter reproduces LeIsaac v0.4.0's
+official `action_align=True` mapping so both resulting LeRobot fields use the same SO-101 motor coordinates.
+Copying the HDF5 arrays directly would mix coordinate contracts and train an invalid policy.
 
 The OpenPI data config consumes these LeRobot fields:
 
@@ -31,6 +36,33 @@ internal action padding, while the policy adapter exposes only the six SO-101 di
 LiftCube currently provides only a front camera. The adapter fills the unused wrist slots with black images and
 masks them out. It also accepts an optional `images/wrist` input for future SO-101 tasks; a dataset that records
 that camera must also add `"images/wrist": "observation.images.wrist"` to the data config's repack mapping.
+
+## Convert native LeIsaac HDF5
+
+First run the non-writing preflight. Set `--fps` to the actual web teleoperation step rate; the tested recording
+used 60 Hz:
+
+```bash
+uv run examples/so101/convert_leisaac_hdf5_to_lerobot.py \
+  --input-path "$LEISAAC_HDF5_FILE" \
+  --fps 60 \
+  --dry-run
+```
+
+After the preflight ranges have been reviewed, create a local LeRobot dataset. The converter refuses to
+overwrite an existing repository ID and does not upload anything unless `--push-to-hub` is explicitly passed:
+
+```bash
+uv run examples/so101/convert_leisaac_hdf5_to_lerobot.py \
+  --input-path "$LEISAAC_HDF5_FILE" \
+  --repo-id xiaoqinchuan/leisaac_so101_liftcube_smoke \
+  --task "Lift the cube." \
+  --fps 60 \
+  --image-mode video
+```
+
+Only HDF5 episodes with `success=true` are converted. The source HDF5 remains read-only and should be retained
+as the reproducible source of truth.
 
 ## Configure the dataset
 

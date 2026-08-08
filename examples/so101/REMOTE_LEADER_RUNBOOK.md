@@ -251,7 +251,24 @@ A clean exit prints both `REMOTE_WEB_TELEOP_HDF5_FINALIZED` and `REMOTE_WEB_TELE
 as the source-of-truth recording; do not convert or train until a short audit confirms its episode count,
 success labels, action shape, state shape, and camera shape.
 
-## 8. Stop or leave safely
+## 8. Preflight native HDF5 conversion
+
+Conversion runs in the OpenPI `uv` environment, not the active LeIsaac Conda environment. The first command is
+read-only and does not create a LeRobot dataset:
+
+```bash
+cd /home/data/xiaoqinchuan/projects/openpi
+
+uv run examples/so101/convert_leisaac_hdf5_to_lerobot.py \
+  --input-path "$LEISAAC_HDF5_FILE" \
+  --fps 60 \
+  --dry-run
+```
+
+Review the reported successful episode count, frame count, image shape, duration, and converted state/action
+ranges before running the writing conversion documented in [README.md](README.md).
+
+## 9. Stop or leave safely
 
 To leave the server task running, detach from `tmux` with `Ctrl+B`, then `D`. To stop the Windows side, press
 `Ctrl+C` once in the publisher terminal and once in the SSH tunnel terminal. Restarting the publisher normally
