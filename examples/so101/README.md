@@ -3,6 +3,9 @@
 This integration fine-tunes a pi0.5 policy on single-arm SO-101 episodes recorded by LeIsaac and serves the
 result back to LeIsaac over its OpenPI WebSocket client.
 
+For the tested Windows Leader publisher, SSH reverse tunnel, complete server environment restoration, and
+bounded LeIsaac validation commands, see [REMOTE_LEADER_RUNBOOK.md](REMOTE_LEADER_RUNBOOK.md).
+
 ## Data contract
 
 Record the LeIsaac dataset with `LeRobotDatasetCfg.action_align=True`. This is required: LeIsaac always writes
