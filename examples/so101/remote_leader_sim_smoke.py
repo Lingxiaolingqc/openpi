@@ -99,7 +99,8 @@ def main() -> int:
 
         print("REMOTE_LEADER_SMOKE_PHASE=creating_env", flush=True)
         env = gym.make(args.task, cfg=env_cfg).unwrapped
-        env.reset()
+        observations, _ = env.reset()
+        initial_joint_pos = observations["policy"]["joint_pos"].detach().clone()
         print("REMOTE_LEADER_ENV_CREATED_OK", flush=True)
         print(f"environment_type: {type(env).__name__}", flush=True)
         print(f"simulation_device: {env.device}", flush=True)
@@ -127,12 +128,16 @@ def main() -> int:
             last_action = action.detach().clone()
 
             step_result = env.step(action)
+            observations = step_result[0]
             rewards = step_result[1]
             all_rewards_finite = all_rewards_finite and bool(torch.isfinite(rewards).all())
             completed_steps += 1
 
         assert first_action is not None
         assert last_action is not None
+        final_joint_pos = observations["policy"]["joint_pos"].detach().clone()
+        action_delta = torch.abs(last_action - first_action)
+        joint_response_delta = torch.abs(final_joint_pos - initial_joint_pos)
         print(f"action_shape: {tuple(first_action.shape)}", flush=True)
         print(f"action_device: {first_action.device}", flush=True)
         print(
@@ -145,6 +150,28 @@ def main() -> int:
             tuple(round(value, 5) for value in last_action[0].tolist()),
             flush=True,
         )
+        print(
+            "action_delta_rad:",
+            tuple(round(value, 5) for value in action_delta[0].tolist()),
+            flush=True,
+        )
+        print(f"max_action_delta_rad: {action_delta.max().item():.5f}", flush=True)
+        print(
+            "initial_joint_pos_rad:",
+            tuple(round(value, 5) for value in initial_joint_pos[0].tolist()),
+            flush=True,
+        )
+        print(
+            "final_joint_pos_rad:",
+            tuple(round(value, 5) for value in final_joint_pos[0].tolist()),
+            flush=True,
+        )
+        print(
+            "joint_response_delta_rad:",
+            tuple(round(value, 5) for value in joint_response_delta[0].tolist()),
+            flush=True,
+        )
+        print(f"max_joint_response_rad: {joint_response_delta.max().item():.5f}", flush=True)
         print(f"completed_steps: {completed_steps}", flush=True)
         print(f"all_rewards_finite: {all_rewards_finite}", flush=True)
 
