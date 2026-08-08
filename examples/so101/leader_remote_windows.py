@@ -33,6 +33,7 @@ from pathlib import Path
 
 DEFAULT_PORT = "COM7"
 DEFAULT_ID = "leader_arm"
+DEFAULT_BIND = "tcp://127.0.0.1:5556"
 EEPROM_CONFIRMATION = "SET_IDS_AND_BAUDRATE"
 PUBLISHER_RELATIVE_PATH = Path(
     "scripts/environments/teleoperation/so101_joint_state_server.py"
@@ -105,11 +106,11 @@ def audit(args: argparse.Namespace) -> int:
     print("custom_pid_writes: DISABLED")
     print("leader_runtime_mode: passive position readout with torque disabled")
 
-    for module in ("serial", "zmq", "numpy", "scservo_sdk"):
+    for module in ("serial", "zmq", "scservo_sdk"):
         print(f"module_{module}: {'available' if _module_available(module) else 'missing'}")
 
     for command in ("lerobot-setup-motors", "lerobot-calibrate"):
-        print(f"command_{command}: {shutil.which(command) or 'not found'}")
+        print(f"optional_command_{command}: {shutil.which(command) or 'not found'}")
 
     detected_ports = _print_serial_ports()
     print(f"requested_port: {args.port}")
@@ -190,6 +191,8 @@ def _run_publisher(args: argparse.Namespace, *, recalibrate: bool) -> int:
         args.id,
         "--rate",
         str(args.rate),
+        "--bind",
+        args.bind,
     ]
     if recalibrate:
         command.append("--recalibrate")
@@ -214,6 +217,11 @@ def _add_publisher_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--port", default=DEFAULT_PORT, help=f"Windows serial port (default: {DEFAULT_PORT})")
     parser.add_argument("--id", default=DEFAULT_ID, help="Stable LeIsaac calibration identifier")
     parser.add_argument("--rate", type=int, default=50, choices=range(1, 101), metavar="1..100")
+    parser.add_argument(
+        "--bind",
+        default=DEFAULT_BIND,
+        help=f"ZMQ publisher bind endpoint (default: {DEFAULT_BIND}; intended for an SSH tunnel)",
+    )
     parser.add_argument("--leisaac-root", required=True, help="Windows LeIsaac checkout root")
     parser.add_argument(
         "--python",
