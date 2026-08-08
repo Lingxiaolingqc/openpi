@@ -4,8 +4,9 @@ The physical Leader publishes joint states on Windows. This server-side script
 receives them through ``SO101LeaderRemote``, applies the official LeIsaac action
 mapping, and exposes the front camera through an MJPEG page bound to localhost.
 
-This is deliberately a preview-only tool: it does not record a dataset. Use an
-SSH local forward for the preview port and a reverse forward for Leader states.
+By default this is a preview-only tool. Passing ``--dataset_file`` enables
+LeIsaac's native streaming HDF5 recorder without importing LeRobot. Use an SSH
+local forward for the preview port and a reverse forward for Leader states.
 """
 
 from __future__ import annotations
@@ -47,7 +48,8 @@ _HTML = b"""<!doctype html>
 <body>
 <main>
   <h1>SO-101 LeIsaac preview</h1>
-  <p><strong>Preview only:</strong> no dataset is recorded by this tool.</p>
+  <p>HDF5 recording is enabled only when the server is launched with
+     <code>--dataset_file</code>. The status block below is authoritative.</p>
   <img src="/stream.mjpg" alt="LeIsaac front camera">
   <div>
     <button id="start" onclick="sendCommand('start')">Start / Resume</button>
@@ -90,7 +92,9 @@ class PreviewState:
         self._commands: deque[str] = deque()
         self._status: dict[str, object] = {
             "phase": "starting",
+            "recording_enabled": False,
             "recording": False,
+            "dataset_file": None,
             "completed_steps": 0,
             "successful_resets": 0,
             "discarded_resets": 0,
@@ -203,6 +207,21 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--jpeg_quality", type=int, default=80)
     parser.add_argument("--receive_timeout", type=float, default=10.0)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--dataset_file",
+        help="Enable native LeIsaac HDF5 recording at this path.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Append episodes to an existing --dataset_file.",
+    )
+    parser.add_argument(
+        "--flush_steps",
+        type=int,
+        default=100,
+        help="Number of recorded steps between streaming HDF5 flushes.",
+    )
     AppLauncher.add_app_launcher_args(parser)
     return parser
 
@@ -233,17 +252,33 @@ def main() -> int:
         parser.error("--jpeg_quality must be between 1 and 95")
     if not 1 <= args.web_port <= 65535:
         parser.error("--web_port must be between 1 and 65535")
+    if args.flush_steps <= 0:
+        parser.error("--flush_steps must be positive")
+    if args.resume and not args.dataset_file:
+        parser.error("--resume requires --dataset_file")
 
     assets_root = Path(args.assets_root).expanduser().resolve()
     if not assets_root.is_dir():
         parser.error(f"Assets root does not exist: {assets_root}")
     os.environ["LEISAAC_ASSETS_ROOT"] = str(assets_root)
 
+    dataset_path = Path(args.dataset_file).expanduser().resolve() if args.dataset_file else None
+    if dataset_path is not None and not str(dataset_path).endswith(".hdf5"):
+        dataset_path = Path(f"{dataset_path}.hdf5")
+    if dataset_path is not None:
+        if args.resume and not dataset_path.is_file():
+            parser.error(f"Cannot resume because the dataset does not exist: {dataset_path}")
+        if not args.resume and dataset_path.exists():
+            parser.error(f"Dataset already exists; pass --resume to append: {dataset_path}")
+        dataset_path.parent.mkdir(parents=True, exist_ok=True)
+
     print("REMOTE_WEB_TELEOP_PHASE=before_launcher", flush=True)
     print(f"task_id: {args.task}", flush=True)
     print(f"remote_endpoint: {args.remote_endpoint}", flush=True)
     print(f"preview_url: http://{args.web_host}:{args.web_port}", flush=True)
     print(f"requested_device: {args.device}", flush=True)
+    print(f"recording_enabled: {dataset_path is not None}", flush=True)
+    print(f"dataset_file: {dataset_path}", flush=True)
 
     app_launcher = AppLauncher(args)
     simulation_app = app_launcher.app
@@ -253,9 +288,11 @@ def main() -> int:
     import gymnasium as gym
     from PIL import Image
     import torch
+    from isaaclab.managers import DatasetExportMode, TerminationTermCfg
     from isaaclab_tasks.utils import parse_env_cfg
     import leisaac.tasks  # noqa: F401
     from leisaac.devices import SO101LeaderRemote
+    from leisaac.enhance.managers import EnhanceDatasetExportMode, StreamingRecorderManager
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
     # isort: on
 
@@ -263,7 +300,13 @@ def main() -> int:
     server = None
     server_thread = None
     teleop_interface = None
+    env = None
     status = 1
+
+    state.update_status(
+        recording_enabled=dataset_path is not None,
+        dataset_file=str(dataset_path) if dataset_path is not None else None,
+    )
 
     def encode_front(observations: dict) -> bytes:
         front = observations["policy"]["front"]
@@ -281,13 +324,48 @@ def main() -> int:
         env_cfg = parse_env_cfg(args.task, device=args.device, num_envs=1)
         env_cfg.use_teleop_device("so101leader")
         env_cfg.seed = args.seed
-        env_cfg.recorders = None
         if hasattr(env_cfg.terminations, "time_out"):
             env_cfg.terminations.time_out = None
-        if hasattr(env_cfg.terminations, "success"):
-            env_cfg.terminations.success = None
+
+        if dataset_path is None:
+            env_cfg.recorders = None
+            if hasattr(env_cfg.terminations, "success"):
+                env_cfg.terminations.success = None
+        else:
+            env_cfg.recorders.dataset_export_mode = (
+                EnhanceDatasetExportMode.EXPORT_ALL_RESUME if args.resume else DatasetExportMode.EXPORT_ALL
+            )
+            env_cfg.recorders.dataset_export_dir_path = str(dataset_path.parent)
+            env_cfg.recorders.dataset_filename = dataset_path.stem
+            if not hasattr(env_cfg.terminations, "success"):
+                env_cfg.terminations.success = None
+            env_cfg.terminations.success = TerminationTermCfg(
+                func=lambda env: torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+            )
 
         env = gym.make(args.task, cfg=env_cfg).unwrapped
+        if dataset_path is not None:
+            del env.recorder_manager
+            env.recorder_manager = StreamingRecorderManager(env_cfg.recorders, env)
+            env.recorder_manager.flush_steps = args.flush_steps
+            env.recorder_manager.compression = "lzf"
+            print("REMOTE_WEB_TELEOP_HDF5_RECORDER_READY", flush=True)
+
+        def set_episode_success(*, success: bool) -> None:
+            if dataset_path is None:
+                return
+            env.termination_manager.set_term_cfg(
+                "success",
+                TerminationTermCfg(
+                    func=(
+                        (lambda env: torch.ones(env.num_envs, dtype=torch.bool, device=env.device))
+                        if success
+                        else (lambda env: torch.zeros(env.num_envs, dtype=torch.bool, device=env.device))
+                    )
+                ),
+            )
+            env.termination_manager.compute()
+
         observations, _ = env.reset()
         state.update_frame(encode_front(observations))
         print("REMOTE_WEB_TELEOP_ENV_CREATED_OK", flush=True)
@@ -307,6 +385,7 @@ def main() -> int:
 
         running = False
         interrupted = False
+        episode_active = False
         completed_steps = 0
         successful_resets = 0
         discarded_resets = 0
@@ -319,12 +398,17 @@ def main() -> int:
             for command in state.pop_commands():
                 if command == "start":
                     running = True
-                    state.update_status(phase="running")
+                    state.update_status(phase="running", recording=dataset_path is not None)
                     print("REMOTE_WEB_TELEOP_START", flush=True)
                 elif command in {"success", "discard"}:
+                    if episode_active:
+                        set_episode_success(success=command == "success")
                     observations, _ = env.reset()
+                    if episode_active:
+                        set_episode_success(success=False)
                     state.update_frame(encode_front(observations))
                     running = False
+                    episode_active = False
                     if command == "success":
                         successful_resets += 1
                         print("REMOTE_WEB_TELEOP_SUCCESS_RESET", flush=True)
@@ -333,12 +417,24 @@ def main() -> int:
                         print("REMOTE_WEB_TELEOP_DISCARD_RESET", flush=True)
                     state.update_status(
                         phase="ready",
+                        recording=False,
                         successful_resets=successful_resets,
                         discarded_resets=discarded_resets,
                     )
                 elif command == "stop":
+                    if episode_active:
+                        set_episode_success(success=False)
+                        env.reset()
+                        set_episode_success(success=False)
+                        episode_active = False
+                        discarded_resets += 1
+                        print("REMOTE_WEB_TELEOP_STOP_DISCARD_RESET", flush=True)
                     interrupted = True
-                    state.update_status(phase="stopping")
+                    state.update_status(
+                        phase="stopping",
+                        recording=False,
+                        discarded_resets=discarded_resets,
+                    )
                     print("REMOTE_WEB_TELEOP_STOP", flush=True)
 
             if interrupted:
@@ -356,6 +452,7 @@ def main() -> int:
                 raise RuntimeError(f"Invalid remote Leader action: shape={tuple(action.shape)}")
 
             step_result = env.step(action)
+            episode_active = True
             observations = step_result[0]
             rewards = step_result[1]
             if not bool(torch.isfinite(rewards).all()):
@@ -366,7 +463,11 @@ def main() -> int:
             if now >= next_preview_time:
                 state.update_frame(encode_front(observations))
                 next_preview_time = now + 1.0 / args.preview_fps
-            state.update_status(phase="running", completed_steps=completed_steps)
+            state.update_status(
+                phase="running",
+                recording=dataset_path is not None,
+                completed_steps=completed_steps,
+            )
 
             next_step_time += 1.0 / args.step_hz
             delay = next_step_time - time.monotonic()
@@ -386,6 +487,9 @@ def main() -> int:
         state.update_status(phase="failed")
         print("REMOTE_WEB_TELEOP_FAILED", flush=True)
     finally:
+        if env is not None and dataset_path is not None and hasattr(env.recorder_manager, "finalize"):
+            env.recorder_manager.finalize()
+            print("REMOTE_WEB_TELEOP_HDF5_FINALIZED", flush=True)
         if server is not None:
             server.shutdown()
             server.server_close()

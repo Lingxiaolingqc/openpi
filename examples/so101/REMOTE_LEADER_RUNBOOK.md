@@ -201,10 +201,57 @@ timeout --signal=KILL 30m \
 ```
 
 Wait for `REMOTE_WEB_TELEOP_READY`, then open <http://127.0.0.1:5557> on Windows. `Start / Resume` applies
-Leader actions; `Success + Reset` and `Discard + Reset` reset the preview environment; `Stop Server` exits. This
-tool deliberately does not record a dataset.
+Leader actions; `Success + Reset` and `Discard + Reset` reset the preview environment; `Stop Server` exits.
+Without `--dataset_file`, the status page reports `recording_enabled: false` and no dataset is written.
 
-## 7. Stop or leave safely
+## 7. Record native LeIsaac HDF5 episodes
+
+Do not install `lerobot==0.4.2` into the Isaac Sim environment. Its requirement
+`packaging>=24.2,<26` conflicts with Isaac Sim's tested `packaging==23.0`. Recording therefore stays in the
+stable LeIsaac environment and writes native HDF5; conversion to the OpenPI-compatible LeRobot format belongs
+in a separate environment later.
+
+For the first dataset, keep the Windows publisher and SSH tunnel running, then launch from the server `tmux`
+shell after completing section 3:
+
+```bash
+export SIM_GPU=6
+export LEISAAC_HDF5_DIR="$LEISAAC_BASE/datasets/leisaac"
+export LEISAAC_HDF5_FILE="$LEISAAC_HDF5_DIR/so101_liftcube_first.hdf5"
+export REMOTE_WEB_RECORD_LOG="$LEISAAC_BASE/results/leisaac/remote-leader-web-record.log"
+
+mkdir -p "$LEISAAC_HDF5_DIR"
+
+timeout --signal=KILL 60m \
+  "$CONDA_PREFIX/bin/python" \
+  examples/so101/remote_leader_web_teleop.py \
+  --headless \
+  --enable_cameras \
+  --device "cuda:$SIM_GPU" \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --remote_endpoint tcp://127.0.0.1:5556 \
+  --web_host 127.0.0.1 \
+  --web_port 5557 \
+  --dataset_file "$LEISAAC_HDF5_FILE" \
+  --flush_steps 100 \
+  --kit_args="--portable --portable-root=$ISAACSIM_PORTABLE_ROOT --/telemetry/enableAnonymousData=false --/renderer/multiGpu/enabled=False --/app/fastShutdown=True" \
+  2>&1 | tee "$REMOTE_WEB_RECORD_LOG"
+```
+
+The script refuses to overwrite an existing file. To append more episodes later, run the same command with
+`--resume`. In the browser:
+
+- `Start / Resume` begins applying Leader actions and accumulating the current episode.
+- `Success + Reset` stores the episode with `success=true`, resets the scene, and pauses.
+- `Discard + Reset` stores it with `success=false`, resets the scene, and pauses. The later converter will skip
+  failed episodes.
+- `Stop Server` stores any unconfirmed partial episode as failed, finalizes the HDF5 file, and exits.
+
+A clean exit prints both `REMOTE_WEB_TELEOP_HDF5_FINALIZED` and `REMOTE_WEB_TELEOP_OK`. Preserve the HDF5 file
+as the source-of-truth recording; do not convert or train until a short audit confirms its episode count,
+success labels, action shape, state shape, and camera shape.
+
+## 8. Stop or leave safely
 
 To leave the server task running, detach from `tmux` with `Ctrl+B`, then `D`. To stop the Windows side, press
 `Ctrl+C` once in the publisher terminal and once in the SSH tunnel terminal. Restarting the publisher normally
