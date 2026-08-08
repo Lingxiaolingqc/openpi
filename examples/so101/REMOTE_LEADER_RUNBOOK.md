@@ -52,6 +52,7 @@ ssh -N -T `
   -o ExitOnForwardFailure=yes `
   -o ServerAliveInterval=30 `
   -o ServerAliveCountMax=3 `
+  -L 127.0.0.1:5557:127.0.0.1:5557 `
   -R 127.0.0.1:5556:127.0.0.1:5556 `
   xiaoqinchuan@10.120.16.48
 ```
@@ -139,6 +140,9 @@ ss -ltn 'sport = :5556'
 The SSH tunnel should create a listener on `127.0.0.1:5556`. Choose a free physical GPU and update `SIM_GPU` in
 the launch command below.
 
+The local forward on port `5557` makes a server-side preview available to the Windows browser without exposing
+the preview service to the network.
+
 ## 5. Bounded remote-Leader simulation validation
 
 This command is a reusable validation, not the eventual dataset-recording command. It never writes to the
@@ -173,7 +177,34 @@ REMOTE_LEADER_SIM_SMOKE_OK
 The previously validated run changed `shoulder_pan` by about `0.824 rad` and finished with a maximum
 target-versus-simulated-joint error of about `0.023 rad` (`1.3 degrees`).
 
-## 6. Stop or leave safely
+## 6. Interactive browser preview
+
+After the bounded validation has passed, use this preview-only command to control the simulated SO-101 while
+watching the same `front` camera observation that will be recorded for OpenPI:
+
+```bash
+export SIM_GPU=6
+export REMOTE_WEB_TELEOP_LOG="$LEISAAC_BASE/results/leisaac/remote-leader-web-teleop.log"
+
+timeout --signal=KILL 30m \
+  "$CONDA_PREFIX/bin/python" \
+  examples/so101/remote_leader_web_teleop.py \
+  --headless \
+  --enable_cameras \
+  --device "cuda:$SIM_GPU" \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --remote_endpoint tcp://127.0.0.1:5556 \
+  --web_host 127.0.0.1 \
+  --web_port 5557 \
+  --kit_args="--portable --portable-root=$ISAACSIM_PORTABLE_ROOT --/telemetry/enableAnonymousData=false --/renderer/multiGpu/enabled=False --/app/fastShutdown=True" \
+  2>&1 | tee "$REMOTE_WEB_TELEOP_LOG"
+```
+
+Wait for `REMOTE_WEB_TELEOP_READY`, then open <http://127.0.0.1:5557> on Windows. `Start / Resume` applies
+Leader actions; `Success + Reset` and `Discard + Reset` reset the preview environment; `Stop Server` exits. This
+tool deliberately does not record a dataset.
+
+## 7. Stop or leave safely
 
 To leave the server task running, detach from `tmux` with `Ctrl+B`, then `D`. To stop the Windows side, press
 `Ctrl+C` once in the publisher terminal and once in the SSH tunnel terminal. Restarting the publisher normally

@@ -6,6 +6,9 @@ result back to LeIsaac over its OpenPI WebSocket client.
 For the tested Windows Leader publisher, SSH reverse tunnel, complete server environment restoration, and
 bounded LeIsaac validation commands, see [REMOTE_LEADER_RUNBOOK.md](REMOTE_LEADER_RUNBOOK.md).
 
+For headless interactive teleoperation, `remote_leader_web_teleop.py` exposes the policy front camera and
+Start/Success/Discard controls through a localhost-only browser page. It is preview-only and never records data.
+
 ## Data contract
 
 Record the LeIsaac dataset with `LeRobotDatasetCfg.action_align=True`. This is required: LeIsaac always writes
