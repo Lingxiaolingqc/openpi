@@ -1,10 +1,18 @@
+import importlib.util
 from pathlib import Path
+import sys
 
 import h5py
 import numpy as np
 import pytest
 
-from examples.so101 import convert_leisaac_hdf5_to_lerobot as converter
+MODULE_PATH = Path(__file__).with_name("convert_leisaac_hdf5_to_lerobot.py")
+MODULE_SPEC = importlib.util.spec_from_file_location("convert_leisaac_hdf5_to_lerobot", MODULE_PATH)
+if MODULE_SPEC is None or MODULE_SPEC.loader is None:
+    raise RuntimeError(f"Unable to load converter module from {MODULE_PATH}")
+converter = importlib.util.module_from_spec(MODULE_SPEC)
+sys.modules[MODULE_SPEC.name] = converter
+MODULE_SPEC.loader.exec_module(converter)
 
 
 def test_joint_limit_endpoints_map_to_motor_limits() -> None:
