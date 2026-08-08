@@ -13,7 +13,8 @@ from __future__ import annotations
 import argparse
 from collections import deque
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 import io
 import json
 import os
