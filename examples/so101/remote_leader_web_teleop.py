@@ -301,6 +301,7 @@ def main() -> int:
     server_thread = None
     teleop_interface = None
     env = None
+    hdf5_recorder_ready = False
     status = 1
 
     state.update_status(
@@ -349,6 +350,7 @@ def main() -> int:
             env.recorder_manager = StreamingRecorderManager(env_cfg.recorders, env)
             env.recorder_manager.flush_steps = args.flush_steps
             env.recorder_manager.compression = "lzf"
+            hdf5_recorder_ready = True
             print("REMOTE_WEB_TELEOP_HDF5_RECORDER_READY", flush=True)
 
         def set_episode_success(*, success: bool) -> None:
@@ -487,8 +489,14 @@ def main() -> int:
         state.update_status(phase="failed")
         print("REMOTE_WEB_TELEOP_FAILED", flush=True)
     finally:
-        if env is not None and dataset_path is not None and hasattr(env.recorder_manager, "finalize"):
-            env.recorder_manager.finalize()
+        if hdf5_recorder_ready:
+            if hasattr(env.recorder_manager, "finalize"):
+                env.recorder_manager.finalize()
+            else:
+                dataset_handler = getattr(env.recorder_manager, "_dataset_file_handler", None)
+                if dataset_handler is None:
+                    raise RuntimeError("The HDF5 recorder has no dataset handler to close")
+                dataset_handler.close()
             print("REMOTE_WEB_TELEOP_HDF5_FINALIZED", flush=True)
         if server is not None:
             server.shutdown()
