@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import sys
+from types import ModuleType
 
 import h5py
 import numpy as np
@@ -52,3 +53,65 @@ def test_discovery_validates_and_skips_failed_episodes(tmp_path: Path) -> None:
     assert file_count == 1
     assert skipped_failures == 1
     assert episodes == [converter.EpisodeRef(source.resolve(), "demo_0", 3, (8, 12, 3))]
+
+
+def test_conversion_uses_openpi_pinned_lerobot_writer_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "source.hdf5"
+    with h5py.File(source, "w") as h5_file:
+        data = h5_file.create_group("data")
+        _write_demo(data, "demo_0", success=True)
+
+    episodes, _, _ = converter.discover_successful_episodes(source)
+    lerobot_home = tmp_path / "lerobot"
+
+    class FakeLeRobotDataset:
+        instance = None
+        create_kwargs = None
+
+        def __init__(self) -> None:
+            self.frames = []
+            self.saved_episode_count = 0
+
+        @classmethod
+        def create(cls, **kwargs):
+            cls.create_kwargs = kwargs
+            cls.instance = cls()
+            return cls.instance
+
+        def add_frame(self, frame: dict) -> None:
+            self.frames.append(frame)
+
+        def save_episode(self) -> None:
+            self.saved_episode_count += 1
+
+    package_names = ("lerobot", "lerobot.common", "lerobot.common.datasets")
+    for package_name in package_names:
+        package = ModuleType(package_name)
+        package.__path__ = []
+        monkeypatch.setitem(sys.modules, package_name, package)
+
+    dataset_module = ModuleType("lerobot.common.datasets.lerobot_dataset")
+    dataset_module.LeRobotDataset = FakeLeRobotDataset
+    dataset_module.HF_LEROBOT_HOME = lerobot_home
+    monkeypatch.setitem(sys.modules, dataset_module.__name__, dataset_module)
+
+    output_path = converter.convert_dataset(
+        episodes,
+        repo_id="local/test-dataset",
+        task="Lift the cube.",
+        fps=60,
+        image_mode="image",
+        image_writer_processes=0,
+        image_writer_threads=1,
+        push_to_hub=False,
+        private=True,
+    )
+
+    dataset = FakeLeRobotDataset.instance
+    assert dataset is not None
+    assert output_path == lerobot_home / "local/test-dataset"
+    assert FakeLeRobotDataset.create_kwargs["robot_type"] == "so101_follower"
+    assert "task" not in FakeLeRobotDataset.create_kwargs["features"]
+    assert len(dataset.frames) == 3
+    assert all(frame["task"] == "Lift the cube." for frame in dataset.frames)
+    assert dataset.saved_episode_count == 1

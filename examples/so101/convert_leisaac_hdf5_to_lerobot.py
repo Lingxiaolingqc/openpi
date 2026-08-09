@@ -268,12 +268,13 @@ def convert_dataset(
                         "observation.images.front": front[frame_index],
                         "observation.state": state[frame_index],
                         "action": action[frame_index],
+                        "task": task,
                     }
                 )
                 converted_frames += 1
                 if converted_frames % 250 == 0:
                     print("converted_frames:", converted_frames, flush=True)
-        dataset.save_episode(task=task)
+        dataset.save_episode()
         print(
             f"saved_episode:{episode_index}:source={episode.path}:{episode.name}:frames={episode.num_samples}",
             flush=True,
