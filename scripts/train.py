@@ -215,65 +215,67 @@ def main(config: _config.TrainConfig):
         overwrite=config.overwrite,
         resume=config.resume,
     )
-    init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
+    try:
+        init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
 
-    data_loader = _data_loader.create_data_loader(
-        config,
-        sharding=data_sharding,
-        shuffle=True,
-    )
-    data_iter = iter(data_loader)
-    batch = next(data_iter)
-    logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
-
-    # Log images from first batch to sanity check.
-    images_to_log = [
-        wandb.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
-        for i in range(min(5, len(next(iter(batch[0].images.values())))))
-    ]
-    wandb.log({"camera_views": images_to_log}, step=0)
-
-    train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
-    jax.block_until_ready(train_state)
-    logging.info(f"Initialized train state:\n{training_utils.array_tree_to_info(train_state.params)}")
-
-    if resuming:
-        train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
-
-    ptrain_step = jax.jit(
-        functools.partial(train_step, config),
-        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-        out_shardings=(train_state_sharding, replicated_sharding),
-        donate_argnums=(1,),
-    )
-
-    start_step = int(train_state.step)
-    pbar = tqdm.tqdm(
-        range(start_step, config.num_train_steps),
-        initial=start_step,
-        total=config.num_train_steps,
-        dynamic_ncols=True,
-    )
-
-    infos = []
-    for step in pbar:
-        with sharding.set_mesh(mesh):
-            train_state, info = ptrain_step(train_rng, train_state, batch)
-        infos.append(info)
-        if step % config.log_interval == 0:
-            stacked_infos = common_utils.stack_forest(infos)
-            reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
-            info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
-            pbar.write(f"Step {step}: {info_str}")
-            wandb.log(reduced_info, step=step)
-            infos = []
+        data_loader = _data_loader.create_data_loader(
+            config,
+            sharding=data_sharding,
+            shuffle=True,
+        )
+        data_iter = iter(data_loader)
         batch = next(data_iter)
+        logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
 
-        if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
-            _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
+        # Log images from first batch to sanity check.
+        images_to_log = [
+            wandb.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
+            for i in range(min(5, len(next(iter(batch[0].images.values())))))
+        ]
+        wandb.log({"camera_views": images_to_log}, step=0)
 
-    logging.info("Waiting for checkpoint manager to finish")
-    checkpoint_manager.wait_until_finished()
+        train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
+        jax.block_until_ready(train_state)
+        logging.info(f"Initialized train state:\n{training_utils.array_tree_to_info(train_state.params)}")
+
+        if resuming:
+            train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
+
+        ptrain_step = jax.jit(
+            functools.partial(train_step, config),
+            in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+            out_shardings=(train_state_sharding, replicated_sharding),
+            donate_argnums=(1,),
+        )
+
+        start_step = int(train_state.step)
+        pbar = tqdm.tqdm(
+            range(start_step, config.num_train_steps),
+            initial=start_step,
+            total=config.num_train_steps,
+            dynamic_ncols=True,
+        )
+
+        infos = []
+        for step in pbar:
+            with sharding.set_mesh(mesh):
+                train_state, info = ptrain_step(train_rng, train_state, batch)
+            infos.append(info)
+            if step % config.log_interval == 0:
+                stacked_infos = common_utils.stack_forest(infos)
+                reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
+                info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
+                pbar.write(f"Step {step}: {info_str}")
+                wandb.log(reduced_info, step=step)
+                infos = []
+            batch = next(data_iter)
+
+            if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
+                _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
+    finally:
+        logging.info("Closing checkpoint manager")
+        checkpoint_manager.close()
+        logging.info("Checkpoint manager closed")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,9 @@
 This integration fine-tunes a pi0.5 policy on single-arm SO-101 episodes recorded by LeIsaac and serves the
 result back to LeIsaac over its OpenPI WebSocket client.
 
+For an audit of every SO-101/OpenPI source change relative to the original integration baseline, see
+[0.originalCodeChanges.md](0.originalCodeChanges.md).
+
 For the tested Windows Leader publisher, SSH reverse tunnel, complete server environment restoration, and
 bounded LeIsaac validation commands, see [REMOTE_LEADER_RUNBOOK.md](REMOTE_LEADER_RUNBOOK.md).
 
