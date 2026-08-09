@@ -43,6 +43,40 @@ Success requires both process exit code `0` and the semantic marker
 dataset. Its coordinates are the input to the next S3 change: five static cuboids forming a target tray, an
 inside-box success predicate, and a scripted pick-place state machine.
 
+The initial tray center is `(0.520, -0.36161)` in environment coordinates: it is laterally separated from the
+cube along `+X` while keeping approximately the same reach along `Y`. The tray consists of one floor and four
+green kinematic walls. Its success predicate requires the cube to be inside the tray bounds, below the wall
+top, and moving no faster than `0.15 m/s`.
+
+Validate environment creation and the predicate before developing the expert:
+
+```bash
+export RED_CUBE_TO_BOX_SMOKE_LOG="$LEISAAC_BASE/results/leisaac/red-cube-to-box-env-smoke.log"
+
+timeout --signal=KILL 120s \
+  "$LEISAAC_ENV/bin/python" \
+  examples/so101/red_cube_to_box_env_smoke.py \
+  --headless \
+  --enable_cameras \
+  --device cuda:6 \
+  --renderer_device 6 \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --steps 10 \
+  2>&1 | tee "$RED_CUBE_TO_BOX_SMOKE_LOG"
+
+smoke_status=${PIPESTATUS[0]}
+echo "red_cube_to_box_env_smoke_exit=$smoke_status"
+
+grep -nE \
+  'RED_CUBE_TO_BOX|task_id|device_id|simulation_device|box_part|cube_|initial_success|teleported_success|completed_steps|rewards_finite|Traceback|Error|RuntimeError' \
+  "$RED_CUBE_TO_BOX_SMOKE_LOG" |
+tail -n 180
+```
+
+The semantic checks require five box pieces, `initial_success: False`, `teleported_success: True`, finite
+rewards, and `RED_CUBE_TO_BOX_ENV_SMOKE_OK`. Teleportation is used only to test the predicate; it is not part of
+the eventual expert or dataset-generation trajectory.
+
 ## Data contract
 
 Do not install LeRobot into the Isaac Sim environment. LeRobot 0.4.2 requires `packaging>=24.2`, while the
