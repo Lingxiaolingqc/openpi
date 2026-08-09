@@ -73,7 +73,7 @@ def main() -> int:
 
         print("RED_CUBE_TO_BOX_EXPERT_PHASE=creating_env", flush=True)
         env = gym.make(task_id, cfg=env_cfg).unwrapped
-        env.reset()
+        observations, _ = env.reset()
 
         state_machine = RedCubeToBoxStateMachine()
         state_machine.setup(env)
@@ -81,6 +81,8 @@ def main() -> int:
 
         cube = env.scene["cube"]
         floor = env.scene["target_box_floor"]
+        robot = env.scene["robot"]
+        ee_frame = env.scene["ee_frame"]
         print("RED_CUBE_TO_BOX_EXPERT_ENV_CREATED_OK", flush=True)
         print(f"simulation_device: {env.device}", flush=True)
         print(f"action_space: {env.action_space}", flush=True)
@@ -95,8 +97,23 @@ def main() -> int:
         with torch.inference_mode():
             while not state_machine.is_episode_done:
                 phase = state_machine.phase_name
-                if phase != previous_phase:
+                phase_changed = phase != previous_phase
+                if phase_changed:
                     print(f"expert_phase:{phase}:step={state_machine.step_count}", flush=True)
+                    gripper_pos = ee_frame.data.target_pos_w[0, 0]
+                    jaw_pos = ee_frame.data.target_pos_w[0, 1]
+                    jaw_cube_distance = torch.linalg.vector_norm(jaw_pos - cube.data.root_pos_w[0])
+                    pick_cube = observations["subtask_terms"]["pick_cube"][0]
+                    print(
+                        f"expert_state:{phase}:"
+                        f"gripper_pos_w={_rounded_row(gripper_pos)}:"
+                        f"jaw_pos_w={_rounded_row(jaw_pos)}:"
+                        f"cube_pos_w={_rounded_row(cube.data.root_pos_w[0])}:"
+                        f"jaw_cube_distance={jaw_cube_distance.item():.5f}:"
+                        f"gripper_joint={robot.data.joint_pos[0, -1].item():.5f}:"
+                        f"pick_cube={bool(pick_cube.item())}",
+                        flush=True,
+                    )
                     previous_phase = phase
 
                 if env.cfg.dynamic_reset_gripper_effort_limit:
@@ -107,8 +124,11 @@ def main() -> int:
                     raise RuntimeError(f"Unexpected expert action shape: {tuple(action.shape)}")
                 if not bool(torch.isfinite(action).all()):
                     raise RuntimeError("Expert produced a non-finite action")
+                if phase_changed:
+                    print(f"expert_action:{phase}:{_rounded_row(action[0])}", flush=True)
 
                 step_result = env.step(action)
+                observations = step_result[0]
                 all_rewards_finite = all_rewards_finite and bool(torch.isfinite(step_result[1]).all())
                 unexpected_reset = unexpected_reset or bool(step_result[2].any()) or bool(step_result[3].any())
                 state_machine.advance()
@@ -124,6 +144,7 @@ def main() -> int:
         print(f"cube_final_pos_w: {_rounded_row(cube.data.root_pos_w[0])}", flush=True)
         print(f"cube_offset_from_box: {_rounded_row(cube_offset[0])}", flush=True)
         print(f"cube_final_speed: {cube_speed[0].item():.6f}", flush=True)
+        print(f"pick_cube_final: {bool(observations['subtask_terms']['pick_cube'][0].item())}", flush=True)
         print(f"expert_success: {success}", flush=True)
 
         if not all_rewards_finite:
