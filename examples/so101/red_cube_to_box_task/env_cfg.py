@@ -26,7 +26,10 @@ def _target_box_part(
     position: tuple[float, float, float],
 ) -> RigidObjectCfg:
     return RigidObjectCfg(
-        prim_path=f"{{ENV_REGEX_NS}}/TargetBox/{prim_name}",
+        # Each tracked object uses its own top-level prim. IsaacLab's shape
+        # spawner treats the parent of a nested regex path as a source prim and
+        # requires it to exist before the first RigidObject is constructed.
+        prim_path=f"{{ENV_REGEX_NS}}/TargetBox{prim_name}",
         init_state=RigidObjectCfg.InitialStateCfg(pos=position),
         spawn=sim_utils.CuboidCfg(
             size=size,
