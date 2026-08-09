@@ -1,3 +1,5 @@
+from collections.abc import Callable
+import contextlib
 import dataclasses
 import functools
 import logging
@@ -68,6 +70,12 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = 
 
     if log_code:
         wandb.run.log_code(epath.Path(__file__).parent.parent)
+
+
+def _close_resource(name: str, close: Callable[[], None]) -> None:
+    logging.info(f"Closing {name}")
+    close()
+    logging.info(f"{name} closed")
 
 
 def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
@@ -215,8 +223,13 @@ def main(config: _config.TrainConfig):
         overwrite=config.overwrite,
         resume=config.resume,
     )
+    data_loader = None
+    data_iter = None
+    pbar = None
+    wandb_initialized = False
     try:
         init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
+        wandb_initialized = True
 
         data_loader = _data_loader.create_data_loader(
             config,
@@ -273,9 +286,19 @@ def main(config: _config.TrainConfig):
             if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
                 _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
     finally:
-        logging.info("Closing checkpoint manager")
-        checkpoint_manager.close()
-        logging.info("Checkpoint manager closed")
+        with contextlib.ExitStack() as cleanup_stack:
+            if wandb_initialized:
+                cleanup_stack.callback(_close_resource, "W&B run", wandb.finish)
+            if data_loader is not None:
+                cleanup_stack.callback(_close_resource, "Data loader", data_loader.close)
+            if data_iter is not None:
+                close_data_iter = getattr(data_iter, "close", None)
+                if close_data_iter is not None:
+                    cleanup_stack.callback(_close_resource, "Data iterator", close_data_iter)
+            if pbar is not None:
+                cleanup_stack.callback(_close_resource, "Progress bar", pbar.close)
+            cleanup_stack.callback(_close_resource, "Checkpoint manager", checkpoint_manager.close)
+        logging.info("Training resources closed")
 
 
 if __name__ == "__main__":

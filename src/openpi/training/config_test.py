@@ -16,6 +16,7 @@ def test_pi05_so101_liftcube_config_contract() -> None:
     assert config.data.use_delta_joint_actions
     assert config.data.base_config is not None
     assert config.data.base_config.prompt_from_task
+    assert config.num_workers == 0
 
 
 def test_pi05_lora_so101_liftcube_config_contract() -> None:
@@ -30,6 +31,7 @@ def test_pi05_lora_so101_liftcube_config_contract() -> None:
     assert isinstance(config.data, _config.LeRobotSO101DataConfig)
     assert config.data.repo_id == _config.SO101_LIFTCUBE_REPO_ID
     assert config.batch_size == 8
+    assert config.num_workers == 0
     assert config.ema_decay is None
 
 

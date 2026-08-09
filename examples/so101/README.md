@@ -93,11 +93,19 @@ Run these commands in the OpenPI environment, not in the LeIsaac/Isaac Sim envir
 ```bash
 uv run scripts/compute_norm_stats.py --config-name pi05_lora_so101_liftcube
 
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
+CUDA_VISIBLE_DEVICES=5,6 \
+  XLA_PYTHON_CLIENT_PREALLOCATE=false \
   uv run scripts/train.py pi05_lora_so101_liftcube \
   --exp-name=liftcube_lora \
+  --fsdp-devices=2 \
+  --batch-size=2 \
+  --num-workers=0 \
   --overwrite
 ```
+
+Replace `5,6` with two GPUs that are actually free. The SO-101 configs default to `num_workers=0` so training
+does not leave persistent PyTorch loader workers for interpreter shutdown. Increase the worker count only after
+the host's multi-GPU exit path has been proven stable.
 
 Computing normalization statistics is mandatory because the six state/action dimensions have robot-specific
 ranges. Inspect the generated `q01`, `q99`, and `std` values before starting a long training run.

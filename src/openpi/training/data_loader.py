@@ -49,6 +49,10 @@ class DataLoader(Protocol[T_co]):
     def __iter__(self) -> Iterator[T_co]:
         raise NotImplementedError("Subclasses of DataLoader should implement __iter__.")
 
+    def close(self) -> None:
+        """Release worker processes and other loader resources."""
+        raise NotImplementedError("Subclasses of DataLoader should implement close.")
+
 
 class TransformedDataset(Dataset[T_co]):
     def __init__(self, dataset: Dataset, transforms: Sequence[_transforms.DataTransformFn]):
@@ -424,6 +428,7 @@ class TorchDataLoader:
                 jax.sharding.PartitionSpec("B"),
             )
         self._num_batches = num_batches
+        self._active_iterator: typing.Any | None = None
 
         mp_context = None
         if num_workers > 0:
@@ -451,21 +456,41 @@ class TorchDataLoader:
 
     def __iter__(self):
         num_items = 0
-        while True:
-            data_iter = iter(self._data_loader)
+        try:
             while True:
-                if self._num_batches is not None and num_items >= self._num_batches:
-                    return
-                try:
-                    batch = next(data_iter)
-                except StopIteration:
-                    break  # We've exhausted the dataset. Create a new iterator and start over.
-                num_items += 1
-                # For JAX, convert to sharded arrays; for PyTorch, return torch tensors
-                if self._sharding is not None:
-                    yield jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
-                else:
-                    yield jax.tree.map(torch.as_tensor, batch)
+                data_iter = iter(self._data_loader)
+                self._active_iterator = data_iter
+                while True:
+                    if self._num_batches is not None and num_items >= self._num_batches:
+                        return
+                    try:
+                        batch = next(data_iter)
+                    except StopIteration:
+                        break  # We've exhausted the dataset. Create a new iterator and start over.
+                    num_items += 1
+                    # For JAX, convert to sharded arrays; for PyTorch, return torch tensors
+                    if self._sharding is not None:
+                        yield jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
+                    else:
+                        yield jax.tree.map(torch.as_tensor, batch)
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        """Stop persistent PyTorch workers without waiting for interpreter shutdown."""
+        iterator = self._active_iterator
+        if iterator is None:
+            iterator = self._data_loader._iterator  # noqa: SLF001
+        if iterator is None:
+            return
+
+        shutdown_workers = getattr(iterator, "_shutdown_workers", None)
+        if shutdown_workers is not None:
+            shutdown_workers()
+
+        self._active_iterator = None
+        if self._data_loader._iterator is iterator:  # noqa: SLF001
+            self._data_loader._iterator = None  # noqa: SLF001
 
 
 def _collate_fn(items):
@@ -526,6 +551,11 @@ class RLDSDataLoader:
                 num_items += 1
                 yield jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
 
+    def close(self) -> None:
+        close = getattr(self._dataset, "close", None)
+        if close is not None:
+            close()
+
 
 class DataLoaderImpl(DataLoader):
     def __init__(self, data_config: _config.DataConfig, data_loader: TorchDataLoader | RLDSDataLoader):
@@ -538,3 +568,6 @@ class DataLoaderImpl(DataLoader):
     def __iter__(self):
         for batch in self._data_loader:
             yield _model.Observation.from_dict(batch), batch["actions"]
+
+    def close(self) -> None:
+        self._data_loader.close()

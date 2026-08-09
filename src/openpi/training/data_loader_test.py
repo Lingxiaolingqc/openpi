@@ -1,4 +1,5 @@
 import dataclasses
+from unittest import mock
 
 import jax
 
@@ -45,6 +46,19 @@ def test_torch_data_loader_parallel():
 
     for batch in batches:
         assert all(x.shape[0] == 4 for x in jax.tree.leaves(batch))
+
+
+def test_torch_data_loader_close_is_idempotent():
+    config = pi0_config.Pi0Config(action_dim=24, action_horizon=50, max_token_len=48)
+    dataset = _data_loader.FakeDataset(config, 4)
+    loader = _data_loader.TorchDataLoader(dataset, local_batch_size=4)
+    iterator = mock.Mock()
+    loader._active_iterator = iterator  # noqa: SLF001
+
+    loader.close()
+    loader.close()
+
+    iterator._shutdown_workers.assert_called_once_with()  # noqa: SLF001
 
 
 def test_with_fake_dataset():

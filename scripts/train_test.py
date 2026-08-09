@@ -53,3 +53,46 @@ def test_checkpoint_manager_is_closed_when_training_setup_fails(
         train.main(config)
 
     checkpoint_manager.close.assert_called_once_with()
+
+
+def test_training_resources_close_in_order_when_loading_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path):
+    config = dataclasses.replace(
+        _config._CONFIGS_DICT["debug"],  # noqa: SLF001
+        checkpoint_base_dir=str(tmp_path / "checkpoint"),
+        exp_name="close_all_resources",
+        wandb_enabled=False,
+    )
+    close_events = []
+    checkpoint_manager = mock.Mock()
+    checkpoint_manager.close.side_effect = lambda: close_events.append("Checkpoint manager")
+
+    class FailingIterator:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise RuntimeError("batch loading failed")
+
+        def close(self):
+            close_events.append("Data iterator")
+
+    class ClosableLoader:
+        def __iter__(self):
+            return FailingIterator()
+
+        def close(self):
+            close_events.append("Data loader")
+
+    monkeypatch.setattr(
+        train._checkpoints,  # noqa: SLF001
+        "initialize_checkpoint_dir",
+        lambda *args, **kwargs: (checkpoint_manager, False),
+    )
+    monkeypatch.setattr(train, "init_wandb", mock.Mock())
+    monkeypatch.setattr(train._data_loader, "create_data_loader", lambda *args, **kwargs: ClosableLoader())  # noqa: SLF001
+    monkeypatch.setattr(train.wandb, "finish", lambda: close_events.append("W&B run"))
+
+    with pytest.raises(RuntimeError, match="batch loading failed"):
+        train.main(config)
+
+    assert close_events == ["Checkpoint manager", "Data iterator", "Data loader", "W&B run"]
