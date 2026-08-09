@@ -14,7 +14,8 @@ from .env_cfg import TARGET_BOX_FLOOR_THICKNESS
 
 _GRIPPER_OPEN = 1.0
 _GRIPPER_CLOSE = -1.0
-_PICK_XY_OFFSET = (-0.03, -0.01)
+_PICK_XY_OFFSET = (-0.02, 0.0)
+_PICK_GRASP_HEIGHT = 0.08
 
 
 class RedCubeToBoxStateMachine(StateMachineBase):
@@ -67,7 +68,7 @@ class RedCubeToBoxStateMachine(StateMachineBase):
         pick_grasp = self._cube_anchor.clone()
         pick_grasp[:, 0] += _PICK_XY_OFFSET[0]
         pick_grasp[:, 1] += _PICK_XY_OFFSET[1]
-        pick_grasp[:, 2] += 0.10
+        pick_grasp[:, 2] += _PICK_GRASP_HEIGHT
 
         pick_lift = self._cube_anchor.clone()
         pick_lift[:, 0] += _PICK_XY_OFFSET[0]

@@ -77,12 +77,43 @@ The semantic checks require five box pieces, `initial_success: False`, `teleport
 rewards, and `RED_CUBE_TO_BOX_ENV_SMOKE_OK`. Teleportation is used only to test the predicate; it is not part of
 the eventual expert or dataset-generation trajectory.
 
+The environment smoke checks geometry and the success predicate, but teleportation alone does not prove that
+the floor dynamically catches the cube. Run the independent drop test before tuning the robot expert:
+
+```bash
+export RED_CUBE_TO_BOX_DROP_LOG="$LEISAAC_BASE/results/leisaac/red-cube-to-box-drop-smoke.log"
+
+timeout --signal=KILL 180s \
+  "$LEISAAC_ENV/bin/python" \
+  examples/so101/red_cube_to_box_drop_smoke.py \
+  --headless \
+  --enable_cameras \
+  --device cuda:6 \
+  --renderer_device 6 \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --steps 360 \
+  2>&1 | tee "$RED_CUBE_TO_BOX_DROP_LOG"
+
+drop_status=${PIPESTATUS[0]}
+echo "red_cube_to_box_drop_smoke_exit=$drop_status"
+
+grep -nE \
+  'RED_CUBE_TO_BOX_DROP|task_id|device_id|simulation_device|action_space|box_part|drop_|fall_distance|horizontal_offset|cube_final_speed|settled_inside|completed_steps|rewards_finite|unexpected_reset|Traceback|Error|RuntimeError' \
+  "$RED_CUBE_TO_BOX_DROP_LOG" |
+tail -n 180
+```
+
+Success requires a non-trivial `fall_distance`, a settled cube inside the tray, finite rewards, no reset, and
+`RED_CUBE_TO_BOX_DROP_SMOKE_OK`. This isolates target geometry and collision from all grasp-controller errors.
+
 The scripted expert uses LeIsaac's `so101_state_machine` absolute-pose IK action configuration. It executes
 smooth Cartesian phases for approach, grasp, lift, transfer, release, retract, and settling. Task success and
 time-out terminations are disabled during this diagnostic episode so the environment cannot auto-reset before
 the final state is inspected. This task overrides the generic state-machine gripper close target from `0.4` to
 `0.05` radians: the first diagnostic reached a valid `0.01826 m` jaw-to-cube distance but remained above
-LeIsaac's `0.26`-radian grasp threshold with the generic close target.
+LeIsaac's `0.26`-radian grasp threshold with the generic close target. Closing farther moved the jaw frame, so
+the measured closed-jaw error is also compensated by moving the grasp target `10 mm` in both horizontal axes
+and `20 mm` downward.
 
 ```bash
 export RED_CUBE_TO_BOX_EXPERT_LOG="$LEISAAC_BASE/results/leisaac/red-cube-to-box-expert-smoke.log"
