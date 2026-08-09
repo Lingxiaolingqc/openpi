@@ -34,7 +34,6 @@ timeout --signal=KILL 120s \
   --headless \
   --enable_cameras \
   --device cuda:6 \
-  --renderer_device 6 \
   --assets_root "$LEISAAC_ASSETS_ROOT"
 ```
 
@@ -59,7 +58,6 @@ timeout --signal=KILL 120s \
   --headless \
   --enable_cameras \
   --device cuda:6 \
-  --renderer_device 6 \
   --assets_root "$LEISAAC_ASSETS_ROOT" \
   --steps 10 \
   2>&1 | tee "$RED_CUBE_TO_BOX_SMOKE_LOG"
@@ -89,7 +87,6 @@ timeout --signal=KILL 180s \
   --headless \
   --enable_cameras \
   --device cuda:6 \
-  --renderer_device 6 \
   --assets_root "$LEISAAC_ASSETS_ROOT" \
   --steps 360 \
   2>&1 | tee "$RED_CUBE_TO_BOX_DROP_LOG"
@@ -124,7 +121,6 @@ timeout --signal=KILL 240s \
   --headless \
   --enable_cameras \
   --device cuda:6 \
-  --renderer_device 6 \
   --assets_root "$LEISAAC_ASSETS_ROOT" \
   2>&1 | tee "$RED_CUBE_TO_BOX_EXPERT_LOG"
 
@@ -141,6 +137,11 @@ The initial expert has `1100` control steps. A successful dynamic episode report
 no unexpected reset, `expert_success: True`, and `RED_CUBE_TO_BOX_EXPERT_SMOKE_OK`. If it fails, the final cube
 offset and speed distinguish grasp/transport errors from placement or settling errors before any recording is
 enabled.
+
+The validated seed-42 run acquired the cube at a `0.00412 m` jaw distance with a `0.14649 rad` gripper joint,
+kept `pick_cube=True` through transport, and released it at a final box-relative offset of
+`(0.03634, 0.00642, 0.01907) m`. The final cube speed was `0.001097 m/s`, and the episode reported
+`expert_success: True`.
 
 ## Data contract
 
