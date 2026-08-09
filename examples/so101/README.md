@@ -13,6 +13,36 @@ For headless interactive teleoperation, `remote_leader_web_teleop.py` exposes th
 Start/Success/Discard controls through a localhost-only browser page. It remains preview-only by default;
 passing `--dataset_file` enables LeIsaac's native streaming HDF5 recorder.
 
+## RedCubeToBox development
+
+S3 starts from the already validated LiftCube geometry instead of introducing another unverified robot or
+table asset. Before placing the target box, run the bounded scene audit to capture the robot, end-effector,
+cube, camera, and environment coordinates from the installed LeIsaac version:
+
+```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_ASSETS_ROOT=/home/data/xiaoqinchuan/assets/leisaac-v0.4.0
+export ISAACSIM_PORTABLE_ROOT=/home/data/xiaoqinchuan/cache/isaacsim-portable
+export LD_PRELOAD=/home/data/xiaoqinchuan/envs/leisaac-so101/lib/libstdc++.so.6
+export OMNI_KIT_ACCEPT_EULA=YES
+
+cd "$OPENPI_ROOT"
+timeout --signal=KILL 120s \
+  /home/data/xiaoqinchuan/envs/leisaac-so101/bin/python \
+  examples/so101/red_cube_to_box_scene_audit.py \
+  --headless \
+  --enable_cameras \
+  --device cuda:6 \
+  --renderer_device 6 \
+  --assets_root "$LEISAAC_ASSETS_ROOT"
+```
+
+Success requires both process exit code `0` and the semantic marker
+`RED_CUBE_TO_BOX_SCENE_AUDIT_OK`. The audit does not connect to the physical Leader, change assets, or write a
+dataset. Its coordinates are the input to the next S3 change: five static cuboids forming a target tray, an
+inside-box success predicate, and a scripted pick-place state machine.
+
 ## Data contract
 
 Do not install LeRobot into the Isaac Sim environment. LeRobot 0.4.2 requires `packaging>=24.2`, while the
