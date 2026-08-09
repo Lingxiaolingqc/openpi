@@ -16,6 +16,7 @@ _GRIPPER_OPEN = 1.0
 _GRIPPER_CLOSE = -1.0
 _PICK_XY_OFFSET = (-0.02, 0.0)
 _PICK_GRASP_HEIGHT = 0.08
+_PLACE_XY_OFFSET = (-0.084, 0.003)
 
 
 class RedCubeToBoxStateMachine(StateMachineBase):
@@ -76,13 +77,13 @@ class RedCubeToBoxStateMachine(StateMachineBase):
         pick_lift[:, 2] += 0.26
 
         box_hover = self._floor_anchor.clone()
-        box_hover[:, 0] += _PICK_XY_OFFSET[0]
-        box_hover[:, 1] += _PICK_XY_OFFSET[1]
+        box_hover[:, 0] += _PLACE_XY_OFFSET[0]
+        box_hover[:, 1] += _PLACE_XY_OFFSET[1]
         box_hover[:, 2] += 0.25
 
         box_release = self._floor_anchor.clone()
-        box_release[:, 0] += _PICK_XY_OFFSET[0]
-        box_release[:, 1] += _PICK_XY_OFFSET[1]
+        box_release[:, 0] += _PLACE_XY_OFFSET[0]
+        box_release[:, 1] += _PLACE_XY_OFFSET[1]
         box_release[:, 2] += TARGET_BOX_FLOOR_THICKNESS / 2.0 + 0.13
 
         phase_name, phase_step, phase_duration = self._phase_state()

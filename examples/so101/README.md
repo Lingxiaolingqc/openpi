@@ -143,6 +143,41 @@ kept `pick_cube=True` through transport, and released it at a final box-relative
 `(0.03634, 0.00642, 0.01907) m`. The final cube speed was `0.001097 m/s`, and the episode reported
 `expert_success: True`.
 
+## Randomized expert batch preflight
+
+The inherited LiftCube reset events already randomize cube X/Y by `+/-0.075 m`, cube yaw by `+/-30 degrees`,
+and the front-camera pose by `+/-0.005 m` plus small rotations. Before recording, run several resets in one
+Isaac process and require the scripted expert to succeed across those existing domain-randomized states. The
+place control offset is separate from the grasp offset so the held cube is released above the tray center.
+
+```bash
+export RED_CUBE_TO_BOX_BATCH_LOG="$LEISAAC_BASE/results/leisaac/red-cube-to-box-expert-batch.log"
+
+timeout --signal=KILL 900s \
+  "$LEISAAC_ENV/bin/python" \
+  examples/so101/red_cube_to_box_expert_batch.py \
+  --headless \
+  --enable_cameras \
+  --device cuda:6 \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --episodes 10 \
+  --minimum_success_rate 0.9 \
+  --seed 42 \
+  2>&1 | tee "$RED_CUBE_TO_BOX_BATCH_LOG"
+
+batch_status=${PIPESTATUS[0]}
+echo "red_cube_to_box_expert_batch_exit=$batch_status"
+
+grep -nE \
+  'RED_CUBE_TO_BOX_BATCH|RED_CUBE_TO_BOX_EXPERT_BATCH|cube_randomization|camera_randomization|episode:|completed_episodes|grasped_episodes|successful_episodes|failed_episodes|non_finite_episodes|reset_episodes|success_rate|initial_cube_|final_offset_|Traceback|RuntimeError' \
+  "$RED_CUBE_TO_BOX_BATCH_LOG" |
+tail -n 260
+```
+
+This is deliberately non-recording. A passing preflight reports no numerical failures or unexpected resets,
+at least `9/10` successful episodes, and `RED_CUBE_TO_BOX_EXPERT_BATCH_OK`. Only then should the same loop be
+connected to the native streaming HDF5 recorder for large-scale generation.
+
 ## Data contract
 
 Do not install LeRobot into the Isaac Sim environment. LeRobot 0.4.2 requires `packaging>=24.2`, while the
