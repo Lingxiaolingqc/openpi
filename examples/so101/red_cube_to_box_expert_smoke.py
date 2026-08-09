@@ -14,6 +14,7 @@ from isaaclab.app import AppLauncher
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets_root", default=os.environ.get("LEISAAC_ASSETS_ROOT"))
+    parser.add_argument("--expert", choices=("legacy", "adaptive"), default="legacy")
     parser.add_argument("--seed", type=int, default=42)
     AppLauncher.add_app_launcher_args(parser)
     return parser
@@ -54,6 +55,7 @@ def main() -> int:
     import leisaac.tasks  # noqa: F401
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
     import red_cube_to_box_task
+    from red_cube_to_box_task.adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
     from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
     # isort: on
 
@@ -63,6 +65,7 @@ def main() -> int:
         print("RED_CUBE_TO_BOX_EXPERT_PHASE=app_ready", flush=True)
         print(f"app_launcher_device_id: {app_launcher.device_id}", flush=True)
         print(f"task_id: {task_id}", flush=True)
+        print(f"expert_variant: {args.expert}", flush=True)
 
         env_cfg = parse_env_cfg(task_id, device=args.device, num_envs=1)
         env_cfg.use_teleop_device("so101_state_machine")
@@ -79,7 +82,10 @@ def main() -> int:
         env = gym.make(task_id, cfg=env_cfg).unwrapped
         observations, _ = env.reset()
 
-        state_machine = RedCubeToBoxStateMachine()
+        state_machine_class = (
+            RedCubeToBoxAdaptiveStateMachine if args.expert == "adaptive" else RedCubeToBoxStateMachine
+        )
+        state_machine = state_machine_class()
         state_machine.setup(env)
         state_machine.reset()
 
@@ -149,6 +155,11 @@ def main() -> int:
         print(f"cube_offset_from_box: {_rounded_row(cube_offset[0])}", flush=True)
         print(f"cube_final_speed: {cube_speed[0].item():.6f}", flush=True)
         print(f"pick_cube_final: {bool(observations['subtask_terms']['pick_cube'][0].item())}", flush=True)
+        print(f"grasp_confirmed: {getattr(state_machine, 'grasp_confirmed', 'not_tracked')}", flush=True)
+        print(
+            f"grasp_lost_before_release: {getattr(state_machine, 'grasp_lost_before_release', 'not_tracked')}",
+            flush=True,
+        )
         print(f"expert_success: {success}", flush=True)
 
         if not all_rewards_finite:

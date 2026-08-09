@@ -14,6 +14,7 @@ from isaaclab.app import AppLauncher
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets_root", default=os.environ.get("LEISAAC_ASSETS_ROOT"))
+    parser.add_argument("--expert", choices=("legacy", "adaptive"), default="legacy")
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--minimum_success_rate", type=float, default=0.9)
     parser.add_argument("--seed", type=int, default=42)
@@ -63,6 +64,7 @@ def main() -> int:
     import leisaac.tasks  # noqa: F401
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
     import red_cube_to_box_task
+    from red_cube_to_box_task.adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
     from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
     # isort: on
 
@@ -72,6 +74,7 @@ def main() -> int:
         print("RED_CUBE_TO_BOX_BATCH_PHASE=app_ready", flush=True)
         print(f"app_launcher_device_id: {app_launcher.device_id}", flush=True)
         print(f"task_id: {task_id}", flush=True)
+        print(f"expert_variant: {args.expert}", flush=True)
 
         env_cfg = parse_env_cfg(task_id, device=args.device, num_envs=1)
         env_cfg.use_teleop_device("so101_state_machine")
@@ -87,13 +90,18 @@ def main() -> int:
 
         print("RED_CUBE_TO_BOX_BATCH_PHASE=creating_env", flush=True)
         env = gym.make(task_id, cfg=env_cfg).unwrapped
-        state_machine = RedCubeToBoxStateMachine()
+        state_machine_class = (
+            RedCubeToBoxAdaptiveStateMachine if args.expert == "adaptive" else RedCubeToBoxStateMachine
+        )
+        state_machine = state_machine_class()
         state_machine.setup(env)
 
         cube = env.scene["cube"]
         floor = env.scene["target_box_floor"]
         successful_episodes = 0
         grasped_episodes = 0
+        grasped_at_lift_episodes = 0
+        grasped_at_transfer_episodes = 0
         non_finite_episodes: list[int] = []
         reset_episodes: list[int] = []
         failed_episodes: list[int] = []
@@ -113,10 +121,15 @@ def main() -> int:
                 initial_cube_positions.append(initial_cube_position)
 
                 ever_grasped = False
+                grasped_at_lift = False
+                grasped_at_transfer = False
+                lift_phase_seen = False
+                transfer_phase_seen = False
                 rewards_finite = True
                 unexpected_reset = False
 
                 while not state_machine.is_episode_done:
+                    phase_name = state_machine.phase_name
                     if env.cfg.dynamic_reset_gripper_effort_limit:
                         dynamic_reset_gripper_effort_limit_sim(env, "so101_state_machine")
 
@@ -130,7 +143,14 @@ def main() -> int:
                     observations = step_result[0]
                     rewards_finite = rewards_finite and bool(torch.isfinite(step_result[1]).all())
                     unexpected_reset = unexpected_reset or bool(step_result[2].any()) or bool(step_result[3].any())
-                    ever_grasped = ever_grasped or bool(observations["subtask_terms"]["pick_cube"][0].item())
+                    pick_cube = bool(observations["subtask_terms"]["pick_cube"][0].item())
+                    ever_grasped = ever_grasped or pick_cube
+                    if phase_name == "lift_cube" and not lift_phase_seen:
+                        lift_phase_seen = True
+                        grasped_at_lift = pick_cube
+                    if phase_name == "transfer_to_box" and not transfer_phase_seen:
+                        transfer_phase_seen = True
+                        grasped_at_transfer = pick_cube
                     state_machine.advance()
 
                 success = state_machine.check_success(env)
@@ -140,6 +160,10 @@ def main() -> int:
 
                 if ever_grasped:
                     grasped_episodes += 1
+                if grasped_at_lift:
+                    grasped_at_lift_episodes += 1
+                if grasped_at_transfer:
+                    grasped_at_transfer_episodes += 1
                 if not rewards_finite:
                     non_finite_episodes.append(episode_index)
                 if unexpected_reset:
@@ -153,6 +177,8 @@ def main() -> int:
                     f"episode:{episode_index}:"
                     f"initial_cube_pos_w={_rounded_row(initial_cube_position)}:"
                     f"ever_grasped={ever_grasped}:"
+                    f"grasped_at_lift={grasped_at_lift}:"
+                    f"grasped_at_transfer={grasped_at_transfer}:"
                     f"final_offset={_rounded_row(final_offset)}:"
                     f"final_speed={final_speed.item():.6f}:"
                     f"success={success}:"
@@ -167,6 +193,8 @@ def main() -> int:
 
         print(f"completed_episodes: {args.episodes}", flush=True)
         print(f"grasped_episodes: {grasped_episodes}", flush=True)
+        print(f"grasped_at_lift_episodes: {grasped_at_lift_episodes}", flush=True)
+        print(f"grasped_at_transfer_episodes: {grasped_at_transfer_episodes}", flush=True)
         print(f"successful_episodes: {successful_episodes}", flush=True)
         print(f"failed_episodes: {failed_episodes}", flush=True)
         print(f"non_finite_episodes: {non_finite_episodes}", flush=True)

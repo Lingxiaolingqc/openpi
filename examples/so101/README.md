@@ -143,6 +143,22 @@ kept `pick_cube=True` through transport, and released it at a final box-relative
 `(0.03634, 0.00642, 0.01907) m`. The final cube speed was `0.001097 m/s`, and the episode reported
 `expert_success: True`.
 
+The validated fixed-offset implementation remains in `red_cube_to_box_task/state_machine.py` as the `legacy`
+expert. The separate `red_cube_to_box_task/adaptive_state_machine.py` expert targets the live jaw frame, waits
+for a confirmed grasp (up to a bounded timeout), preserves the measured cube-to-jaw offset during motion, and
+tracks whether the grasp is lost before release. Select one without changing either implementation:
+
+```bash
+# Reproduce the fixed-offset baseline.
+--expert legacy
+
+# Test the jaw-feedback upgrade.
+--expert adaptive
+```
+
+Use separate process invocations with the same `--seed` when comparing them. That restarts Isaac's random
+sequence so both experts receive the same randomized episode inputs.
+
 ## Randomized expert batch preflight
 
 The inherited LiftCube reset events already randomize cube X/Y by `+/-0.075 m`, cube yaw by `+/-30 degrees`,
@@ -160,6 +176,7 @@ timeout --signal=KILL 900s \
   --enable_cameras \
   --device cuda:6 \
   --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --expert adaptive \
   --episodes 10 \
   --minimum_success_rate 0.9 \
   --seed 42 \
@@ -169,7 +186,7 @@ batch_status=${PIPESTATUS[0]}
 echo "red_cube_to_box_expert_batch_exit=$batch_status"
 
 grep -nE \
-  'RED_CUBE_TO_BOX_BATCH|RED_CUBE_TO_BOX_EXPERT_BATCH|cube_randomization|camera_randomization|episode:|completed_episodes|grasped_episodes|successful_episodes|failed_episodes|non_finite_episodes|reset_episodes|success_rate|initial_cube_|final_offset_|Traceback|RuntimeError' \
+  'RED_CUBE_TO_BOX_BATCH|RED_CUBE_TO_BOX_EXPERT_BATCH|expert_variant|cube_randomization|camera_randomization|episode:|completed_episodes|grasped_episodes|grasped_at_lift_episodes|grasped_at_transfer_episodes|successful_episodes|failed_episodes|non_finite_episodes|reset_episodes|success_rate|initial_cube_|final_offset_|Traceback|RuntimeError' \
   "$RED_CUBE_TO_BOX_BATCH_LOG" |
 tail -n 260
 ```
