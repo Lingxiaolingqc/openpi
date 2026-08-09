@@ -80,7 +80,9 @@ the eventual expert or dataset-generation trajectory.
 The scripted expert uses LeIsaac's `so101_state_machine` absolute-pose IK action configuration. It executes
 smooth Cartesian phases for approach, grasp, lift, transfer, release, retract, and settling. Task success and
 time-out terminations are disabled during this diagnostic episode so the environment cannot auto-reset before
-the final state is inspected.
+the final state is inspected. This task overrides the generic state-machine gripper close target from `0.4` to
+`0.05` radians: the first diagnostic reached a valid `0.01826 m` jaw-to-cube distance but remained above
+LeIsaac's `0.26`-radian grasp threshold with the generic close target.
 
 ```bash
 export RED_CUBE_TO_BOX_EXPERT_LOG="$LEISAAC_BASE/results/leisaac/red-cube-to-box-expert-smoke.log"

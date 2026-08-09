@@ -18,6 +18,7 @@ TARGET_BOX_WALL_THICKNESS = 0.012
 TARGET_BOX_FLOOR_THICKNESS = 0.008
 TARGET_BOX_WALL_HEIGHT = 0.060
 TARGET_BOX_INNER_HALF_EXTENT_FOR_SUCCESS = 0.045
+STATE_MACHINE_GRIPPER_CLOSE_POSITION = 0.05
 
 
 def _target_box_part(
@@ -114,3 +115,10 @@ class RedCubeToBoxEnvCfg(LiftCubeEnvCfg):
     scene: RedCubeToBoxSceneCfg = RedCubeToBoxSceneCfg(env_spacing=8.0)
     terminations: RedCubeToBoxTerminationsCfg = RedCubeToBoxTerminationsCfg()
     task_description: str = "Pick up the red cube and place it inside the green box."
+
+    def use_teleop_device(self, teleop_device) -> None:
+        super().use_teleop_device(teleop_device)
+        if teleop_device == "so101_state_machine":
+            self.actions.gripper_action.close_command_expr = {
+                "gripper": STATE_MACHINE_GRIPPER_CLOSE_POSITION,
+            }

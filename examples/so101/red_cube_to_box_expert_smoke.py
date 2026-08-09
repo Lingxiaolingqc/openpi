@@ -70,6 +70,10 @@ def main() -> int:
         env_cfg.recorders = None
         env_cfg.terminations.success = None
         env_cfg.terminations.time_out = None
+        print(
+            f"state_machine_gripper_close_expr: {env_cfg.actions.gripper_action.close_command_expr}",
+            flush=True,
+        )
 
         print("RED_CUBE_TO_BOX_EXPERT_PHASE=creating_env", flush=True)
         env = gym.make(task_id, cfg=env_cfg).unwrapped
