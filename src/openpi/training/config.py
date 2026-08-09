@@ -5,6 +5,7 @@ from collections.abc import Sequence
 import dataclasses
 import difflib
 import logging
+import os
 import pathlib
 from typing import Any, Literal, Protocol, TypeAlias
 
@@ -33,6 +34,11 @@ import openpi.transforms as _transforms
 ModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
 Filter: TypeAlias = nnx.filterlib.Filter
+
+SO101_LIFTCUBE_REPO_ID = os.environ.get(
+    "OPENPI_SO101_LIFTCUBE_REPO_ID",
+    "local/leisaac-so101-liftcube-smoke-20260808",
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -820,8 +826,7 @@ _CONFIGS = [
             action_horizon=10,
         ),
         data=LeRobotSO101DataConfig(
-            # Replace this placeholder with the LeRobot dataset generated from LeIsaac.
-            repo_id="your_hf_username/leisaac_so101_liftcube",
+            repo_id=SO101_LIFTCUBE_REPO_ID,
             base_config=DataConfig(prompt_from_task=True),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
@@ -838,8 +843,7 @@ _CONFIGS = [
             action_expert_variant="gemma_300m_lora",
         ),
         data=LeRobotSO101DataConfig(
-            # Replace this placeholder with the LeRobot dataset generated from LeIsaac.
-            repo_id="your_hf_username/leisaac_so101_liftcube",
+            repo_id=SO101_LIFTCUBE_REPO_ID,
             base_config=DataConfig(prompt_from_task=True),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),

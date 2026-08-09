@@ -55,7 +55,7 @@ overwrite an existing repository ID and does not upload anything unless `--push-
 ```bash
 uv run examples/so101/convert_leisaac_hdf5_to_lerobot.py \
   --input-path "$LEISAAC_HDF5_FILE" \
-  --repo-id xiaoqinchuan/leisaac_so101_liftcube_smoke \
+  --repo-id local/leisaac-so101-liftcube-smoke-20260808 \
   --task "Lift the cube." \
   --fps 60 \
   --image-mode video
@@ -66,8 +66,16 @@ as the reproducible source of truth.
 
 ## Configure the dataset
 
-Replace `your_hf_username/leisaac_so101_liftcube` in both SO-101 configs in
-`src/openpi/training/config.py` with the LeRobot repository ID containing your recorded episodes.
+Both SO-101 configs read the dataset ID from `OPENPI_SO101_LIFTCUBE_REPO_ID`. The default points to the tested
+local smoke dataset. Override it when using a larger local dataset or a Hugging Face dataset:
+
+```bash
+export HF_LEROBOT_HOME=/home/data/xiaoqinchuan/datasets/lerobot
+export OPENPI_SO101_LIFTCUBE_REPO_ID=local/leisaac-so101-liftcube-smoke-20260808
+```
+
+The environment variable is read when the config module starts, so export it before each `uv run` command.
+The one-episode smoke dataset validates the pipeline but is not sufficient for a useful trained policy.
 
 Two configs are available:
 

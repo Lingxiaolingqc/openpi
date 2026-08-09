@@ -11,6 +11,7 @@ def test_pi05_so101_liftcube_config_contract() -> None:
     assert config.model.action_horizon == 10
     assert config.model.discrete_state_input
     assert isinstance(config.data, _config.LeRobotSO101DataConfig)
+    assert config.data.repo_id == _config.SO101_LIFTCUBE_REPO_ID
     assert config.data.action_sequence_keys == ("action",)
     assert config.data.use_delta_joint_actions
     assert config.data.base_config is not None
@@ -27,6 +28,7 @@ def test_pi05_lora_so101_liftcube_config_contract() -> None:
     assert config.model.paligemma_variant == "gemma_2b_lora"
     assert config.model.action_expert_variant == "gemma_300m_lora"
     assert isinstance(config.data, _config.LeRobotSO101DataConfig)
+    assert config.data.repo_id == _config.SO101_LIFTCUBE_REPO_ID
     assert config.batch_size == 8
     assert config.ema_decay is None
 
