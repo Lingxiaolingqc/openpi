@@ -77,6 +77,38 @@ The semantic checks require five box pieces, `initial_success: False`, `teleport
 rewards, and `RED_CUBE_TO_BOX_ENV_SMOKE_OK`. Teleportation is used only to test the predicate; it is not part of
 the eventual expert or dataset-generation trajectory.
 
+The scripted expert uses LeIsaac's `so101_state_machine` absolute-pose IK action configuration. It executes
+smooth Cartesian phases for approach, grasp, lift, transfer, release, retract, and settling. Task success and
+time-out terminations are disabled during this diagnostic episode so the environment cannot auto-reset before
+the final state is inspected.
+
+```bash
+export RED_CUBE_TO_BOX_EXPERT_LOG="$LEISAAC_BASE/results/leisaac/red-cube-to-box-expert-smoke.log"
+
+timeout --signal=KILL 240s \
+  "$LEISAAC_ENV/bin/python" \
+  examples/so101/red_cube_to_box_expert_smoke.py \
+  --headless \
+  --enable_cameras \
+  --device cuda:6 \
+  --renderer_device 6 \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  2>&1 | tee "$RED_CUBE_TO_BOX_EXPERT_LOG"
+
+expert_status=${PIPESTATUS[0]}
+echo "red_cube_to_box_expert_smoke_exit=$expert_status"
+
+grep -nE \
+  'RED_CUBE_TO_BOX|expert_phase|task_id|device_id|simulation_device|action_space|cube_|target_box|completed_steps|rewards_finite|unexpected_reset|expert_success|Traceback|Error|RuntimeError' \
+  "$RED_CUBE_TO_BOX_EXPERT_LOG" |
+tail -n 220
+```
+
+The initial expert has `1100` control steps. A successful dynamic episode reports every phase, finite rewards,
+no unexpected reset, `expert_success: True`, and `RED_CUBE_TO_BOX_EXPERT_SMOKE_OK`. If it fails, the final cube
+offset and speed distinguish grasp/transport errors from placement or settling errors before any recording is
+enabled.
+
 ## Data contract
 
 Do not install LeRobot into the Isaac Sim environment. LeRobot 0.4.2 requires `packaging>=24.2`, while the

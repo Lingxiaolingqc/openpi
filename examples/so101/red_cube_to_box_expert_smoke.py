@@ -1,0 +1,149 @@
+"""Run one bounded scripted-expert episode in RedCubeToBox."""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import sys
+import traceback
+
+from isaaclab.app import AppLauncher
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--assets_root", default=os.environ.get("LEISAAC_ASSETS_ROOT"))
+    parser.add_argument("--seed", type=int, default=42)
+    AppLauncher.add_app_launcher_args(parser)
+    return parser
+
+
+def _rounded_row(values, digits: int = 5) -> tuple[float, ...]:
+    return tuple(round(float(value), digits) for value in values.detach().cpu().tolist())
+
+
+def main() -> int:
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    if not args.headless:
+        parser.error("This expert smoke requires --headless")
+    if not args.enable_cameras:
+        parser.error("The environment requires --enable_cameras")
+    if not args.assets_root:
+        parser.error("Set LEISAAC_ASSETS_ROOT or pass --assets_root")
+
+    assets_root = Path(args.assets_root).expanduser().resolve()
+    if not assets_root.is_dir():
+        parser.error(f"Assets root does not exist: {assets_root}")
+    os.environ["LEISAAC_ASSETS_ROOT"] = str(assets_root)
+
+    print("RED_CUBE_TO_BOX_EXPERT_PHASE=before_launcher", flush=True)
+    print(f"assets_root: {assets_root}", flush=True)
+    print(f"requested_device: {args.device}", flush=True)
+
+    app_launcher = AppLauncher(args)
+    simulation_app = app_launcher.app
+
+    # Isaac Sim must be launched before importing the remaining simulation modules.
+    # isort: off
+    import gymnasium as gym
+    import torch
+    from isaaclab_tasks.utils import parse_env_cfg
+    import leisaac.tasks  # noqa: F401
+    from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
+    import red_cube_to_box_task
+    from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
+    # isort: on
+
+    status = 1
+    try:
+        task_id = red_cube_to_box_task.TASK_ID
+        print("RED_CUBE_TO_BOX_EXPERT_PHASE=app_ready", flush=True)
+        print(f"app_launcher_device_id: {app_launcher.device_id}", flush=True)
+        print(f"task_id: {task_id}", flush=True)
+
+        env_cfg = parse_env_cfg(task_id, device=args.device, num_envs=1)
+        env_cfg.use_teleop_device("so101_state_machine")
+        env_cfg.seed = args.seed
+        env_cfg.recorders = None
+        env_cfg.terminations.success = None
+        env_cfg.terminations.time_out = None
+
+        print("RED_CUBE_TO_BOX_EXPERT_PHASE=creating_env", flush=True)
+        env = gym.make(task_id, cfg=env_cfg).unwrapped
+        env.reset()
+
+        state_machine = RedCubeToBoxStateMachine()
+        state_machine.setup(env)
+        state_machine.reset()
+
+        cube = env.scene["cube"]
+        floor = env.scene["target_box_floor"]
+        print("RED_CUBE_TO_BOX_EXPERT_ENV_CREATED_OK", flush=True)
+        print(f"simulation_device: {env.device}", flush=True)
+        print(f"action_space: {env.action_space}", flush=True)
+        print(f"cube_initial_pos_w: {_rounded_row(cube.data.root_pos_w[0])}", flush=True)
+        print(f"target_box_floor_pos_w: {_rounded_row(floor.data.root_pos_w[0])}", flush=True)
+
+        completed_steps = 0
+        all_rewards_finite = True
+        unexpected_reset = False
+        previous_phase = None
+
+        with torch.inference_mode():
+            while not state_machine.is_episode_done:
+                phase = state_machine.phase_name
+                if phase != previous_phase:
+                    print(f"expert_phase:{phase}:step={state_machine.step_count}", flush=True)
+                    previous_phase = phase
+
+                if env.cfg.dynamic_reset_gripper_effort_limit:
+                    dynamic_reset_gripper_effort_limit_sim(env, "so101_state_machine")
+
+                action = state_machine.get_action(env)
+                if action.shape != (env.num_envs, 8):
+                    raise RuntimeError(f"Unexpected expert action shape: {tuple(action.shape)}")
+                if not bool(torch.isfinite(action).all()):
+                    raise RuntimeError("Expert produced a non-finite action")
+
+                step_result = env.step(action)
+                all_rewards_finite = all_rewards_finite and bool(torch.isfinite(step_result[1]).all())
+                unexpected_reset = unexpected_reset or bool(step_result[2].any()) or bool(step_result[3].any())
+                state_machine.advance()
+                completed_steps += 1
+
+        success = state_machine.check_success(env)
+        cube_offset = cube.data.root_pos_w - floor.data.root_pos_w
+        cube_speed = torch.linalg.vector_norm(cube.data.root_lin_vel_w, dim=-1)
+
+        print(f"completed_steps: {completed_steps}", flush=True)
+        print(f"all_rewards_finite: {all_rewards_finite}", flush=True)
+        print(f"unexpected_reset: {unexpected_reset}", flush=True)
+        print(f"cube_final_pos_w: {_rounded_row(cube.data.root_pos_w[0])}", flush=True)
+        print(f"cube_offset_from_box: {_rounded_row(cube_offset[0])}", flush=True)
+        print(f"cube_final_speed: {cube_speed[0].item():.6f}", flush=True)
+        print(f"expert_success: {success}", flush=True)
+
+        if not all_rewards_finite:
+            raise RuntimeError("A non-finite reward was observed")
+        if unexpected_reset:
+            raise RuntimeError("The environment reset before the expert episode completed")
+        if not success:
+            raise RuntimeError("The scripted expert did not place a settled cube inside the target box")
+
+        print("RED_CUBE_TO_BOX_EXPERT_SMOKE_OK", flush=True)
+        status = 0
+    except Exception:
+        traceback.print_exc()
+        print("RED_CUBE_TO_BOX_EXPERT_SMOKE_FAILED", flush=True)
+    finally:
+        print("RED_CUBE_TO_BOX_EXPERT_PHASE=immediate_close", flush=True)
+        simulation_app.close(skip_cleanup=True)
+
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main())
