@@ -160,6 +160,7 @@ def main() -> int:
             f"grasp_lost_before_release: {getattr(state_machine, 'grasp_lost_before_release', 'not_tracked')}",
             flush=True,
         )
+        print(f"retry_used: {getattr(state_machine, 'retry_used', 'not_tracked')}", flush=True)
         print(f"expert_success: {success}", flush=True)
 
         if not all_rewards_finite:

@@ -1,4 +1,4 @@
-"""Closed-loop scripted SO-101 expert for the RedCubeToBox task."""
+"""Feedback-retry scripted SO-101 expert for the RedCubeToBox task."""
 
 from __future__ import annotations
 
@@ -13,8 +13,11 @@ from . import mdp
 
 _GRIPPER_OPEN = 1.0
 _GRIPPER_CLOSE = -1.0
-_APPROACH_CLEARANCE = 0.14
-_ALIGN_CLEARANCE = 0.003
+_PICK_XY_OFFSET = (-0.02, 0.0)
+_PICK_HOVER_HEIGHT = 0.20
+_PICK_GRASP_HEIGHT = 0.08
+_RETRY_RETRACT_HEIGHT = 0.12
+_MAX_RETRY_CORRECTION = 0.04
 _LIFT_HEIGHT = 0.18
 _BOX_HOVER_HEIGHT = 0.20
 _BOX_RELEASE_HEIGHT = 0.09
@@ -25,12 +28,15 @@ _MIN_CLOSE_STEPS = 60
 
 
 class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
-    """Jaw-feedback expert kept separate from the fixed-offset legacy expert."""
+    """Legacy-compatible first attempt plus one feedback-corrected retry."""
 
     _PHASES = (
         ("approach_cube", 120),
-        ("descend_to_cube", 160),
-        ("close_gripper", 240),
+        ("descend_to_cube", 120),
+        ("close_gripper", 200),
+        ("retry_retract", 100),
+        ("retry_descend", 120),
+        ("retry_close", 200),
         ("lift_cube", 140),
         ("transfer_to_box", 160),
         ("lower_into_box", 120),
@@ -43,15 +49,18 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
     def __init__(self) -> None:
         self._step_count = 0
         self._episode_done = False
-        self._initial_jaw_pos: torch.Tensor | None = None
+        self._initial_gripper_pos: torch.Tensor | None = None
         self._cube_anchor: torch.Tensor | None = None
         self._floor_anchor: torch.Tensor | None = None
+        self._retry_start_gripper: torch.Tensor | None = None
+        self._retry_grasp_target: torch.Tensor | None = None
         self._lift_start_cube: torch.Tensor | None = None
-        self._cube_to_jaw: torch.Tensor | None = None
+        self._cube_to_gripper: torch.Tensor | None = None
         self._release_gripper_target: torch.Tensor | None = None
         self._last_phase: str | None = None
         self._grasp_confirmed = False
         self._grasp_lost_before_release = False
+        self._retry_used = False
 
     def setup(self, env) -> None:
         """Apply the damping used by LeIsaac's existing state-machine expert."""
@@ -64,10 +73,10 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
         return bool(mdp.cube_inside_target_box(env).all().item())
 
     def get_action(self, env) -> torch.Tensor:
-        """Return an 8D pose action using live jaw-to-target feedback."""
+        """Return an 8D pose action with a feedback-corrected grasp retry."""
 
         self._initialize_anchors(env)
-        assert self._initial_jaw_pos is not None
+        assert self._initial_gripper_pos is not None
         assert self._cube_anchor is not None
         assert self._floor_anchor is not None
 
@@ -82,34 +91,51 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
         self._on_phase_entry(phase_name, cube_pos_w, gripper_pos_w, jaw_pos_w)
         self._update_grasp_status(phase_name, robot, cube_pos_w, jaw_pos_w)
 
-        hover_jaw = self._cube_anchor.clone()
-        hover_jaw[:, 2] += _APPROACH_CLEARANCE
-        aligned_jaw = self._cube_anchor.clone()
-        aligned_jaw[:, 2] += _ALIGN_CLEARANCE
+        pick_hover = self._pick_hover_target()
+        pick_grasp = self._pick_grasp_target()
 
         if phase_name == "approach_cube":
-            desired_jaw_w = self._interpolate(
-                self._initial_jaw_pos,
-                hover_jaw,
+            target_pos_w = self._interpolate(
+                self._initial_gripper_pos,
+                pick_hover,
                 phase_step,
                 phase_duration,
             )
-            target_pos_w = self._gripper_target_for_jaw(gripper_pos_w, jaw_pos_w, desired_jaw_w)
             gripper = _GRIPPER_OPEN
         elif phase_name == "descend_to_cube":
-            desired_jaw_w = self._interpolate(hover_jaw, aligned_jaw, phase_step, phase_duration)
-            target_pos_w = self._gripper_target_for_jaw(gripper_pos_w, jaw_pos_w, desired_jaw_w)
+            target_pos_w = self._interpolate(pick_hover, pick_grasp, phase_step, phase_duration)
             gripper = _GRIPPER_OPEN
         elif phase_name == "close_gripper":
-            desired_jaw_w = cube_pos_w.clone()
-            target_pos_w = self._gripper_target_for_jaw(gripper_pos_w, jaw_pos_w, desired_jaw_w)
+            target_pos_w = pick_grasp
+            gripper = _GRIPPER_CLOSE
+        elif phase_name == "retry_retract":
+            assert self._retry_start_gripper is not None
+            retry_hover = self._retry_hover_target()
+            target_pos_w = self._interpolate(
+                self._retry_start_gripper,
+                retry_hover,
+                phase_step,
+                phase_duration,
+            )
+            gripper = _GRIPPER_OPEN
+        elif phase_name == "retry_descend":
+            assert self._retry_grasp_target is not None
+            target_pos_w = self._interpolate(
+                self._retry_hover_target(),
+                self._retry_grasp_target,
+                phase_step,
+                phase_duration,
+            )
+            gripper = _GRIPPER_OPEN
+        elif phase_name == "retry_close":
+            assert self._retry_grasp_target is not None
+            target_pos_w = self._retry_grasp_target
             gripper = _GRIPPER_CLOSE
         elif phase_name == "lift_cube":
             assert self._lift_start_cube is not None
             desired_cube_w = self._lift_start_cube.clone()
             desired_cube_w[:, 2] += _LIFT_HEIGHT * min((phase_step + 1) / phase_duration, 1.0)
-            desired_jaw_w = self._jaw_target_for_cube(desired_cube_w)
-            target_pos_w = self._gripper_target_for_jaw(gripper_pos_w, jaw_pos_w, desired_jaw_w)
+            target_pos_w = self._gripper_target_for_cube(desired_cube_w)
             gripper = _GRIPPER_CLOSE
         elif phase_name == "transfer_to_box":
             desired_cube_w = self._interpolate(
@@ -118,8 +144,7 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
                 phase_step,
                 phase_duration,
             )
-            desired_jaw_w = self._jaw_target_for_cube(desired_cube_w)
-            target_pos_w = self._gripper_target_for_jaw(gripper_pos_w, jaw_pos_w, desired_jaw_w)
+            target_pos_w = self._gripper_target_for_cube(desired_cube_w)
             gripper = _GRIPPER_CLOSE
         elif phase_name == "lower_into_box":
             desired_cube_w = self._interpolate(
@@ -128,8 +153,7 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
                 phase_step,
                 phase_duration,
             )
-            desired_jaw_w = self._jaw_target_for_cube(desired_cube_w)
-            target_pos_w = self._gripper_target_for_jaw(gripper_pos_w, jaw_pos_w, desired_jaw_w)
+            target_pos_w = self._gripper_target_for_cube(desired_cube_w)
             gripper = _GRIPPER_CLOSE
         elif phase_name == "release_cube":
             assert self._release_gripper_target is not None
@@ -163,9 +187,9 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
         return torch.cat([target_pos_local, target_quat_local, gripper_command], dim=-1)
 
     def advance(self) -> None:
-        phase_name, phase_step, phase_duration = self._phase_state()
-        if phase_name == "close_gripper" and self._grasp_confirmed and phase_step >= _MIN_CLOSE_STEPS:
-            self._step_count += phase_duration - phase_step
+        phase_name, phase_step, _ = self._phase_state()
+        if phase_name in {"close_gripper", "retry_close"} and self._grasp_confirmed and phase_step >= _MIN_CLOSE_STEPS:
+            self._step_count = self._phase_start("lift_cube")
         else:
             self._step_count += 1
         if self._step_count >= self.MAX_STEPS:
@@ -174,21 +198,23 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
     def reset(self) -> None:
         self._step_count = 0
         self._episode_done = False
-        self._initial_jaw_pos = None
+        self._initial_gripper_pos = None
         self._cube_anchor = None
         self._floor_anchor = None
+        self._retry_start_gripper = None
+        self._retry_grasp_target = None
         self._lift_start_cube = None
-        self._cube_to_jaw = None
+        self._cube_to_gripper = None
         self._release_gripper_target = None
         self._last_phase = None
         self._grasp_confirmed = False
         self._grasp_lost_before_release = False
+        self._retry_used = False
 
     def _initialize_anchors(self, env) -> None:
-        if self._initial_jaw_pos is not None:
+        if self._initial_gripper_pos is not None:
             return
-        ee_frame = env.scene["ee_frame"]
-        self._initial_jaw_pos = ee_frame.data.target_pos_w[:, 1, :].clone()
+        self._initial_gripper_pos = env.scene["robot"].data.body_pos_w[:, -1, :].clone()
         self._cube_anchor = env.scene["cube"].data.root_pos_w.clone()
         self._floor_anchor = env.scene["target_box_floor"].data.root_pos_w.clone()
 
@@ -202,11 +228,28 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
         if phase_name == self._last_phase:
             return
         self._last_phase = phase_name
-        if phase_name == "lift_cube":
+        if phase_name == "retry_retract":
+            self._prepare_retry(cube_pos_w, gripper_pos_w, jaw_pos_w)
+        elif phase_name == "lift_cube":
             self._lift_start_cube = cube_pos_w.clone()
-            self._cube_to_jaw = cube_pos_w.clone() - jaw_pos_w.clone()
+            self._cube_to_gripper = cube_pos_w.clone() - gripper_pos_w.clone()
         elif phase_name == "release_cube":
             self._release_gripper_target = gripper_pos_w.clone()
+
+    def _prepare_retry(
+        self,
+        cube_pos_w: torch.Tensor,
+        gripper_pos_w: torch.Tensor,
+        jaw_pos_w: torch.Tensor,
+    ) -> None:
+        correction = torch.clamp(
+            cube_pos_w - jaw_pos_w,
+            min=-_MAX_RETRY_CORRECTION,
+            max=_MAX_RETRY_CORRECTION,
+        )
+        self._retry_start_gripper = gripper_pos_w.clone()
+        self._retry_grasp_target = self._pick_grasp_target() + correction
+        self._retry_used = True
 
     def _update_grasp_status(
         self,
@@ -227,18 +270,31 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
         }:
             self._grasp_lost_before_release = True
 
-    @staticmethod
-    def _gripper_target_for_jaw(
-        gripper_pos_w: torch.Tensor,
-        jaw_pos_w: torch.Tensor,
-        desired_jaw_w: torch.Tensor,
-    ) -> torch.Tensor:
-        return gripper_pos_w + (desired_jaw_w - jaw_pos_w)
+    def _pick_grasp_target(self) -> torch.Tensor:
+        assert self._cube_anchor is not None
+        target = self._cube_anchor.clone()
+        target[:, 0] += _PICK_XY_OFFSET[0]
+        target[:, 1] += _PICK_XY_OFFSET[1]
+        target[:, 2] += _PICK_GRASP_HEIGHT
+        return target
 
-    def _jaw_target_for_cube(self, desired_cube_w: torch.Tensor) -> torch.Tensor:
-        if self._cube_to_jaw is None:
-            return desired_cube_w
-        return desired_cube_w - self._cube_to_jaw
+    def _pick_hover_target(self) -> torch.Tensor:
+        assert self._cube_anchor is not None
+        target = self._cube_anchor.clone()
+        target[:, 0] += _PICK_XY_OFFSET[0]
+        target[:, 1] += _PICK_XY_OFFSET[1]
+        target[:, 2] += _PICK_HOVER_HEIGHT
+        return target
+
+    def _retry_hover_target(self) -> torch.Tensor:
+        assert self._retry_grasp_target is not None
+        target = self._retry_grasp_target.clone()
+        target[:, 2] += _RETRY_RETRACT_HEIGHT
+        return target
+
+    def _gripper_target_for_cube(self, desired_cube_w: torch.Tensor) -> torch.Tensor:
+        assert self._cube_to_gripper is not None
+        return desired_cube_w - self._cube_to_gripper
 
     def _lift_target_cube(self) -> torch.Tensor:
         assert self._lift_start_cube is not None
@@ -268,6 +324,14 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
         name, duration = self._PHASES[-1]
         return name, duration - 1, duration
 
+    def _phase_start(self, target_phase: str) -> int:
+        phase_start = 0
+        for name, duration in self._PHASES:
+            if name == target_phase:
+                return phase_start
+            phase_start += duration
+        raise ValueError(f"Unknown phase: {target_phase}")
+
     @staticmethod
     def _interpolate(start: torch.Tensor, end: torch.Tensor, step: int, duration: int) -> torch.Tensor:
         alpha = min((step + 1) / duration, 1.0)
@@ -292,3 +356,7 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
     @property
     def grasp_lost_before_release(self) -> bool:
         return self._grasp_lost_before_release
+
+    @property
+    def retry_used(self) -> bool:
+        return self._retry_used

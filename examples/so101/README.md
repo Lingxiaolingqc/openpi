@@ -144,9 +144,11 @@ kept `pick_cube=True` through transport, and released it at a final box-relative
 `expert_success: True`.
 
 The validated fixed-offset implementation remains in `red_cube_to_box_task/state_machine.py` as the `legacy`
-expert. The separate `red_cube_to_box_task/adaptive_state_machine.py` expert targets the live jaw frame, waits
-for a confirmed grasp (up to a bounded timeout), preserves the measured cube-to-jaw offset during motion, and
-tracks whether the grasp is lost before release. Select one without changing either implementation:
+expert. The separate `red_cube_to_box_task/adaptive_state_machine.py` expert deliberately uses that validated
+trajectory for its first grasp attempt. It advances only after a confirmed grasp; otherwise it measures the
+closed-jaw error, reopens and retracts, applies a bounded Cartesian correction, and makes one second attempt.
+After grasping, it preserves the measured cube-to-gripper offset during transport and tracks whether the grasp
+is lost before release. Select one without changing either implementation:
 
 ```bash
 # Reproduce the fixed-offset baseline.
@@ -186,7 +188,7 @@ batch_status=${PIPESTATUS[0]}
 echo "red_cube_to_box_expert_batch_exit=$batch_status"
 
 grep -nE \
-  'RED_CUBE_TO_BOX_BATCH|RED_CUBE_TO_BOX_EXPERT_BATCH|expert_variant|cube_randomization|camera_randomization|episode:|completed_episodes|grasped_episodes|grasped_at_lift_episodes|grasped_at_transfer_episodes|successful_episodes|failed_episodes|non_finite_episodes|reset_episodes|success_rate|initial_cube_|final_offset_|Traceback|RuntimeError' \
+  'RED_CUBE_TO_BOX_BATCH|RED_CUBE_TO_BOX_EXPERT_BATCH|expert_variant|cube_randomization|camera_randomization|episode:|completed_episodes|grasped_episodes|grasped_at_lift_episodes|grasped_at_transfer_episodes|retried_episodes|successful_episodes|failed_episodes|non_finite_episodes|reset_episodes|success_rate|initial_cube_|final_offset_|Traceback|RuntimeError' \
   "$RED_CUBE_TO_BOX_BATCH_LOG" |
 tail -n 260
 ```
