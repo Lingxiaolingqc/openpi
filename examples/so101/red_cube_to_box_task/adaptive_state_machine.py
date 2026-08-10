@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from isaaclab.utils.math import quat_apply
+from isaaclab.utils.math import quat_from_euler_xyz
 from isaaclab.utils.math import quat_inv
+from isaaclab.utils.math import quat_mul
 from leisaac.datagen.state_machine.base import StateMachineBase
 import torch
 
@@ -26,6 +28,15 @@ _MIN_BOX_ALIGNMENT_STREAK = 20
 _GRASP_DISTANCE_THRESHOLD = 0.02
 _GRIPPER_POSITION_THRESHOLD = 0.26
 _MIN_CLOSE_STEPS = 60
+_RELAXED_ORIENTATION_PHASES = {
+    "lift_cube",
+    "transfer_to_box",
+    "lower_into_box",
+    "align_over_box",
+    "release_cube",
+    "retract_gripper",
+    "settle",
+}
 
 
 class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
@@ -78,7 +89,7 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
         return bool(mdp.cube_inside_target_box(env).all().item())
 
     def get_action(self, env) -> torch.Tensor:
-        """Return a 4D position-plus-gripper action with a feedback-corrected retry."""
+        """Return an 8D pose-plus-gripper action with phase-dependent orientation targets."""
 
         self._initialize_anchors(env)
         assert self._initial_gripper_pos is not None
@@ -196,8 +207,14 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
         robot_base_quat_w = robot.data.root_quat_w
         target_pos_local = quat_apply(quat_inv(robot_base_quat_w), target_pos_w - robot_base_pos_w)
 
+        if phase_name in _RELAXED_ORIENTATION_PHASES:
+            target_quat_w = ee_frame.data.target_quat_w[:, 0, :].clone()
+        else:
+            zero = torch.zeros((), device=env.device)
+            target_quat_w = quat_from_euler_xyz(zero, zero, zero).repeat(env.num_envs, 1)
+        target_quat_local = quat_mul(quat_inv(robot_base_quat_w), target_quat_w)
         gripper_command = torch.full((env.num_envs, 1), gripper, device=env.device)
-        return torch.cat([target_pos_local, gripper_command], dim=-1)
+        return torch.cat([target_pos_local, target_quat_local, gripper_command], dim=-1)
 
     def advance(self) -> None:
         phase_name, phase_step, _ = self._phase_state()

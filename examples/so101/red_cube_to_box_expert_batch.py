@@ -77,7 +77,7 @@ def main() -> int:
         print(f"expert_variant: {args.expert}", flush=True)
 
         env_cfg = parse_env_cfg(task_id, device=args.device, num_envs=1)
-        env_cfg.use_scripted_expert(args.expert)
+        env_cfg.use_teleop_device("so101_state_machine")
         env_cfg.seed = args.seed
         env_cfg.recorders = None
         env_cfg.terminations.success = None
@@ -114,6 +114,12 @@ def main() -> int:
         print(f"simulation_device: {env.device}", flush=True)
         print(f"action_space: {env.action_space}", flush=True)
         print(f"expert_ik_command_type: {env_cfg.actions.arm_action.controller.command_type}", flush=True)
+        print(
+            "adaptive_orientation_policy: fixed_during_grasp,current_after_grasp"
+            if args.expert == "adaptive"
+            else "adaptive_orientation_policy: not_applicable",
+            flush=True,
+        )
         print("RED_CUBE_TO_BOX_BATCH_PHASE=running", flush=True)
 
         with torch.inference_mode():

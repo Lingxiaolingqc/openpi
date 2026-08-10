@@ -112,12 +112,14 @@ LeIsaac's `0.26`-radian grasp threshold with the generic close target. Closing f
 the measured closed-jaw error is also compensated by moving the grasp target `10 mm` in both horizontal axes
 and `20 mm` downward.
 
-The legacy expert therefore has an 8D action even though the robot has six joints: local-frame end-effector
-position `(x, y, z)`, end-effector unit quaternion `(w, x, y, z)`, and one binary gripper command. Its
-differential IK controller converts the first seven values into targets for the five arm joints; the final
-value controls the sixth, gripper joint. The adaptive expert instead uses position-only IK because five arm
-joints cannot independently satisfy all six pose constraints. Its action is 4D: `(x, y, z, gripper)`. Leader
-control uses a third contract: six direct joint-position values.
+Both scripted experts therefore have an 8D action even though the robot has six joints: local-frame
+end-effector position `(x, y, z)`, end-effector unit quaternion `(w, x, y, z)`, and one binary gripper command.
+The differential IK controller converts the first seven values into targets for the five arm joints; the final
+value controls the sixth, gripper joint. The legacy expert fixes the target orientation throughout. The
+adaptive expert uses the same fixed orientation through grasping, then commands the currently measured
+orientation from lift onward. This keeps rotational error near zero so the underactuated IK can prioritize XYZ
+tracking without changing action dimension at runtime. Leader control uses a different contract: six direct
+joint-position values.
 
 ```bash
 export RED_CUBE_TO_BOX_EXPERT_LOG="$LEISAAC_BASE/results/leisaac/red-cube-to-box-expert-smoke.log"
@@ -134,11 +136,22 @@ timeout --signal=KILL 240s \
 expert_status=${PIPESTATUS[0]}
 echo "red_cube_to_box_expert_smoke_exit=$expert_status"
 
+if grep -q '^RED_CUBE_TO_BOX_EXPERT_SMOKE_OK$' "$RED_CUBE_TO_BOX_EXPERT_LOG" &&
+   ! grep -q '^RED_CUBE_TO_BOX_EXPERT_SMOKE_FAILED$' "$RED_CUBE_TO_BOX_EXPERT_LOG"; then
+  expert_semantic_status=0
+else
+  expert_semantic_status=1
+fi
+echo "red_cube_to_box_expert_semantic_exit=$expert_semantic_status"
+
 grep -nE \
   'RED_CUBE_TO_BOX|expert_phase|task_id|device_id|simulation_device|action_space|cube_|target_box|completed_steps|rewards_finite|unexpected_reset|expert_success|Traceback|Error|RuntimeError' \
   "$RED_CUBE_TO_BOX_EXPERT_LOG" |
 tail -n 220
 ```
+
+Use `expert_semantic_status` as the authoritative result. Some Isaac Sim fast/skip-cleanup shutdown paths end
+the host process with status zero even after the Python diagnostic has printed its failure sentinel.
 
 The initial expert has `1100` control steps. A successful dynamic episode reports every phase, finite rewards,
 no unexpected reset, `expert_success: True`, and `RED_CUBE_TO_BOX_EXPERT_SMOKE_OK`. If it fails, the final cube
