@@ -17,7 +17,7 @@ _SERVO_PHASES = (
     "lower_into_box",
     "align_over_box",
 )
-_POSITION_ONLY_IK_PHASES = (
+TRANSPORT_IK_PHASES = (
     "transfer_to_box",
     "lower_into_box",
     "align_over_box",
@@ -89,7 +89,8 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
     def get_action(self, env) -> torch.Tensor:
         if self._arm_action_term is None:
             raise RuntimeError("Call setup(env) before requesting a servo-expert action")
-        self._arm_action_term.set_position_only(enabled=self.phase_name in _POSITION_ONLY_IK_PHASES)
+        orientation_weight = self.transport_orientation_weight if self.phase_name in TRANSPORT_IK_PHASES else 1.0
+        self._arm_action_term.set_orientation_weight(weight=orientation_weight)
         action = super().get_action(env)
         if self.grasp_lost_before_release:
             self._servo_abort_reason = f"grasp_lost:{self.phase_name}"
@@ -201,7 +202,11 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
     def ik_runtime_mode(self) -> str:
         if self._arm_action_term is None:
             return "unconfigured"
-        return "position_only" if self._arm_action_term.position_only else "pose"
+        return self._arm_action_term.runtime_mode
+
+    @property
+    def transport_orientation_weight(self) -> float:
+        return 0.0
 
     @property
     def servo_parameters(self) -> dict[str, float | int | str]:
@@ -212,4 +217,5 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
             "stable_steps": _SERVO_STABLE_STEPS,
             "activation_phase": "transfer_to_box",
             "ik_transport_mode": "position_only",
+            "transport_orientation_weight": self.transport_orientation_weight,
         }
