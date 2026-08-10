@@ -92,14 +92,14 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
         orientation_weight = self.transport_orientation_weight if self.phase_name in TRANSPORT_IK_PHASES else 1.0
         self._arm_action_term.set_orientation_weight(weight=orientation_weight)
         action = super().get_action(env)
-        if self.grasp_lost_before_release:
+        if self.abort_on_grasp_loss and self.grasp_lost_before_release:
             self._servo_abort_reason = f"grasp_lost:{self.phase_name}"
             self._episode_done = True
         return action
 
     def advance(self) -> None:
         phase_name, phase_step, phase_duration = self._phase_state()
-        if self.grasp_lost_before_release:
+        if self.abort_on_grasp_loss and self.grasp_lost_before_release:
             self._servo_abort_reason = f"grasp_lost:{phase_name}"
             self._episode_done = True
             return
@@ -207,6 +207,12 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
     @property
     def transport_orientation_weight(self) -> float:
         return 0.0
+
+    @property
+    def abort_on_grasp_loss(self) -> bool:
+        """Whether one failed grasp observation immediately aborts the episode."""
+
+        return True
 
     @property
     def servo_parameters(self) -> dict[str, float | int | str]:

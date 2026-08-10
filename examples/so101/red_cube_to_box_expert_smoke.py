@@ -14,7 +14,11 @@ from isaaclab.app import AppLauncher
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets_root", default=os.environ.get("LEISAAC_ASSETS_ROOT"))
-    parser.add_argument("--expert", choices=("legacy", "adaptive", "servo", "weighted_servo"), default="legacy")
+    parser.add_argument(
+        "--expert",
+        choices=("legacy", "adaptive", "servo", "weighted_servo", "legacy_weighted_servo"),
+        default="legacy",
+    )
     parser.add_argument("--seed", type=int, default=42)
     AppLauncher.add_app_launcher_args(parser)
     return parser
@@ -56,6 +60,9 @@ def main() -> int:
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
     import red_cube_to_box_task
     from red_cube_to_box_task.adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
+    from red_cube_to_box_task.legacy_weighted_servo_state_machine import (
+        RedCubeToBoxLegacyWeightedServoStateMachine,
+    )
     from red_cube_to_box_task.phase_aware_ik_action import configure_servo_ik_action, resolve_action_term
     from red_cube_to_box_task.servo_state_machine import RedCubeToBoxServoStateMachine
     from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
@@ -76,7 +83,7 @@ def main() -> int:
         env_cfg.recorders = None
         env_cfg.terminations.success = None
         env_cfg.terminations.time_out = None
-        if args.expert in {"servo", "weighted_servo"}:
+        if args.expert in {"servo", "weighted_servo", "legacy_weighted_servo"}:
             configure_servo_ik_action(env_cfg)
         print(
             f"state_machine_gripper_close_expr: {env_cfg.actions.gripper_action.close_command_expr}",
@@ -88,6 +95,7 @@ def main() -> int:
             "adaptive": "fixed_during_grasp,current_after_grasp",
             "servo": "fixed_world_through_lift,position_only_ik_after_lift",
             "weighted_servo": "fixed_world_through_lift,translation_priority_ik_after_lift",
+            "legacy_weighted_servo": "legacy_exact_through_lift,translation_priority_ik_after_lift",
         }[args.expert]
         print(f"expert_orientation_policy: {orientation_policy}", flush=True)
 
@@ -100,6 +108,7 @@ def main() -> int:
             "adaptive": RedCubeToBoxAdaptiveStateMachine,
             "servo": RedCubeToBoxServoStateMachine,
             "weighted_servo": RedCubeToBoxWeightedServoStateMachine,
+            "legacy_weighted_servo": RedCubeToBoxLegacyWeightedServoStateMachine,
         }[args.expert]
         state_machine = state_machine_class()
         state_machine.setup(env)
@@ -173,7 +182,7 @@ def main() -> int:
                             flush=True,
                         )
                 if (
-                    args.expert in {"servo", "weighted_servo"}
+                    args.expert in {"servo", "weighted_servo", "legacy_weighted_servo"}
                     and phase
                     in {
                         "lift_cube",
@@ -198,7 +207,7 @@ def main() -> int:
                         flush=True,
                     )
                 if (
-                    args.expert in {"servo", "weighted_servo"}
+                    args.expert in {"servo", "weighted_servo", "legacy_weighted_servo"}
                     and phase
                     in {
                         "transfer_to_box",
