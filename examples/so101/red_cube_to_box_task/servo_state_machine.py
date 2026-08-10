@@ -16,6 +16,14 @@ _SERVO_PHASES = (
     "lower_into_box",
     "align_over_box",
 )
+_POSITION_ONLY_IK_PHASES = (
+    "transfer_to_box",
+    "lower_into_box",
+    "align_over_box",
+    "release_cube",
+    "retract_gripper",
+    "settle",
+)
 _NEXT_PHASE = {
     "transfer_to_box": "lower_into_box",
     "lower_into_box": "align_over_box",
@@ -45,6 +53,7 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
 
     def __init__(self) -> None:
         super().__init__()
+        self._arm_action_term = None
         self._servo_stable_phase: str | None = None
         self._servo_stable_streak = 0
         self._servo_arrived_phases: set[str] = set()
@@ -52,6 +61,24 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
         self._servo_abort_reason: str | None = None
         self._last_servo_delta_w: torch.Tensor | None = None
         self._last_servo_error_norm: torch.Tensor | None = None
+
+    def setup(self, env) -> None:
+        super().setup(env)
+        get_term = getattr(env.action_manager, "get_term", None)
+        if callable(get_term):
+            arm_action_term = get_term("arm_action")
+        else:
+            terms = getattr(env.action_manager, "_terms", None)
+            if not isinstance(terms, dict) or "arm_action" not in terms:
+                raise RuntimeError("Unable to resolve the arm_action term from IsaacLab's ActionManager")
+            arm_action_term = terms["arm_action"]
+        if not hasattr(arm_action_term, "set_position_only"):
+            raise RuntimeError(
+                "The servo expert requires PhaseAwareDifferentialInverseKinematicsAction; "
+                f"received {type(arm_action_term).__name__}"
+            )
+        self._arm_action_term = arm_action_term
+        self._arm_action_term.set_position_only(False)
 
     def reset(self) -> None:
         super().reset()
@@ -62,8 +89,13 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
         self._servo_abort_reason = None
         self._last_servo_delta_w = None
         self._last_servo_error_norm = None
+        if self._arm_action_term is not None:
+            self._arm_action_term.set_position_only(False)
 
     def get_action(self, env) -> torch.Tensor:
+        if self._arm_action_term is None:
+            raise RuntimeError("Call setup(env) before requesting a servo-expert action")
+        self._arm_action_term.set_position_only(self.phase_name in _POSITION_ONLY_IK_PHASES)
         action = super().get_action(env)
         if self.grasp_lost_before_release:
             self._servo_abort_reason = f"grasp_lost:{self.phase_name}"
@@ -172,6 +204,12 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
         return self._last_servo_error_norm
 
     @property
+    def ik_runtime_mode(self) -> str:
+        if self._arm_action_term is None:
+            return "unconfigured"
+        return "position_only" if self._arm_action_term.position_only else "pose"
+
+    @property
     def servo_parameters(self) -> dict[str, float | int | str]:
         return {
             "kp": _SERVO_KP,
@@ -179,4 +217,5 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
             "deadband": _SERVO_DEADBAND,
             "stable_steps": _SERVO_STABLE_STEPS,
             "activation_phase": "transfer_to_box",
+            "ik_transport_mode": "position_only",
         }

@@ -56,6 +56,7 @@ def main() -> int:
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
     import red_cube_to_box_task
     from red_cube_to_box_task.adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
+    from red_cube_to_box_task.phase_aware_ik_action import configure_servo_ik_action
     from red_cube_to_box_task.servo_state_machine import RedCubeToBoxServoStateMachine
     from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
     # isort: on
@@ -74,6 +75,8 @@ def main() -> int:
         env_cfg.recorders = None
         env_cfg.terminations.success = None
         env_cfg.terminations.time_out = None
+        if args.expert == "servo":
+            configure_servo_ik_action(env_cfg)
         print(
             f"state_machine_gripper_close_expr: {env_cfg.actions.gripper_action.close_command_expr}",
             flush=True,
@@ -82,7 +85,7 @@ def main() -> int:
         orientation_policy = {
             "legacy": "fixed_world",
             "adaptive": "fixed_during_grasp,current_after_grasp",
-            "servo": "fixed_world,servo_after_lift",
+            "servo": "fixed_world_through_lift,position_only_ik_after_lift",
         }[args.expert]
         print(f"expert_orientation_policy: {orientation_policy}", flush=True)
 
@@ -107,6 +110,10 @@ def main() -> int:
         print("RED_CUBE_TO_BOX_EXPERT_ENV_CREATED_OK", flush=True)
         print(f"simulation_device: {env.device}", flush=True)
         print(f"action_space: {env.action_space}", flush=True)
+        print(
+            f"expert_ik_action_class: {type(env.action_manager._terms['arm_action']).__name__}",
+            flush=True,
+        )
         print(f"cube_initial_pos_w: {_rounded_row(cube.data.root_pos_w[0])}", flush=True)
         print(f"target_box_floor_pos_w: {_rounded_row(floor.data.root_pos_w[0])}", flush=True)
 
@@ -149,6 +156,11 @@ def main() -> int:
                     raise RuntimeError("Expert produced a non-finite action")
                 if phase_changed:
                     print(f"expert_action:{phase}:{_rounded_row(action[0])}", flush=True)
+                    print(
+                        f"expert_ik_runtime_mode:{phase}:"
+                        f"{getattr(state_machine, 'ik_runtime_mode', 'pose')}",
+                        flush=True,
+                    )
                     desired_cube = getattr(state_machine, "last_desired_cube_w", None)
                     cube_error = getattr(state_machine, "last_cube_error_w", None)
                     gripper_target = getattr(state_machine, "last_gripper_target_w", None)

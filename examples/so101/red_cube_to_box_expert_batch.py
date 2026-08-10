@@ -65,6 +65,7 @@ def main() -> int:
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
     import red_cube_to_box_task
     from red_cube_to_box_task.adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
+    from red_cube_to_box_task.phase_aware_ik_action import configure_servo_ik_action
     from red_cube_to_box_task.servo_state_machine import RedCubeToBoxServoStateMachine
     from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
     # isort: on
@@ -83,6 +84,8 @@ def main() -> int:
         env_cfg.recorders = None
         env_cfg.terminations.success = None
         env_cfg.terminations.time_out = None
+        if args.expert == "servo":
+            configure_servo_ik_action(env_cfg)
 
         cube_randomization = env_cfg.events.domain_randomize_0.params["pose_range"]
         camera_randomization = env_cfg.events.domain_randomize_1.params["pose_range"]
@@ -119,10 +122,14 @@ def main() -> int:
         print(f"simulation_device: {env.device}", flush=True)
         print(f"action_space: {env.action_space}", flush=True)
         print(f"expert_ik_command_type: {env_cfg.actions.arm_action.controller.command_type}", flush=True)
+        print(
+            f"expert_ik_action_class: {type(env.action_manager._terms['arm_action']).__name__}",
+            flush=True,
+        )
         orientation_policy = {
             "legacy": "fixed_world",
             "adaptive": "fixed_during_grasp,current_after_grasp",
-            "servo": "fixed_world,servo_after_lift",
+            "servo": "fixed_world_through_lift,position_only_ik_after_lift",
         }[args.expert]
         print(f"expert_orientation_policy: {orientation_policy}", flush=True)
         print(f"servo_parameters: {getattr(state_machine, 'servo_parameters', 'not_applicable')}", flush=True)
