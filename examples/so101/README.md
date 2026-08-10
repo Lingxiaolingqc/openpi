@@ -244,9 +244,19 @@ the episode without opening the gripper and reports `servo_timeout_phase`. A los
 another physics step and reports `servo_abort_reason`. The single-episode log prints `expert_ik_runtime_mode`
 at every phase transition so the pose-to-position-only switch can be audited.
 
+The `legacy_gripper_anchor` variant preserves legacy pickup, lift, transport, timings, and fixed-world
+orientation. Only placement changes: it treats the jaw detection frame as the cube anchor, measures the live
+three-dimensional `jaw - gripper` offset, and converts the desired jaw position over the box into an IK gripper
+target. It opens only after the jaw remains within the configured XY/Z tolerances for ten consecutive steps. If
+alignment times out, it stops before opening and leaves the diagnostic recording intact. The original `legacy`
+implementation remains unchanged for comparison.
+
 ```bash
 # Reproduce the fixed-offset baseline.
 --expert legacy
+
+# Keep legacy pickup/transport and align placement through the jaw frame.
+--expert legacy_gripper_anchor
 
 # Test the jaw-feedback upgrade.
 --expert adaptive

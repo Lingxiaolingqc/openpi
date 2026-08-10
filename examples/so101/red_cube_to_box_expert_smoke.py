@@ -20,6 +20,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--expert",
         choices=(
             "legacy",
+            "legacy_gripper_anchor",
             "adaptive",
             "servo",
             "weighted_servo",
@@ -213,6 +214,9 @@ def main() -> int:
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
     import red_cube_to_box_task
     from red_cube_to_box_task.adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
+    from red_cube_to_box_task.legacy_gripper_anchor_state_machine import (
+        RedCubeToBoxLegacyGripperAnchorStateMachine,
+    )
     from red_cube_to_box_task.legacy_weighted_servo_state_machine import (
         RedCubeToBoxLegacyWeightedServoStateMachine,
     )
@@ -263,6 +267,7 @@ def main() -> int:
         print(f"expert_ik_command_type: {env_cfg.actions.arm_action.controller.command_type}", flush=True)
         orientation_policy = {
             "legacy": "fixed_world",
+            "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
             "adaptive": "fixed_during_grasp,current_after_grasp",
             "servo": "fixed_world_through_lift,position_only_ik_after_lift",
             "weighted_servo": "fixed_world_through_lift,translation_priority_ik_after_lift",
@@ -279,6 +284,7 @@ def main() -> int:
 
         state_machine_class = {
             "legacy": RedCubeToBoxStateMachine,
+            "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
             "adaptive": RedCubeToBoxAdaptiveStateMachine,
             "servo": RedCubeToBoxServoStateMachine,
             "weighted_servo": RedCubeToBoxWeightedServoStateMachine,
@@ -371,9 +377,21 @@ def main() -> int:
                             f"gripper_target_w={_rounded_row(gripper_target[0])}",
                             flush=True,
                         )
+                    desired_jaw = getattr(state_machine, "last_desired_jaw_w", None)
+                    jaw_error = getattr(state_machine, "last_jaw_error_w", None)
+                    if desired_jaw is not None and jaw_error is not None and gripper_target is not None:
+                        print(
+                            f"expert_jaw_anchor:{phase}:"
+                            f"desired_jaw_w={_rounded_row(desired_jaw[0])}:"
+                            f"jaw_error_w={_rounded_row(jaw_error[0])}:"
+                            f"gripper_target_w={_rounded_row(gripper_target[0])}:"
+                            f"alignment_streak={getattr(state_machine, 'alignment_streak', 0)}",
+                            flush=True,
+                        )
                 if (
                     args.expert
                     in {
+                        "legacy_gripper_anchor",
                         "servo",
                         "weighted_servo",
                         "legacy_weighted_servo",
@@ -492,9 +510,9 @@ def main() -> int:
         elif unexpected_reset:
             failure_message = "The environment reset before the expert episode completed"
         elif servo_abort_reason is not None:
-            failure_message = f"The servo expert aborted: {servo_abort_reason}"
+            failure_message = f"The expert aborted: {servo_abort_reason}"
         elif servo_timeout_phase is not None:
-            failure_message = f"The servo expert timed out in phase: {servo_timeout_phase}"
+            failure_message = f"The expert timed out in phase: {servo_timeout_phase}"
         elif not success:
             failure_message = "The scripted expert did not place a settled cube inside the target box"
 
@@ -508,6 +526,16 @@ def main() -> int:
                     "completed_steps": completed_steps,
                     "expert_success": success,
                     "failure_message": failure_message,
+                    "box_aligned_before_release": getattr(
+                        state_machine,
+                        "box_aligned_before_release",
+                        None,
+                    ),
+                    "timeout_phase": servo_timeout_phase,
+                    "cube_final_pos_w": _rounded_row(cube.data.root_pos_w[0]),
+                    "cube_offset_from_box": _rounded_row(cube_offset[0]),
+                    "gripper_final_pos_w": _rounded_row(ee_frame.data.target_pos_w[0, 0]),
+                    "jaw_final_pos_w": _rounded_row(ee_frame.data.target_pos_w[0, 1]),
                 }
             )
 

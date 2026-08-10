@@ -14,7 +14,11 @@ from isaaclab.app import AppLauncher
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets_root", default=os.environ.get("LEISAAC_ASSETS_ROOT"))
-    parser.add_argument("--expert", choices=("legacy", "adaptive", "servo", "weighted_servo"), default="legacy")
+    parser.add_argument(
+        "--expert",
+        choices=("legacy", "legacy_gripper_anchor", "adaptive", "servo", "weighted_servo"),
+        default="legacy",
+    )
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--minimum_success_rate", type=float, default=0.9)
     parser.add_argument("--seed", type=int, default=42)
@@ -65,6 +69,9 @@ def main() -> int:
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
     import red_cube_to_box_task
     from red_cube_to_box_task.adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
+    from red_cube_to_box_task.legacy_gripper_anchor_state_machine import (
+        RedCubeToBoxLegacyGripperAnchorStateMachine,
+    )
     from red_cube_to_box_task.phase_aware_ik_action import configure_servo_ik_action, resolve_action_term
     from red_cube_to_box_task.servo_state_machine import RedCubeToBoxServoStateMachine
     from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
@@ -97,6 +104,7 @@ def main() -> int:
         env = gym.make(task_id, cfg=env_cfg).unwrapped
         state_machine_class = {
             "legacy": RedCubeToBoxStateMachine,
+            "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
             "adaptive": RedCubeToBoxAdaptiveStateMachine,
             "servo": RedCubeToBoxServoStateMachine,
             "weighted_servo": RedCubeToBoxWeightedServoStateMachine,
@@ -128,6 +136,7 @@ def main() -> int:
         print(f"expert_ik_action_class: {type(arm_action_term).__name__}", flush=True)
         orientation_policy = {
             "legacy": "fixed_world",
+            "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
             "adaptive": "fixed_during_grasp,current_after_grasp",
             "servo": "fixed_world_through_lift,position_only_ik_after_lift",
             "weighted_servo": "fixed_world_through_lift,translation_priority_ik_after_lift",
