@@ -136,6 +136,17 @@ def main() -> int:
                     raise RuntimeError("Expert produced a non-finite action")
                 if phase_changed:
                     print(f"expert_action:{phase}:{_rounded_row(action[0])}", flush=True)
+                    desired_cube = getattr(state_machine, "last_desired_cube_w", None)
+                    cube_error = getattr(state_machine, "last_cube_error_w", None)
+                    gripper_target = getattr(state_machine, "last_gripper_target_w", None)
+                    if desired_cube is not None and cube_error is not None and gripper_target is not None:
+                        print(
+                            f"expert_feedback:{phase}:"
+                            f"desired_cube_w={_rounded_row(desired_cube[0])}:"
+                            f"cube_error_w={_rounded_row(cube_error[0])}:"
+                            f"gripper_target_w={_rounded_row(gripper_target[0])}",
+                            flush=True,
+                        )
 
                 step_result = env.step(action)
                 observations = step_result[0]

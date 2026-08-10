@@ -112,6 +112,11 @@ LeIsaac's `0.26`-radian grasp threshold with the generic close target. Closing f
 the measured closed-jaw error is also compensated by moving the grasp target `10 mm` in both horizontal axes
 and `20 mm` downward.
 
+This expert therefore has an 8D action even though the robot has six joints: local-frame end-effector position
+`(x, y, z)`, end-effector unit quaternion `(w, x, y, z)`, and one binary gripper command. The differential IK
+controller converts the first seven values into targets for the five arm joints; the final value controls the
+sixth, gripper joint. Leader control uses a different 6D joint-position action contract.
+
 ```bash
 export RED_CUBE_TO_BOX_EXPERT_LOG="$LEISAAC_BASE/results/leisaac/red-cube-to-box-expert-smoke.log"
 
@@ -148,7 +153,9 @@ expert. The separate `red_cube_to_box_task/adaptive_state_machine.py` expert del
 trajectory for its first grasp attempt. It advances only after a confirmed grasp; otherwise it measures the
 closed-jaw error, reopens and retracts, applies a bounded Cartesian correction, and makes one second attempt.
 After grasping, it tracks whether the grasp is lost before release. Transport and placement use live
-cube-position error instead of assuming that the initial grasp transform remains constant. A final
+cube-position error instead of assuming that the initial grasp transform remains constant. Because the IK
+command is an absolute pose, each Cartesian error component is bounded to `0.12 m`, rather than treating the
+bound as a per-step increment. A final
 closed-gripper alignment phase requires the cube to remain
 within `0.012 m` of the release target for 20 consecutive control steps before release. Select one without
 changing either implementation:

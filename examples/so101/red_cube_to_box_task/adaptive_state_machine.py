@@ -22,7 +22,7 @@ _LIFT_HEIGHT = 0.18
 _BOX_HOVER_HEIGHT = 0.20
 _BOX_RELEASE_HEIGHT = 0.09
 _RETRACT_HEIGHT = 0.12
-_MAX_CUBE_FEEDBACK_STEP = 0.03
+_MAX_CUBE_FEEDBACK_ERROR = 0.12
 _BOX_ALIGNMENT_THRESHOLD = 0.012
 _MIN_BOX_ALIGNMENT_STREAK = 20
 _GRASP_DISTANCE_THRESHOLD = 0.02
@@ -65,6 +65,9 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
         self._grasp_lost_before_release = False
         self._retry_used = False
         self._box_alignment_streak = 0
+        self._last_desired_cube_w: torch.Tensor | None = None
+        self._last_cube_error_w: torch.Tensor | None = None
+        self._last_gripper_target_w: torch.Tensor | None = None
 
     def setup(self, env) -> None:
         """Apply the damping used by LeIsaac's existing state-machine expert."""
@@ -95,6 +98,9 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
         self._on_phase_entry(phase_name, cube_pos_w, gripper_pos_w, jaw_pos_w)
         self._update_grasp_status(phase_name, robot, cube_pos_w, jaw_pos_w)
         self._update_box_alignment(phase_name, cube_pos_w)
+        self._last_desired_cube_w = None
+        self._last_cube_error_w = None
+        self._last_gripper_target_w = None
 
         pick_hover = self._pick_hover_target()
         pick_grasp = self._pick_grasp_target()
@@ -224,6 +230,9 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
         self._grasp_lost_before_release = False
         self._retry_used = False
         self._box_alignment_streak = 0
+        self._last_desired_cube_w = None
+        self._last_cube_error_w = None
+        self._last_gripper_target_w = None
 
     def _initialize_anchors(self, env) -> None:
         if self._initial_gripper_pos is not None:
@@ -315,18 +324,22 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
         target[:, 2] += _RETRY_RETRACT_HEIGHT
         return target
 
-    @staticmethod
     def _gripper_target_from_cube_feedback(
+        self,
         gripper_pos_w: torch.Tensor,
         cube_pos_w: torch.Tensor,
         desired_cube_w: torch.Tensor,
     ) -> torch.Tensor:
         correction = torch.clamp(
             desired_cube_w - cube_pos_w,
-            min=-_MAX_CUBE_FEEDBACK_STEP,
-            max=_MAX_CUBE_FEEDBACK_STEP,
+            min=-_MAX_CUBE_FEEDBACK_ERROR,
+            max=_MAX_CUBE_FEEDBACK_ERROR,
         )
-        return gripper_pos_w + correction
+        target = gripper_pos_w + correction
+        self._last_desired_cube_w = desired_cube_w.clone()
+        self._last_cube_error_w = desired_cube_w.clone() - cube_pos_w.clone()
+        self._last_gripper_target_w = target.clone()
+        return target
 
     def _lift_target_cube(self) -> torch.Tensor:
         assert self._lift_start_cube is not None
@@ -396,3 +409,15 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
     @property
     def box_aligned_before_release(self) -> bool:
         return self._box_alignment_streak >= _MIN_BOX_ALIGNMENT_STREAK
+
+    @property
+    def last_desired_cube_w(self) -> torch.Tensor | None:
+        return self._last_desired_cube_w
+
+    @property
+    def last_cube_error_w(self) -> torch.Tensor | None:
+        return self._last_cube_error_w
+
+    @property
+    def last_gripper_target_w(self) -> torch.Tensor | None:
+        return self._last_gripper_target_w
