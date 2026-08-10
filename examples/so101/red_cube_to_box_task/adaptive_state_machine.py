@@ -233,7 +233,7 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
     def _initialize_anchors(self, env) -> None:
         if self._initial_gripper_pos is not None:
             return
-        self._initial_gripper_pos = env.scene["robot"].data.body_pos_w[:, -1, :].clone()
+        self._initial_gripper_pos = env.scene["robot"].data.body_pos_w[:, -2, :].clone()
         self._cube_anchor = env.scene["cube"].data.root_pos_w.clone()
         self._floor_anchor = env.scene["target_box_floor"].data.root_pos_w.clone()
 
