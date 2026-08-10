@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from isaaclab.utils.math import quat_from_euler_xyz
 import torch
 
 from .adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
@@ -11,19 +12,11 @@ _SERVO_MAX_STEP = 0.003
 _SERVO_DEADBAND = 0.0015
 _SERVO_STABLE_STEPS = 10
 _SERVO_PHASES = (
-    "lift_cube",
     "transfer_to_box",
     "lower_into_box",
     "align_over_box",
 )
-_FROZEN_ORIENTATION_PHASES = {
-    *_SERVO_PHASES,
-    "release_cube",
-    "retract_gripper",
-    "settle",
-}
 _NEXT_PHASE = {
-    "lift_cube": "transfer_to_box",
     "transfer_to_box": "lower_into_box",
     "lower_into_box": "align_over_box",
     "align_over_box": "release_cube",
@@ -40,7 +33,7 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
         ("retry_retract", 100),
         ("retry_descend", 120),
         ("retry_close", 200),
-        ("lift_cube", 300),
+        ("lift_cube", 140),
         ("transfer_to_box", 300),
         ("lower_into_box", 300),
         ("align_over_box", 300),
@@ -52,26 +45,37 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
 
     def __init__(self) -> None:
         super().__init__()
-        self._transport_orientation_w: torch.Tensor | None = None
         self._servo_stable_phase: str | None = None
         self._servo_stable_streak = 0
         self._servo_arrived_phases: set[str] = set()
         self._servo_timeout_phase: str | None = None
+        self._servo_abort_reason: str | None = None
         self._last_servo_delta_w: torch.Tensor | None = None
         self._last_servo_error_norm: torch.Tensor | None = None
 
     def reset(self) -> None:
         super().reset()
-        self._transport_orientation_w = None
         self._servo_stable_phase = None
         self._servo_stable_streak = 0
         self._servo_arrived_phases = set()
         self._servo_timeout_phase = None
+        self._servo_abort_reason = None
         self._last_servo_delta_w = None
         self._last_servo_error_norm = None
 
+    def get_action(self, env) -> torch.Tensor:
+        action = super().get_action(env)
+        if self.grasp_lost_before_release:
+            self._servo_abort_reason = f"grasp_lost:{self.phase_name}"
+            self._episode_done = True
+        return action
+
     def advance(self) -> None:
         phase_name, phase_step, phase_duration = self._phase_state()
+        if self.grasp_lost_before_release:
+            self._servo_abort_reason = f"grasp_lost:{phase_name}"
+            self._episode_done = True
+            return
         if phase_name not in _SERVO_PHASES:
             super().advance()
             return
@@ -98,8 +102,7 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
             self._step_count += 1
 
     def _desired_lift_cube(self, phase_step: int, phase_duration: int) -> torch.Tensor:
-        del phase_step, phase_duration
-        return self._lift_target_cube()
+        return super()._desired_lift_cube(phase_step, phase_duration)
 
     def _desired_transfer_cube(self, phase_step: int, phase_duration: int) -> torch.Tensor:
         del phase_step, phase_duration
@@ -115,6 +118,11 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
         cube_pos_w: torch.Tensor,
         desired_cube_w: torch.Tensor,
     ) -> torch.Tensor:
+        if self.phase_name == "lift_cube":
+            self._last_servo_delta_w = None
+            self._last_servo_error_norm = None
+            return super()._gripper_target_from_cube_feedback(gripper_pos_w, cube_pos_w, desired_cube_w)
+
         error = desired_cube_w - cube_pos_w
         error_norm = torch.linalg.vector_norm(error, dim=-1, keepdim=True)
         delta = _SERVO_KP * error
@@ -135,11 +143,9 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
         return target
 
     def _target_orientation_w(self, env, phase_name: str, ee_frame) -> torch.Tensor:
-        if phase_name not in _FROZEN_ORIENTATION_PHASES:
-            return super()._target_orientation_w(env, phase_name, ee_frame)
-        if self._transport_orientation_w is None:
-            self._transport_orientation_w = ee_frame.data.target_quat_w[:, 0, :].clone()
-        return self._transport_orientation_w
+        del phase_name, ee_frame
+        zero = torch.zeros((), device=env.device)
+        return quat_from_euler_xyz(zero, zero, zero).repeat(env.num_envs, 1)
 
     @property
     def box_aligned_before_release(self) -> bool:
@@ -148,6 +154,10 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
     @property
     def servo_timeout_phase(self) -> str | None:
         return self._servo_timeout_phase
+
+    @property
+    def servo_abort_reason(self) -> str | None:
+        return self._servo_abort_reason
 
     @property
     def servo_stable_streak(self) -> int:
@@ -162,10 +172,11 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
         return self._last_servo_error_norm
 
     @property
-    def servo_parameters(self) -> dict[str, float | int]:
+    def servo_parameters(self) -> dict[str, float | int | str]:
         return {
             "kp": _SERVO_KP,
             "max_step": _SERVO_MAX_STEP,
             "deadband": _SERVO_DEADBAND,
             "stable_steps": _SERVO_STABLE_STEPS,
+            "activation_phase": "transfer_to_box",
         }

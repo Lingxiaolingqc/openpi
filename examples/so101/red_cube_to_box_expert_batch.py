@@ -110,6 +110,7 @@ def main() -> int:
         non_finite_episodes: list[int] = []
         reset_episodes: list[int] = []
         servo_timeout_episodes: list[int] = []
+        servo_abort_episodes: list[int] = []
         failed_episodes: list[int] = []
         initial_cube_positions: list[torch.Tensor] = []
         final_offsets: list[torch.Tensor] = []
@@ -121,7 +122,7 @@ def main() -> int:
         orientation_policy = {
             "legacy": "fixed_world",
             "adaptive": "fixed_during_grasp,current_after_grasp",
-            "servo": "fixed_during_grasp,frozen_at_lift",
+            "servo": "fixed_world,servo_after_lift",
         }[args.expert]
         print(f"expert_orientation_policy: {orientation_policy}", flush=True)
         print(f"servo_parameters: {getattr(state_machine, 'servo_parameters', 'not_applicable')}", flush=True)
@@ -153,6 +154,8 @@ def main() -> int:
                         raise RuntimeError(f"Unexpected expert action shape: {tuple(action.shape)}")
                     if not bool(torch.isfinite(action).all()):
                         raise RuntimeError("Expert produced a non-finite action")
+                    if state_machine.is_episode_done:
+                        break
 
                     step_result = env.step(action)
                     observations = step_result[0]
@@ -188,11 +191,21 @@ def main() -> int:
                 servo_timeout_phase = getattr(state_machine, "servo_timeout_phase", None)
                 if servo_timeout_phase is not None:
                     servo_timeout_episodes.append(episode_index)
+                servo_abort_reason = getattr(state_machine, "servo_abort_reason", None)
+                if servo_abort_reason is not None:
+                    servo_abort_episodes.append(episode_index)
                 if not rewards_finite:
                     non_finite_episodes.append(episode_index)
                 if unexpected_reset:
                     reset_episodes.append(episode_index)
-                if success and ever_grasped and rewards_finite and not unexpected_reset:
+                if (
+                    success
+                    and ever_grasped
+                    and rewards_finite
+                    and not unexpected_reset
+                    and servo_timeout_phase is None
+                    and servo_abort_reason is None
+                ):
                     successful_episodes += 1
                 else:
                     failed_episodes.append(episode_index)
@@ -206,6 +219,7 @@ def main() -> int:
                     f"retry_used={retry_used}:"
                     f"box_aligned_before_release={box_aligned}:"
                     f"servo_timeout_phase={servo_timeout_phase}:"
+                    f"servo_abort_reason={servo_abort_reason}:"
                     f"final_offset={_rounded_row(final_offset)}:"
                     f"final_speed={final_speed.item():.6f}:"
                     f"success={success}:"
@@ -229,6 +243,7 @@ def main() -> int:
         print(f"non_finite_episodes: {non_finite_episodes}", flush=True)
         print(f"reset_episodes: {reset_episodes}", flush=True)
         print(f"servo_timeout_episodes: {servo_timeout_episodes}", flush=True)
+        print(f"servo_abort_episodes: {servo_abort_episodes}", flush=True)
         print(f"success_rate: {success_rate:.3f}", flush=True)
         print(f"initial_cube_min_w: {_rounded_row(initial_positions.amin(dim=0))}", flush=True)
         print(f"initial_cube_max_w: {_rounded_row(initial_positions.amax(dim=0))}", flush=True)

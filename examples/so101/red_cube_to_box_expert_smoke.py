@@ -82,7 +82,7 @@ def main() -> int:
         orientation_policy = {
             "legacy": "fixed_world",
             "adaptive": "fixed_during_grasp,current_after_grasp",
-            "servo": "fixed_during_grasp,frozen_at_lift",
+            "servo": "fixed_world,servo_after_lift",
         }[args.expert]
         print(f"expert_orientation_policy: {orientation_policy}", flush=True)
 
@@ -114,6 +114,7 @@ def main() -> int:
         all_rewards_finite = True
         unexpected_reset = False
         previous_phase = None
+        previous_pick_cube = bool(observations["subtask_terms"]["pick_cube"][0].item())
 
         with torch.inference_mode():
             while not state_machine.is_episode_done:
@@ -159,7 +160,31 @@ def main() -> int:
                             f"gripper_target_w={_rounded_row(gripper_target[0])}",
                             flush=True,
                         )
-                if args.expert == "servo" and (phase_changed or state_machine.step_count % 50 == 0):
+                if args.expert == "servo" and phase in {
+                    "lift_cube",
+                    "transfer_to_box",
+                    "lower_into_box",
+                    "align_over_box",
+                } and (phase_changed or state_machine.step_count % 25 == 0):
+                    gripper_pos = ee_frame.data.target_pos_w[0, 0]
+                    jaw_pos = ee_frame.data.target_pos_w[0, 1]
+                    cube_pos = cube.data.root_pos_w[0]
+                    print(
+                        f"expert_tracking:{phase}:step={state_machine.step_count}:"
+                        f"gripper_pos_w={_rounded_row(gripper_pos)}:"
+                        f"gripper_quat_w={_rounded_row(ee_frame.data.target_quat_w[0, 0])}:"
+                        f"jaw_pos_w={_rounded_row(jaw_pos)}:"
+                        f"cube_pos_w={_rounded_row(cube_pos)}:"
+                        f"jaw_cube_distance={torch.linalg.vector_norm(jaw_pos - cube_pos).item():.6f}:"
+                        f"joint_pos={_rounded_row(robot.data.joint_pos[0])}:"
+                        f"pick_cube={bool(observations['subtask_terms']['pick_cube'][0].item())}",
+                        flush=True,
+                    )
+                if args.expert == "servo" and phase in {
+                    "transfer_to_box",
+                    "lower_into_box",
+                    "align_over_box",
+                } and (phase_changed or state_machine.step_count % 50 == 0):
                     servo_delta = state_machine.last_servo_delta_w
                     servo_error_norm = state_machine.last_servo_error_norm
                     if servo_delta is not None and servo_error_norm is not None:
@@ -171,10 +196,25 @@ def main() -> int:
                             flush=True,
                         )
 
+                if state_machine.is_episode_done:
+                    print(
+                        f"expert_abort_before_step:{getattr(state_machine, 'servo_abort_reason', None)}",
+                        flush=True,
+                    )
+                    break
+
                 step_result = env.step(action)
                 observations = step_result[0]
                 all_rewards_finite = all_rewards_finite and bool(torch.isfinite(step_result[1]).all())
                 unexpected_reset = unexpected_reset or bool(step_result[2].any()) or bool(step_result[3].any())
+                pick_cube_after = bool(observations["subtask_terms"]["pick_cube"][0].item())
+                if previous_pick_cube and not pick_cube_after:
+                    print(
+                        f"expert_grasp_event:lost:phase={phase}:"
+                        f"state_step={state_machine.step_count}:control_step={completed_steps + 1}",
+                        flush=True,
+                    )
+                previous_pick_cube = pick_cube_after
                 state_machine.advance()
                 completed_steps += 1
 
@@ -199,13 +239,20 @@ def main() -> int:
             f"box_aligned_before_release: {getattr(state_machine, 'box_aligned_before_release', 'not_tracked')}",
             flush=True,
         )
-        print(f"servo_timeout_phase: {getattr(state_machine, 'servo_timeout_phase', 'not_applicable')}", flush=True)
+        servo_timeout_phase = getattr(state_machine, "servo_timeout_phase", None)
+        servo_abort_reason = getattr(state_machine, "servo_abort_reason", None)
+        print(f"servo_timeout_phase: {servo_timeout_phase}", flush=True)
+        print(f"servo_abort_reason: {servo_abort_reason}", flush=True)
         print(f"expert_success: {success}", flush=True)
 
         if not all_rewards_finite:
             raise RuntimeError("A non-finite reward was observed")
         if unexpected_reset:
             raise RuntimeError("The environment reset before the expert episode completed")
+        if servo_abort_reason is not None:
+            raise RuntimeError(f"The servo expert aborted: {servo_abort_reason}")
+        if servo_timeout_phase is not None:
+            raise RuntimeError(f"The servo expert timed out in phase: {servo_timeout_phase}")
         if not success:
             raise RuntimeError("The scripted expert did not place a settled cube inside the target box")
 
