@@ -14,7 +14,7 @@ from isaaclab.app import AppLauncher
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets_root", default=os.environ.get("LEISAAC_ASSETS_ROOT"))
-    parser.add_argument("--expert", choices=("legacy", "adaptive"), default="legacy")
+    parser.add_argument("--expert", choices=("legacy", "adaptive", "servo"), default="legacy")
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--minimum_success_rate", type=float, default=0.9)
     parser.add_argument("--seed", type=int, default=42)
@@ -65,6 +65,7 @@ def main() -> int:
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
     import red_cube_to_box_task
     from red_cube_to_box_task.adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
+    from red_cube_to_box_task.servo_state_machine import RedCubeToBoxServoStateMachine
     from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
     # isort: on
 
@@ -90,9 +91,11 @@ def main() -> int:
 
         print("RED_CUBE_TO_BOX_BATCH_PHASE=creating_env", flush=True)
         env = gym.make(task_id, cfg=env_cfg).unwrapped
-        state_machine_class = (
-            RedCubeToBoxAdaptiveStateMachine if args.expert == "adaptive" else RedCubeToBoxStateMachine
-        )
+        state_machine_class = {
+            "legacy": RedCubeToBoxStateMachine,
+            "adaptive": RedCubeToBoxAdaptiveStateMachine,
+            "servo": RedCubeToBoxServoStateMachine,
+        }[args.expert]
         state_machine = state_machine_class()
         state_machine.setup(env)
 
@@ -106,6 +109,7 @@ def main() -> int:
         box_aligned_episodes = 0
         non_finite_episodes: list[int] = []
         reset_episodes: list[int] = []
+        servo_timeout_episodes: list[int] = []
         failed_episodes: list[int] = []
         initial_cube_positions: list[torch.Tensor] = []
         final_offsets: list[torch.Tensor] = []
@@ -114,12 +118,13 @@ def main() -> int:
         print(f"simulation_device: {env.device}", flush=True)
         print(f"action_space: {env.action_space}", flush=True)
         print(f"expert_ik_command_type: {env_cfg.actions.arm_action.controller.command_type}", flush=True)
-        print(
-            "adaptive_orientation_policy: fixed_during_grasp,current_after_grasp"
-            if args.expert == "adaptive"
-            else "adaptive_orientation_policy: not_applicable",
-            flush=True,
-        )
+        orientation_policy = {
+            "legacy": "fixed_world",
+            "adaptive": "fixed_during_grasp,current_after_grasp",
+            "servo": "fixed_during_grasp,frozen_at_lift",
+        }[args.expert]
+        print(f"expert_orientation_policy: {orientation_policy}", flush=True)
+        print(f"servo_parameters: {getattr(state_machine, 'servo_parameters', 'not_applicable')}", flush=True)
         print("RED_CUBE_TO_BOX_BATCH_PHASE=running", flush=True)
 
         with torch.inference_mode():
@@ -180,6 +185,9 @@ def main() -> int:
                 box_aligned = bool(getattr(state_machine, "box_aligned_before_release", False))
                 if box_aligned:
                     box_aligned_episodes += 1
+                servo_timeout_phase = getattr(state_machine, "servo_timeout_phase", None)
+                if servo_timeout_phase is not None:
+                    servo_timeout_episodes.append(episode_index)
                 if not rewards_finite:
                     non_finite_episodes.append(episode_index)
                 if unexpected_reset:
@@ -197,6 +205,7 @@ def main() -> int:
                     f"grasped_at_transfer={grasped_at_transfer}:"
                     f"retry_used={retry_used}:"
                     f"box_aligned_before_release={box_aligned}:"
+                    f"servo_timeout_phase={servo_timeout_phase}:"
                     f"final_offset={_rounded_row(final_offset)}:"
                     f"final_speed={final_speed.item():.6f}:"
                     f"success={success}:"
@@ -219,6 +228,7 @@ def main() -> int:
         print(f"failed_episodes: {failed_episodes}", flush=True)
         print(f"non_finite_episodes: {non_finite_episodes}", flush=True)
         print(f"reset_episodes: {reset_episodes}", flush=True)
+        print(f"servo_timeout_episodes: {servo_timeout_episodes}", flush=True)
         print(f"success_rate: {success_rate:.3f}", flush=True)
         print(f"initial_cube_min_w: {_rounded_row(initial_positions.amin(dim=0))}", flush=True)
         print(f"initial_cube_max_w: {_rounded_row(initial_positions.amax(dim=0))}", flush=True)

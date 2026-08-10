@@ -152,27 +152,15 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
             target_pos_w = self._retry_grasp_target
             gripper = _GRIPPER_CLOSE
         elif phase_name == "lift_cube":
-            assert self._lift_start_cube is not None
-            desired_cube_w = self._lift_start_cube.clone()
-            desired_cube_w[:, 2] += _LIFT_HEIGHT * min((phase_step + 1) / phase_duration, 1.0)
+            desired_cube_w = self._desired_lift_cube(phase_step, phase_duration)
             target_pos_w = self._gripper_target_from_cube_feedback(gripper_pos_w, cube_pos_w, desired_cube_w)
             gripper = _GRIPPER_CLOSE
         elif phase_name == "transfer_to_box":
-            desired_cube_w = self._interpolate(
-                self._lift_target_cube(),
-                self._box_hover_cube(),
-                phase_step,
-                phase_duration,
-            )
+            desired_cube_w = self._desired_transfer_cube(phase_step, phase_duration)
             target_pos_w = self._gripper_target_from_cube_feedback(gripper_pos_w, cube_pos_w, desired_cube_w)
             gripper = _GRIPPER_CLOSE
         elif phase_name == "lower_into_box":
-            desired_cube_w = self._interpolate(
-                self._box_hover_cube(),
-                self._box_release_cube(),
-                phase_step,
-                phase_duration,
-            )
+            desired_cube_w = self._desired_lower_cube(phase_step, phase_duration)
             target_pos_w = self._gripper_target_from_cube_feedback(gripper_pos_w, cube_pos_w, desired_cube_w)
             gripper = _GRIPPER_CLOSE
         elif phase_name == "align_over_box":
@@ -207,11 +195,7 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
         robot_base_quat_w = robot.data.root_quat_w
         target_pos_local = quat_apply(quat_inv(robot_base_quat_w), target_pos_w - robot_base_pos_w)
 
-        if phase_name in _RELAXED_ORIENTATION_PHASES:
-            target_quat_w = ee_frame.data.target_quat_w[:, 0, :].clone()
-        else:
-            zero = torch.zeros((), device=env.device)
-            target_quat_w = quat_from_euler_xyz(zero, zero, zero).repeat(env.num_envs, 1)
+        target_quat_w = self._target_orientation_w(env, phase_name, ee_frame)
         target_quat_local = quat_mul(quat_inv(robot_base_quat_w), target_quat_w)
         gripper_command = torch.full((env.num_envs, 1), gripper, device=env.device)
         return torch.cat([target_pos_local, target_quat_local, gripper_command], dim=-1)
@@ -352,6 +336,35 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
         self._last_cube_error_w = desired_cube_w.clone() - cube_pos_w.clone()
         self._last_gripper_target_w = target.clone()
         return target
+
+    def _desired_lift_cube(self, phase_step: int, phase_duration: int) -> torch.Tensor:
+        assert self._lift_start_cube is not None
+        target = self._lift_start_cube.clone()
+        target[:, 2] += _LIFT_HEIGHT * min((phase_step + 1) / phase_duration, 1.0)
+        return target
+
+    def _desired_transfer_cube(self, phase_step: int, phase_duration: int) -> torch.Tensor:
+        return self._interpolate(
+            self._lift_target_cube(),
+            self._box_hover_cube(),
+            phase_step,
+            phase_duration,
+        )
+
+    def _desired_lower_cube(self, phase_step: int, phase_duration: int) -> torch.Tensor:
+        return self._interpolate(
+            self._box_hover_cube(),
+            self._box_release_cube(),
+            phase_step,
+            phase_duration,
+        )
+
+    @staticmethod
+    def _target_orientation_w(env, phase_name: str, ee_frame) -> torch.Tensor:
+        if phase_name in _RELAXED_ORIENTATION_PHASES:
+            return ee_frame.data.target_quat_w[:, 0, :].clone()
+        zero = torch.zeros((), device=env.device)
+        return quat_from_euler_xyz(zero, zero, zero).repeat(env.num_envs, 1)
 
     def _lift_target_cube(self) -> torch.Tensor:
         assert self._lift_start_cube is not None

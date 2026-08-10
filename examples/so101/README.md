@@ -112,14 +112,15 @@ LeIsaac's `0.26`-radian grasp threshold with the generic close target. Closing f
 the measured closed-jaw error is also compensated by moving the grasp target `10 mm` in both horizontal axes
 and `20 mm` downward.
 
-Both scripted experts therefore have an 8D action even though the robot has six joints: local-frame
+All three scripted experts therefore have an 8D action even though the robot has six joints: local-frame
 end-effector position `(x, y, z)`, end-effector unit quaternion `(w, x, y, z)`, and one binary gripper command.
 The differential IK controller converts the first seven values into targets for the five arm joints; the final
 value controls the sixth, gripper joint. The legacy expert fixes the target orientation throughout. The
 adaptive expert uses the same fixed orientation through grasping, then commands the currently measured
-orientation from lift onward. This keeps rotational error near zero so the underactuated IK can prioritize XYZ
-tracking without changing action dimension at runtime. Leader control uses a different contract: six direct
-joint-position values.
+orientation from lift onward. It remains as an experimental comparison: a seed-42 run grasped the cube but
+accumulated orientation drift and large horizontal position error during transport. The servo expert freezes
+the measured orientation at the start of lift and adds a rate-limited Cartesian P outer loop around the same
+DLS IK controller. Leader control uses a different contract: six direct joint-position values.
 
 ```bash
 export RED_CUBE_TO_BOX_EXPERT_LOG="$LEISAAC_BASE/results/leisaac/red-cube-to-box-expert-smoke.log"
@@ -131,6 +132,8 @@ timeout --signal=KILL 240s \
   --enable_cameras \
   --device cuda:6 \
   --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --expert servo \
+  --seed 42 \
   2>&1 | tee "$RED_CUBE_TO_BOX_EXPERT_LOG"
 
 expert_status=${PIPESTATUS[0]}
@@ -145,7 +148,7 @@ fi
 echo "red_cube_to_box_expert_semantic_exit=$expert_semantic_status"
 
 grep -nE \
-  'RED_CUBE_TO_BOX|expert_phase|task_id|device_id|simulation_device|action_space|cube_|target_box|completed_steps|rewards_finite|unexpected_reset|expert_success|Traceback|Error|RuntimeError' \
+  'RED_CUBE_TO_BOX|expert_variant|expert_orientation_policy|servo_parameters|expert_phase|expert_state|expert_feedback|expert_servo|task_id|device_id|simulation_device|action_space|cube_|target_box|completed_steps|rewards_finite|unexpected_reset|grasp_confirmed|grasp_lost_before_release|box_aligned_before_release|servo_timeout_phase|expert_success|Traceback|Error|RuntimeError' \
   "$RED_CUBE_TO_BOX_EXPERT_LOG" |
 tail -n 220
 ```
@@ -175,12 +178,22 @@ closed-gripper alignment phase requires the cube to remain
 within `0.012 m` of the release target for 20 consecutive control steps before release. Select one without
 changing either implementation:
 
+The third implementation, `red_cube_to_box_task/servo_state_machine.py`, inherits the adaptive grasp and retry
+logic but does not replace either comparison expert. For lift, transfer, lowering, and final alignment it uses
+`delta = 0.25 * position_error`, limits the Cartesian command to `0.003 m` per control step, treats errors no
+larger than `0.0015 m` as arrived, and requires 10 consecutive arrived steps before advancing. Each controlled
+phase has a 300-step deadline; a missed deadline ends the episode without opening the gripper and reports
+`servo_timeout_phase`.
+
 ```bash
 # Reproduce the fixed-offset baseline.
 --expert legacy
 
 # Test the jaw-feedback upgrade.
 --expert adaptive
+
+# Test the bounded Cartesian P-servo upgrade.
+--expert servo
 ```
 
 Use separate process invocations with the same `--seed` when comparing them. That restarts Isaac's random
@@ -203,7 +216,7 @@ timeout --signal=KILL 900s \
   --enable_cameras \
   --device cuda:6 \
   --assets_root "$LEISAAC_ASSETS_ROOT" \
-  --expert adaptive \
+  --expert servo \
   --episodes 10 \
   --minimum_success_rate 0.9 \
   --seed 42 \
@@ -213,7 +226,7 @@ batch_status=${PIPESTATUS[0]}
 echo "red_cube_to_box_expert_batch_exit=$batch_status"
 
 grep -nE \
-  'RED_CUBE_TO_BOX_BATCH|RED_CUBE_TO_BOX_EXPERT_BATCH|expert_variant|cube_randomization|camera_randomization|episode:|completed_episodes|grasped_episodes|grasped_at_lift_episodes|grasped_at_transfer_episodes|retried_episodes|box_aligned_episodes|successful_episodes|failed_episodes|non_finite_episodes|reset_episodes|success_rate|initial_cube_|final_offset_|Traceback|RuntimeError' \
+  'RED_CUBE_TO_BOX_BATCH|RED_CUBE_TO_BOX_EXPERT_BATCH|expert_variant|expert_orientation_policy|servo_parameters|cube_randomization|camera_randomization|episode:|completed_episodes|grasped_episodes|grasped_at_lift_episodes|grasped_at_transfer_episodes|retried_episodes|box_aligned_episodes|successful_episodes|failed_episodes|non_finite_episodes|reset_episodes|servo_timeout_episodes|success_rate|initial_cube_|final_offset_|Traceback|RuntimeError' \
   "$RED_CUBE_TO_BOX_BATCH_LOG" |
 tail -n 260
 ```

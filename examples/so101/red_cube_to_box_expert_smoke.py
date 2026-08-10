@@ -14,7 +14,7 @@ from isaaclab.app import AppLauncher
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets_root", default=os.environ.get("LEISAAC_ASSETS_ROOT"))
-    parser.add_argument("--expert", choices=("legacy", "adaptive"), default="legacy")
+    parser.add_argument("--expert", choices=("legacy", "adaptive", "servo"), default="legacy")
     parser.add_argument("--seed", type=int, default=42)
     AppLauncher.add_app_launcher_args(parser)
     return parser
@@ -56,6 +56,7 @@ def main() -> int:
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
     import red_cube_to_box_task
     from red_cube_to_box_task.adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
+    from red_cube_to_box_task.servo_state_machine import RedCubeToBoxServoStateMachine
     from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
     # isort: on
 
@@ -78,23 +79,26 @@ def main() -> int:
             flush=True,
         )
         print(f"expert_ik_command_type: {env_cfg.actions.arm_action.controller.command_type}", flush=True)
-        print(
-            "adaptive_orientation_policy: fixed_during_grasp,current_after_grasp"
-            if args.expert == "adaptive"
-            else "adaptive_orientation_policy: not_applicable",
-            flush=True,
-        )
+        orientation_policy = {
+            "legacy": "fixed_world",
+            "adaptive": "fixed_during_grasp,current_after_grasp",
+            "servo": "fixed_during_grasp,frozen_at_lift",
+        }[args.expert]
+        print(f"expert_orientation_policy: {orientation_policy}", flush=True)
 
         print("RED_CUBE_TO_BOX_EXPERT_PHASE=creating_env", flush=True)
         env = gym.make(task_id, cfg=env_cfg).unwrapped
         observations, _ = env.reset()
 
-        state_machine_class = (
-            RedCubeToBoxAdaptiveStateMachine if args.expert == "adaptive" else RedCubeToBoxStateMachine
-        )
+        state_machine_class = {
+            "legacy": RedCubeToBoxStateMachine,
+            "adaptive": RedCubeToBoxAdaptiveStateMachine,
+            "servo": RedCubeToBoxServoStateMachine,
+        }[args.expert]
         state_machine = state_machine_class()
         state_machine.setup(env)
         state_machine.reset()
+        print(f"servo_parameters: {getattr(state_machine, 'servo_parameters', 'not_applicable')}", flush=True)
 
         cube = env.scene["cube"]
         floor = env.scene["target_box_floor"]
@@ -155,6 +159,17 @@ def main() -> int:
                             f"gripper_target_w={_rounded_row(gripper_target[0])}",
                             flush=True,
                         )
+                if args.expert == "servo" and (phase_changed or state_machine.step_count % 50 == 0):
+                    servo_delta = state_machine.last_servo_delta_w
+                    servo_error_norm = state_machine.last_servo_error_norm
+                    if servo_delta is not None and servo_error_norm is not None:
+                        print(
+                            f"expert_servo:{phase}:"
+                            f"error_norm={servo_error_norm[0, 0].item():.6f}:"
+                            f"delta_w={_rounded_row(servo_delta[0])}:"
+                            f"stable_streak={state_machine.servo_stable_streak}",
+                            flush=True,
+                        )
 
                 step_result = env.step(action)
                 observations = step_result[0]
@@ -184,6 +199,7 @@ def main() -> int:
             f"box_aligned_before_release: {getattr(state_machine, 'box_aligned_before_release', 'not_tracked')}",
             flush=True,
         )
+        print(f"servo_timeout_phase: {getattr(state_machine, 'servo_timeout_phase', 'not_applicable')}", flush=True)
         print(f"expert_success: {success}", flush=True)
 
         if not all_rewards_finite:
