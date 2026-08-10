@@ -65,7 +65,7 @@ def main() -> int:
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
     import red_cube_to_box_task
     from red_cube_to_box_task.adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
-    from red_cube_to_box_task.phase_aware_ik_action import configure_servo_ik_action
+    from red_cube_to_box_task.phase_aware_ik_action import configure_servo_ik_action, resolve_action_term
     from red_cube_to_box_task.servo_state_machine import RedCubeToBoxServoStateMachine
     from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
     # isort: on
@@ -122,10 +122,8 @@ def main() -> int:
         print(f"simulation_device: {env.device}", flush=True)
         print(f"action_space: {env.action_space}", flush=True)
         print(f"expert_ik_command_type: {env_cfg.actions.arm_action.controller.command_type}", flush=True)
-        print(
-            f"expert_ik_action_class: {type(env.action_manager._terms['arm_action']).__name__}",
-            flush=True,
-        )
+        arm_action_term = resolve_action_term(env.action_manager, "arm_action")
+        print(f"expert_ik_action_class: {type(arm_action_term).__name__}", flush=True)
         orientation_policy = {
             "legacy": "fixed_world",
             "adaptive": "fixed_during_grasp,current_after_grasp",

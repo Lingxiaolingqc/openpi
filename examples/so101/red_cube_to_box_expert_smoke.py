@@ -56,7 +56,7 @@ def main() -> int:
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
     import red_cube_to_box_task
     from red_cube_to_box_task.adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
-    from red_cube_to_box_task.phase_aware_ik_action import configure_servo_ik_action
+    from red_cube_to_box_task.phase_aware_ik_action import configure_servo_ik_action, resolve_action_term
     from red_cube_to_box_task.servo_state_machine import RedCubeToBoxServoStateMachine
     from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
     # isort: on
@@ -110,10 +110,8 @@ def main() -> int:
         print("RED_CUBE_TO_BOX_EXPERT_ENV_CREATED_OK", flush=True)
         print(f"simulation_device: {env.device}", flush=True)
         print(f"action_space: {env.action_space}", flush=True)
-        print(
-            f"expert_ik_action_class: {type(env.action_manager._terms['arm_action']).__name__}",
-            flush=True,
-        )
+        arm_action_term = resolve_action_term(env.action_manager, "arm_action")
+        print(f"expert_ik_action_class: {type(arm_action_term).__name__}", flush=True)
         print(f"cube_initial_pos_w: {_rounded_row(cube.data.root_pos_w[0])}", flush=True)
         print(f"target_box_floor_pos_w: {_rounded_row(floor.data.root_pos_w[0])}", flush=True)
 
@@ -157,8 +155,7 @@ def main() -> int:
                 if phase_changed:
                     print(f"expert_action:{phase}:{_rounded_row(action[0])}", flush=True)
                     print(
-                        f"expert_ik_runtime_mode:{phase}:"
-                        f"{getattr(state_machine, 'ik_runtime_mode', 'pose')}",
+                        f"expert_ik_runtime_mode:{phase}:{getattr(state_machine, 'ik_runtime_mode', 'pose')}",
                         flush=True,
                     )
                     desired_cube = getattr(state_machine, "last_desired_cube_w", None)
@@ -172,12 +169,17 @@ def main() -> int:
                             f"gripper_target_w={_rounded_row(gripper_target[0])}",
                             flush=True,
                         )
-                if args.expert == "servo" and phase in {
-                    "lift_cube",
-                    "transfer_to_box",
-                    "lower_into_box",
-                    "align_over_box",
-                } and (phase_changed or state_machine.step_count % 25 == 0):
+                if (
+                    args.expert == "servo"
+                    and phase
+                    in {
+                        "lift_cube",
+                        "transfer_to_box",
+                        "lower_into_box",
+                        "align_over_box",
+                    }
+                    and (phase_changed or state_machine.step_count % 25 == 0)
+                ):
                     gripper_pos = ee_frame.data.target_pos_w[0, 0]
                     jaw_pos = ee_frame.data.target_pos_w[0, 1]
                     cube_pos = cube.data.root_pos_w[0]
@@ -192,11 +194,16 @@ def main() -> int:
                         f"pick_cube={bool(observations['subtask_terms']['pick_cube'][0].item())}",
                         flush=True,
                     )
-                if args.expert == "servo" and phase in {
-                    "transfer_to_box",
-                    "lower_into_box",
-                    "align_over_box",
-                } and (phase_changed or state_machine.step_count % 50 == 0):
+                if (
+                    args.expert == "servo"
+                    and phase
+                    in {
+                        "transfer_to_box",
+                        "lower_into_box",
+                        "align_over_box",
+                    }
+                    and (phase_changed or state_machine.step_count % 50 == 0)
+                ):
                     servo_delta = state_machine.last_servo_delta_w
                     servo_error_norm = state_machine.last_servo_error_norm
                     if servo_delta is not None and servo_error_norm is not None:

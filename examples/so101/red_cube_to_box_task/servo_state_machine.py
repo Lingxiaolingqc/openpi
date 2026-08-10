@@ -6,6 +6,7 @@ from isaaclab.utils.math import quat_from_euler_xyz
 import torch
 
 from .adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
+from .phase_aware_ik_action import resolve_action_term
 
 _SERVO_KP = 0.25
 _SERVO_MAX_STEP = 0.003
@@ -64,21 +65,14 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
 
     def setup(self, env) -> None:
         super().setup(env)
-        get_term = getattr(env.action_manager, "get_term", None)
-        if callable(get_term):
-            arm_action_term = get_term("arm_action")
-        else:
-            terms = getattr(env.action_manager, "_terms", None)
-            if not isinstance(terms, dict) or "arm_action" not in terms:
-                raise RuntimeError("Unable to resolve the arm_action term from IsaacLab's ActionManager")
-            arm_action_term = terms["arm_action"]
+        arm_action_term = resolve_action_term(env.action_manager, "arm_action")
         if not hasattr(arm_action_term, "set_position_only"):
             raise RuntimeError(
                 "The servo expert requires PhaseAwareDifferentialInverseKinematicsAction; "
                 f"received {type(arm_action_term).__name__}"
             )
         self._arm_action_term = arm_action_term
-        self._arm_action_term.set_position_only(False)
+        self._arm_action_term.set_position_only(enabled=False)
 
     def reset(self) -> None:
         super().reset()
@@ -90,12 +84,12 @@ class RedCubeToBoxServoStateMachine(RedCubeToBoxAdaptiveStateMachine):
         self._last_servo_delta_w = None
         self._last_servo_error_norm = None
         if self._arm_action_term is not None:
-            self._arm_action_term.set_position_only(False)
+            self._arm_action_term.set_position_only(enabled=False)
 
     def get_action(self, env) -> torch.Tensor:
         if self._arm_action_term is None:
             raise RuntimeError("Call setup(env) before requesting a servo-expert action")
-        self._arm_action_term.set_position_only(self.phase_name in _POSITION_ONLY_IK_PHASES)
+        self._arm_action_term.set_position_only(enabled=self.phase_name in _POSITION_ONLY_IK_PHASES)
         action = super().get_action(env)
         if self.grasp_lost_before_release:
             self._servo_abort_reason = f"grasp_lost:{self.phase_name}"
