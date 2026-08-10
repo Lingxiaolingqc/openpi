@@ -23,6 +23,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "weighted_servo",
             "legacy_weighted_servo",
             "legacy_position_servo",
+            "legacy_pd_position_servo",
         ),
         default="legacy",
     )
@@ -73,6 +74,9 @@ def main() -> int:
     from red_cube_to_box_task.legacy_position_servo_state_machine import (
         RedCubeToBoxLegacyPositionServoStateMachine,
     )
+    from red_cube_to_box_task.legacy_pd_position_servo_state_machine import (
+        RedCubeToBoxLegacyPdPositionServoStateMachine,
+    )
     from red_cube_to_box_task.phase_aware_ik_action import configure_servo_ik_action, resolve_action_term
     from red_cube_to_box_task.servo_state_machine import RedCubeToBoxServoStateMachine
     from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
@@ -93,7 +97,13 @@ def main() -> int:
         env_cfg.recorders = None
         env_cfg.terminations.success = None
         env_cfg.terminations.time_out = None
-        if args.expert in {"servo", "weighted_servo", "legacy_weighted_servo", "legacy_position_servo"}:
+        if args.expert in {
+            "servo",
+            "weighted_servo",
+            "legacy_weighted_servo",
+            "legacy_position_servo",
+            "legacy_pd_position_servo",
+        }:
             configure_servo_ik_action(env_cfg)
         print(
             f"state_machine_gripper_close_expr: {env_cfg.actions.gripper_action.close_command_expr}",
@@ -107,6 +117,7 @@ def main() -> int:
             "weighted_servo": "fixed_world_through_lift,translation_priority_ik_after_lift",
             "legacy_weighted_servo": "legacy_exact_through_lift,translation_priority_ik_after_lift",
             "legacy_position_servo": "legacy_exact_through_lift,position_only_ik_after_lift",
+            "legacy_pd_position_servo": "legacy_exact_through_lift,velocity_damped_position_only_ik_after_lift",
         }[args.expert]
         print(f"expert_orientation_policy: {orientation_policy}", flush=True)
 
@@ -121,6 +132,7 @@ def main() -> int:
             "weighted_servo": RedCubeToBoxWeightedServoStateMachine,
             "legacy_weighted_servo": RedCubeToBoxLegacyWeightedServoStateMachine,
             "legacy_position_servo": RedCubeToBoxLegacyPositionServoStateMachine,
+            "legacy_pd_position_servo": RedCubeToBoxLegacyPdPositionServoStateMachine,
         }[args.expert]
         state_machine = state_machine_class()
         state_machine.setup(env)
@@ -194,7 +206,14 @@ def main() -> int:
                             flush=True,
                         )
                 if (
-                    args.expert in {"servo", "weighted_servo", "legacy_weighted_servo", "legacy_position_servo"}
+                    args.expert
+                    in {
+                        "servo",
+                        "weighted_servo",
+                        "legacy_weighted_servo",
+                        "legacy_position_servo",
+                        "legacy_pd_position_servo",
+                    }
                     and phase
                     in {
                         "lift_cube",
@@ -219,7 +238,14 @@ def main() -> int:
                         flush=True,
                     )
                 if (
-                    args.expert in {"servo", "weighted_servo", "legacy_weighted_servo", "legacy_position_servo"}
+                    args.expert
+                    in {
+                        "servo",
+                        "weighted_servo",
+                        "legacy_weighted_servo",
+                        "legacy_position_servo",
+                        "legacy_pd_position_servo",
+                    }
                     and phase
                     in {
                         "transfer_to_box",
@@ -230,10 +256,12 @@ def main() -> int:
                 ):
                     servo_delta = state_machine.last_servo_delta_w
                     servo_error_norm = state_machine.last_servo_error_norm
+                    servo_velocity_norm = state_machine.last_servo_velocity_norm
                     if servo_delta is not None and servo_error_norm is not None:
                         print(
                             f"expert_servo:{phase}:"
                             f"error_norm={servo_error_norm[0, 0].item():.6f}:"
+                            f"velocity_norm={servo_velocity_norm[0, 0].item():.6f}:"
                             f"delta_w={_rounded_row(servo_delta[0])}:"
                             f"stable_streak={state_machine.servo_stable_streak}",
                             flush=True,
