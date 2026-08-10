@@ -16,8 +16,8 @@ passing `--dataset_file` enables LeIsaac's native streaming HDF5 recorder.
 ## RedCubeToBox development
 
 S3 starts from the already validated LiftCube geometry instead of introducing another unverified robot or
-table asset. Before placing the target box, run the bounded scene audit to capture the robot, end-effector,
-cube, camera, and environment coordinates from the installed LeIsaac version:
+table asset. Run the bounded scene audit to capture the robot, end-effector, cube, camera, target-box floor,
+and environment coordinates from the installed LeIsaac version:
 
 ```bash
 export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
@@ -39,8 +39,8 @@ timeout --signal=KILL 120s \
 
 Success requires both process exit code `0` and the semantic marker
 `RED_CUBE_TO_BOX_SCENE_AUDIT_OK`. The audit does not connect to the physical Leader, change assets, or write a
-dataset. Its coordinates are the input to the next S3 change: five static cuboids forming a target tray, an
-inside-box success predicate, and a scripted pick-place state machine.
+dataset. It reports the floor position both as `target_box_floor_pos_w` and as separate
+`target_box_floor_x_w`, `target_box_floor_y_w`, and `target_box_floor_z_w` fields for shell parsing.
 
 The initial tray center is `(0.520, -0.36161)` in environment coordinates: it is laterally separated from the
 cube along `+X` while keeping approximately the same reach along `Y`. The tray consists of one floor and four

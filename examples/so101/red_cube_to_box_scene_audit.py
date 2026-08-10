@@ -1,8 +1,8 @@
-"""Inspect the tested LeIsaac LiftCube scene before adding RedCubeToBox.
+"""Inspect the tested OpenPI RedCubeToBox scene geometry.
 
 This bounded, read-only scene audit launches one headless environment, resets it
-once, and prints the world-space geometry needed to choose a reachable target
-box location. It does not connect to a physical Leader and does not record data.
+once, and prints the world-space robot, cube, camera, and target-box geometry.
+It does not connect to a physical Leader and does not record data.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from isaaclab.app import AppLauncher
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--task", default="LeIsaac-SO101-LiftCube-v0")
+    parser.add_argument("--task", default="OpenPI-LeIsaac-SO101-RedCubeToBox-v0")
     parser.add_argument("--assets_root", default=os.environ.get("LEISAAC_ASSETS_ROOT"))
     parser.add_argument("--seed", type=int, default=42)
     AppLauncher.add_app_launcher_args(parser)
@@ -58,6 +58,7 @@ def main() -> int:
     import gymnasium as gym
     from isaaclab_tasks.utils import parse_env_cfg
     import leisaac.tasks  # noqa: F401
+    import red_cube_to_box_task  # noqa: F401
     # isort: on
 
     status = 1
@@ -76,7 +77,9 @@ def main() -> int:
 
         robot = env.scene["robot"]
         cube = env.scene["cube"]
+        floor = env.scene["target_box_floor"]
         front = observations["policy"]["front"]
+        floor_pos_w = _rounded_row(floor.data.root_pos_w[0])
 
         print("RED_CUBE_TO_BOX_SCENE_CREATED_OK", flush=True)
         print(f"environment_type: {type(env).__name__}", flush=True)
@@ -90,6 +93,10 @@ def main() -> int:
         print(f"cube_pos_w: {_rounded_row(cube.data.root_pos_w[0])}", flush=True)
         print(f"cube_quat_w: {_rounded_row(cube.data.root_quat_w[0])}", flush=True)
         print(f"cube_default_pos_w: {_rounded_row(cube.data.default_root_state[0, :3])}", flush=True)
+        print(f"target_box_floor_pos_w: {floor_pos_w}", flush=True)
+        print(f"target_box_floor_x_w: {floor_pos_w[0]}", flush=True)
+        print(f"target_box_floor_y_w: {floor_pos_w[1]}", flush=True)
+        print(f"target_box_floor_z_w: {floor_pos_w[2]}", flush=True)
         print(f"scene_rigid_objects: {tuple(env.scene.rigid_objects.keys())}", flush=True)
         print(f"scene_sensors: {tuple(env.scene.sensors.keys())}", flush=True)
         print(f"front_shape: {tuple(front.shape)}", flush=True)
