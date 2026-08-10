@@ -40,7 +40,10 @@ timeout --signal=KILL 120s \
 Success requires both process exit code `0` and the semantic marker
 `RED_CUBE_TO_BOX_SCENE_AUDIT_OK`. The audit does not connect to the physical Leader, change assets, or write a
 dataset. It reports the floor position both as `target_box_floor_pos_w` and as separate
-`target_box_floor_x_w`, `target_box_floor_y_w`, and `target_box_floor_z_w` fields for shell parsing.
+`target_box_floor_x_w`, `target_box_floor_y_w`, and `target_box_floor_z_w` fields for shell parsing. It also
+reports every named joint coordinate in radians, every named robot-body origin in world coordinates, and the
+FrameTransformer gripper and offset jaw-detection positions. These fields distinguish joint coordinates from
+Cartesian positions and prevent the raw jaw body from being mistaken for the IK end-effector.
 
 The initial tray center is `(0.520, -0.36161)` in environment coordinates: it is laterally separated from the
 cube along `+X` while keeping approximately the same reach along `Y`. The tray consists of one floor and four

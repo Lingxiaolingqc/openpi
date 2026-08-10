@@ -78,8 +78,15 @@ def main() -> int:
         robot = env.scene["robot"]
         cube = env.scene["cube"]
         floor = env.scene["target_box_floor"]
+        ee_frame = env.scene["ee_frame"]
         front = observations["policy"]["front"]
         floor_pos_w = _rounded_row(floor.data.root_pos_w[0])
+        joint_names = tuple(robot.data.joint_names)
+        joint_positions = _rounded_row(robot.data.joint_pos[0])
+        body_names = tuple(robot.data.body_names)
+        body_positions_w = robot.data.body_pos_w[0]
+        gripper_body_index = body_names.index("gripper")
+        jaw_body_index = body_names.index("jaw")
 
         print("RED_CUBE_TO_BOX_SCENE_CREATED_OK", flush=True)
         print(f"environment_type: {type(env).__name__}", flush=True)
@@ -87,9 +94,17 @@ def main() -> int:
         print(f"environment_origin_w: {_rounded_row(env.scene.env_origins[0])}", flush=True)
         print(f"robot_root_pos_w: {_rounded_row(robot.data.root_pos_w[0])}", flush=True)
         print(f"robot_root_quat_w: {_rounded_row(robot.data.root_quat_w[0])}", flush=True)
-        print(f"robot_joint_names: {tuple(robot.data.joint_names)}", flush=True)
-        print(f"robot_body_names: {tuple(robot.data.body_names)}", flush=True)
-        print(f"end_effector_pos_w: {_rounded_row(robot.data.body_pos_w[0, -1])}", flush=True)
+        print(f"robot_joint_names: {joint_names}", flush=True)
+        print(f"robot_joint_pos_rad: {joint_positions}", flush=True)
+        for joint_name, joint_position in zip(joint_names, joint_positions, strict=True):
+            print(f"robot_joint_pos_rad:{joint_name}:{joint_position}", flush=True)
+        print(f"robot_body_names: {body_names}", flush=True)
+        for body_name, body_position_w in zip(body_names, body_positions_w, strict=True):
+            print(f"robot_body_pos_w:{body_name}:{_rounded_row(body_position_w)}", flush=True)
+        print(f"end_effector_pos_w: {_rounded_row(body_positions_w[gripper_body_index])}", flush=True)
+        print(f"jaw_body_pos_w: {_rounded_row(body_positions_w[jaw_body_index])}", flush=True)
+        print(f"gripper_frame_pos_w: {_rounded_row(ee_frame.data.target_pos_w[0, 0])}", flush=True)
+        print(f"jaw_detection_frame_pos_w: {_rounded_row(ee_frame.data.target_pos_w[0, 1])}", flush=True)
         print(f"cube_pos_w: {_rounded_row(cube.data.root_pos_w[0])}", flush=True)
         print(f"cube_quat_w: {_rounded_row(cube.data.root_quat_w[0])}", flush=True)
         print(f"cube_default_pos_w: {_rounded_row(cube.data.default_root_state[0, :3])}", flush=True)
