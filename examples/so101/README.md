@@ -254,12 +254,12 @@ Copying the HDF5 arrays directly would mix coordinate contracts and train an inv
 
 The OpenPI data config consumes these LeRobot fields:
 
-| LeRobot field | OpenPI field | Shape | Meaning |
-| --- | --- | --- | --- |
-| `observation.images.front` | `images/front` | `H x W x 3` | Required RGB image |
-| `observation.state` | `state` | `6` | Five arm joints plus gripper |
-| `action` | `actions` | `T x 6` | Absolute SO-101 motor targets |
-| `task` | `prompt` | text | Language instruction |
+| LeRobot field                | OpenPI field     | Shape         | Meaning                       |
+| ---------------------------- | ---------------- | ------------- | ----------------------------- |
+| `observation.images.front` | `images/front` | `H x W x 3` | Required RGB image            |
+| `observation.state`        | `state`        | `6`         | Five arm joints plus gripper  |
+| `action`                   | `actions`      | `T x 6`     | Absolute SO-101 motor targets |
+| `task`                     | `prompt`       | text          | Language instruction          |
 
 The first five action dimensions are converted to deltas for training; the gripper stays absolute. Model output
 is converted back to absolute targets before it is returned to LeIsaac. The pi0.5 model keeps its 32-dimensional
