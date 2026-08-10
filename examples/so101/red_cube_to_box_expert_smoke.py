@@ -24,6 +24,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "legacy_weighted_servo",
             "legacy_position_servo",
             "legacy_pd_position_servo",
+            "legacy_trajectory_pd_servo",
         ),
         default="legacy",
     )
@@ -77,6 +78,9 @@ def main() -> int:
     from red_cube_to_box_task.legacy_pd_position_servo_state_machine import (
         RedCubeToBoxLegacyPdPositionServoStateMachine,
     )
+    from red_cube_to_box_task.legacy_trajectory_pd_servo_state_machine import (
+        RedCubeToBoxLegacyTrajectoryPdServoStateMachine,
+    )
     from red_cube_to_box_task.phase_aware_ik_action import configure_servo_ik_action, resolve_action_term
     from red_cube_to_box_task.servo_state_machine import RedCubeToBoxServoStateMachine
     from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
@@ -103,6 +107,7 @@ def main() -> int:
             "legacy_weighted_servo",
             "legacy_position_servo",
             "legacy_pd_position_servo",
+            "legacy_trajectory_pd_servo",
         }:
             configure_servo_ik_action(env_cfg)
         print(
@@ -118,6 +123,7 @@ def main() -> int:
             "legacy_weighted_servo": "legacy_exact_through_lift,translation_priority_ik_after_lift",
             "legacy_position_servo": "legacy_exact_through_lift,position_only_ik_after_lift",
             "legacy_pd_position_servo": "legacy_exact_through_lift,velocity_damped_position_only_ik_after_lift",
+            "legacy_trajectory_pd_servo": "legacy_exact_through_lift,smooth_reference_pd_position_ik_after_lift",
         }[args.expert]
         print(f"expert_orientation_policy: {orientation_policy}", flush=True)
 
@@ -133,6 +139,7 @@ def main() -> int:
             "legacy_weighted_servo": RedCubeToBoxLegacyWeightedServoStateMachine,
             "legacy_position_servo": RedCubeToBoxLegacyPositionServoStateMachine,
             "legacy_pd_position_servo": RedCubeToBoxLegacyPdPositionServoStateMachine,
+            "legacy_trajectory_pd_servo": RedCubeToBoxLegacyTrajectoryPdServoStateMachine,
         }[args.expert]
         state_machine = state_machine_class()
         state_machine.setup(env)
@@ -213,6 +220,7 @@ def main() -> int:
                         "legacy_weighted_servo",
                         "legacy_position_servo",
                         "legacy_pd_position_servo",
+                        "legacy_trajectory_pd_servo",
                     }
                     and phase
                     in {
@@ -245,6 +253,7 @@ def main() -> int:
                         "legacy_weighted_servo",
                         "legacy_position_servo",
                         "legacy_pd_position_servo",
+                        "legacy_trajectory_pd_servo",
                     }
                     and phase
                     in {
