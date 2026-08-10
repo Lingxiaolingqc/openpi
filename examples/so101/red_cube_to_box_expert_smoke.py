@@ -161,6 +161,10 @@ def main() -> int:
             flush=True,
         )
         print(f"retry_used: {getattr(state_machine, 'retry_used', 'not_tracked')}", flush=True)
+        print(
+            f"box_aligned_before_release: {getattr(state_machine, 'box_aligned_before_release', 'not_tracked')}",
+            flush=True,
+        )
         print(f"expert_success: {success}", flush=True)
 
         if not all_rewards_finite:

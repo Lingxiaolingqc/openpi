@@ -103,6 +103,7 @@ def main() -> int:
         grasped_at_lift_episodes = 0
         grasped_at_transfer_episodes = 0
         retried_episodes = 0
+        box_aligned_episodes = 0
         non_finite_episodes: list[int] = []
         reset_episodes: list[int] = []
         failed_episodes: list[int] = []
@@ -168,6 +169,9 @@ def main() -> int:
                 retry_used = bool(getattr(state_machine, "retry_used", False))
                 if retry_used:
                     retried_episodes += 1
+                box_aligned = bool(getattr(state_machine, "box_aligned_before_release", False))
+                if box_aligned:
+                    box_aligned_episodes += 1
                 if not rewards_finite:
                     non_finite_episodes.append(episode_index)
                 if unexpected_reset:
@@ -184,6 +188,7 @@ def main() -> int:
                     f"grasped_at_lift={grasped_at_lift}:"
                     f"grasped_at_transfer={grasped_at_transfer}:"
                     f"retry_used={retry_used}:"
+                    f"box_aligned_before_release={box_aligned}:"
                     f"final_offset={_rounded_row(final_offset)}:"
                     f"final_speed={final_speed.item():.6f}:"
                     f"success={success}:"
@@ -201,6 +206,7 @@ def main() -> int:
         print(f"grasped_at_lift_episodes: {grasped_at_lift_episodes}", flush=True)
         print(f"grasped_at_transfer_episodes: {grasped_at_transfer_episodes}", flush=True)
         print(f"retried_episodes: {retried_episodes}", flush=True)
+        print(f"box_aligned_episodes: {box_aligned_episodes}", flush=True)
         print(f"successful_episodes: {successful_episodes}", flush=True)
         print(f"failed_episodes: {failed_episodes}", flush=True)
         print(f"non_finite_episodes: {non_finite_episodes}", flush=True)
