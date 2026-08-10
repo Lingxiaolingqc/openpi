@@ -68,7 +68,7 @@ def main() -> int:
         print(f"expert_variant: {args.expert}", flush=True)
 
         env_cfg = parse_env_cfg(task_id, device=args.device, num_envs=1)
-        env_cfg.use_teleop_device("so101_state_machine")
+        env_cfg.use_scripted_expert(args.expert)
         env_cfg.seed = args.seed
         env_cfg.recorders = None
         env_cfg.terminations.success = None
@@ -77,6 +77,7 @@ def main() -> int:
             f"state_machine_gripper_close_expr: {env_cfg.actions.gripper_action.close_command_expr}",
             flush=True,
         )
+        print(f"expert_ik_command_type: {env_cfg.actions.arm_action.controller.command_type}", flush=True)
 
         print("RED_CUBE_TO_BOX_EXPERT_PHASE=creating_env", flush=True)
         env = gym.make(task_id, cfg=env_cfg).unwrapped
@@ -130,7 +131,8 @@ def main() -> int:
                     dynamic_reset_gripper_effort_limit_sim(env, "so101_state_machine")
 
                 action = state_machine.get_action(env)
-                if action.shape != (env.num_envs, 8):
+                expected_action_shape = (env.num_envs, env.action_manager.total_action_dim)
+                if action.shape != expected_action_shape:
                     raise RuntimeError(f"Unexpected expert action shape: {tuple(action.shape)}")
                 if not bool(torch.isfinite(action).all()):
                     raise RuntimeError("Expert produced a non-finite action")

@@ -122,3 +122,12 @@ class RedCubeToBoxEnvCfg(LiftCubeEnvCfg):
             self.actions.gripper_action.close_command_expr = {
                 "gripper": STATE_MACHINE_GRIPPER_CLOSE_POSITION,
             }
+
+    def use_scripted_expert(self, expert: str) -> None:
+        """Select an expert-specific IK contract without changing LeIsaac globally."""
+
+        if expert not in {"legacy", "adaptive"}:
+            raise ValueError(f"Unknown scripted expert: {expert}")
+        self.use_teleop_device("so101_state_machine")
+        if expert == "adaptive":
+            self.actions.arm_action.controller.command_type = "position"

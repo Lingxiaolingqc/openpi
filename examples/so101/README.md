@@ -112,10 +112,12 @@ LeIsaac's `0.26`-radian grasp threshold with the generic close target. Closing f
 the measured closed-jaw error is also compensated by moving the grasp target `10 mm` in both horizontal axes
 and `20 mm` downward.
 
-This expert therefore has an 8D action even though the robot has six joints: local-frame end-effector position
-`(x, y, z)`, end-effector unit quaternion `(w, x, y, z)`, and one binary gripper command. The differential IK
-controller converts the first seven values into targets for the five arm joints; the final value controls the
-sixth, gripper joint. Leader control uses a different 6D joint-position action contract.
+The legacy expert therefore has an 8D action even though the robot has six joints: local-frame end-effector
+position `(x, y, z)`, end-effector unit quaternion `(w, x, y, z)`, and one binary gripper command. Its
+differential IK controller converts the first seven values into targets for the five arm joints; the final
+value controls the sixth, gripper joint. The adaptive expert instead uses position-only IK because five arm
+joints cannot independently satisfy all six pose constraints. Its action is 4D: `(x, y, z, gripper)`. Leader
+control uses a third contract: six direct joint-position values.
 
 ```bash
 export RED_CUBE_TO_BOX_EXPERT_LOG="$LEISAAC_BASE/results/leisaac/red-cube-to-box-expert-smoke.log"
