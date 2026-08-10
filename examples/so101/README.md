@@ -22,14 +22,17 @@ and environment coordinates from the installed LeIsaac version:
 ```bash
 export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
 export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_ROOT=/home/data/xiaoqinchuan/projects/leisaac
+export LEISAAC_ENV=/home/data/xiaoqinchuan/envs/leisaac-so101
 export LEISAAC_ASSETS_ROOT=/home/data/xiaoqinchuan/assets/leisaac-v0.4.0
 export ISAACSIM_PORTABLE_ROOT=/home/data/xiaoqinchuan/cache/isaacsim-portable
-export LD_PRELOAD=/home/data/xiaoqinchuan/envs/leisaac-so101/lib/libstdc++.so.6
 export OMNI_KIT_ACCEPT_EULA=YES
+export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
 
 cd "$OPENPI_ROOT"
+mkdir -p "$LEISAAC_BASE/results/leisaac"
 timeout --signal=KILL 120s \
-  /home/data/xiaoqinchuan/envs/leisaac-so101/bin/python \
+  "$LEISAAC_ENV/bin/python" \
   examples/so101/red_cube_to_box_scene_audit.py \
   --headless \
   --enable_cameras \
@@ -53,8 +56,18 @@ top, and moving no faster than `0.15 m/s`.
 Validate environment creation and the predicate before developing the expert:
 
 ```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_ROOT=/home/data/xiaoqinchuan/projects/leisaac
+export LEISAAC_ENV=/home/data/xiaoqinchuan/envs/leisaac-so101
+export LEISAAC_ASSETS_ROOT=/home/data/xiaoqinchuan/assets/leisaac-v0.4.0
+export ISAACSIM_PORTABLE_ROOT=/home/data/xiaoqinchuan/cache/isaacsim-portable
+export OMNI_KIT_ACCEPT_EULA=YES
+export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
 export RED_CUBE_TO_BOX_SMOKE_LOG="$LEISAAC_BASE/results/leisaac/red-cube-to-box-env-smoke.log"
 
+cd "$OPENPI_ROOT"
+mkdir -p "$LEISAAC_BASE/results/leisaac"
 timeout --signal=KILL 120s \
   "$LEISAAC_ENV/bin/python" \
   examples/so101/red_cube_to_box_env_smoke.py \
@@ -82,8 +95,18 @@ The environment smoke checks geometry and the success predicate, but teleportati
 the floor dynamically catches the cube. Run the independent drop test before tuning the robot expert:
 
 ```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_ROOT=/home/data/xiaoqinchuan/projects/leisaac
+export LEISAAC_ENV=/home/data/xiaoqinchuan/envs/leisaac-so101
+export LEISAAC_ASSETS_ROOT=/home/data/xiaoqinchuan/assets/leisaac-v0.4.0
+export ISAACSIM_PORTABLE_ROOT=/home/data/xiaoqinchuan/cache/isaacsim-portable
+export OMNI_KIT_ACCEPT_EULA=YES
+export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
 export RED_CUBE_TO_BOX_DROP_LOG="$LEISAAC_BASE/results/leisaac/red-cube-to-box-drop-smoke.log"
 
+cd "$OPENPI_ROOT"
+mkdir -p "$LEISAAC_BASE/results/leisaac"
 timeout --signal=KILL 180s \
   "$LEISAAC_ENV/bin/python" \
   examples/so101/red_cube_to_box_drop_smoke.py \
@@ -129,8 +152,18 @@ the rate-limited Cartesian P outer loop transports the cube. Leader control uses
 direct joint-position values.
 
 ```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_ROOT=/home/data/xiaoqinchuan/projects/leisaac
+export LEISAAC_ENV=/home/data/xiaoqinchuan/envs/leisaac-so101
+export LEISAAC_ASSETS_ROOT=/home/data/xiaoqinchuan/assets/leisaac-v0.4.0
+export ISAACSIM_PORTABLE_ROOT=/home/data/xiaoqinchuan/cache/isaacsim-portable
+export OMNI_KIT_ACCEPT_EULA=YES
+export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
 export RED_CUBE_TO_BOX_EXPERT_LOG="$LEISAAC_BASE/results/leisaac/red-cube-to-box-expert-smoke.log"
 
+cd "$OPENPI_ROOT"
+mkdir -p "$LEISAAC_BASE/results/leisaac"
 timeout --signal=KILL 240s \
   "$LEISAAC_ENV/bin/python" \
   examples/so101/red_cube_to_box_expert_smoke.py \
@@ -217,8 +250,18 @@ Isaac process and require the scripted expert to succeed across those existing d
 place control offset is separate from the grasp offset so the held cube is released above the tray center.
 
 ```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_ROOT=/home/data/xiaoqinchuan/projects/leisaac
+export LEISAAC_ENV=/home/data/xiaoqinchuan/envs/leisaac-so101
+export LEISAAC_ASSETS_ROOT=/home/data/xiaoqinchuan/assets/leisaac-v0.4.0
+export ISAACSIM_PORTABLE_ROOT=/home/data/xiaoqinchuan/cache/isaacsim-portable
+export OMNI_KIT_ACCEPT_EULA=YES
+export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
 export RED_CUBE_TO_BOX_BATCH_LOG="$LEISAAC_BASE/results/leisaac/red-cube-to-box-expert-batch.log"
 
+cd "$OPENPI_ROOT"
+mkdir -p "$LEISAAC_BASE/results/leisaac"
 timeout --signal=KILL 900s \
   "$LEISAAC_ENV/bin/python" \
   examples/so101/red_cube_to_box_expert_batch.py \
@@ -278,6 +321,11 @@ First run the non-writing preflight. Set `--fps` to the actual web teleoperation
 used 60 Hz:
 
 ```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_HDF5_FILE="$LEISAAC_BASE/datasets/leisaac/so101_liftcube_smoke_20260808-123945.hdf5"
+
+cd "$OPENPI_ROOT"
 uv run examples/so101/convert_leisaac_hdf5_to_lerobot.py \
   --input-path "$LEISAAC_HDF5_FILE" \
   --fps 60 \
@@ -288,6 +336,11 @@ After the preflight ranges have been reviewed, create a local LeRobot dataset. T
 overwrite an existing repository ID and does not upload anything unless `--push-to-hub` is explicitly passed:
 
 ```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_HDF5_FILE="$LEISAAC_BASE/datasets/leisaac/so101_liftcube_smoke_20260808-123945.hdf5"
+
+cd "$OPENPI_ROOT"
 uv run examples/so101/convert_leisaac_hdf5_to_lerobot.py \
   --input-path "$LEISAAC_HDF5_FILE" \
   --repo-id local/leisaac-so101-liftcube-smoke-20260808 \
@@ -305,8 +358,11 @@ Both SO-101 configs read the dataset ID from `OPENPI_SO101_LIFTCUBE_REPO_ID`. Th
 local smoke dataset. Override it when using a larger local dataset or a Hugging Face dataset:
 
 ```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
 export HF_LEROBOT_HOME=/home/data/xiaoqinchuan/datasets/lerobot
 export OPENPI_SO101_LIFTCUBE_REPO_ID=local/leisaac-so101-liftcube-smoke-20260808
+
+cd "$OPENPI_ROOT"
 ```
 
 The environment variable is read when the config module starts, so export it before each `uv run` command.
@@ -323,6 +379,11 @@ Two configs are available:
 Run these commands in the OpenPI environment, not in the LeIsaac/Isaac Sim environment:
 
 ```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export HF_LEROBOT_HOME=/home/data/xiaoqinchuan/datasets/lerobot
+export OPENPI_SO101_LIFTCUBE_REPO_ID=local/leisaac-so101-liftcube-smoke-20260808
+
+cd "$OPENPI_ROOT"
 uv run scripts/compute_norm_stats.py --config-name pi05_lora_so101_liftcube
 
 CUDA_VISIBLE_DEVICES=5,6 \
@@ -348,6 +409,11 @@ The example uses port 18000. Any free port may be used as long as
 the server and LeIsaac client use the same value.
 
 ```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export HF_LEROBOT_HOME=/home/data/xiaoqinchuan/datasets/lerobot
+export OPENPI_SO101_LIFTCUBE_REPO_ID=local/leisaac-so101-liftcube-smoke-20260808
+
+cd "$OPENPI_ROOT"
 uv run scripts/serve_policy.py policy:checkpoint \
   --policy.config=pi05_lora_so101_liftcube \
   --policy.dir=checkpoints/pi05_lora_so101_liftcube/liftcube_lora/30000 \
