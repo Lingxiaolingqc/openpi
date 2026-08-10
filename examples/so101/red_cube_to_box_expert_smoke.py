@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime
+import json
 import os
 from pathlib import Path
 import sys
@@ -29,12 +31,146 @@ def _build_parser() -> argparse.ArgumentParser:
         default="legacy",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--record_dir",
+        default=os.environ.get("RED_CUBE_TO_BOX_RECORD_DIR"),
+        help="Optional root directory for sampled front-camera JPEGs, trace JSONL, and an offline HTML viewer.",
+    )
+    parser.add_argument("--record_every", type=int, default=4, help="Record one frame every N control steps.")
+    parser.add_argument("--record_fps", type=float, default=15.0, help="Playback rate used by the HTML viewer.")
+    parser.add_argument("--jpeg_quality", type=int, default=85)
     AppLauncher.add_app_launcher_args(parser)
     return parser
 
 
 def _rounded_row(values, digits: int = 5) -> tuple[float, ...]:
     return tuple(round(float(value), digits) for value in values.detach().cpu().tolist())
+
+
+class _DiagnosticRecorder:
+    """Stream sampled camera frames and state into a copyable run directory."""
+
+    def __init__(
+        self,
+        root: Path,
+        expert: str,
+        seed: int,
+        record_every: int,
+        playback_fps: float,
+        jpeg_quality: int,
+        image_class,
+    ) -> None:
+        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        self.run_dir = root / f"{expert}-seed{seed}-{timestamp}-pid{os.getpid()}"
+        self.frames_dir = self.run_dir / "frames"
+        self.frames_dir.mkdir(parents=True, exist_ok=False)
+        self.trace_path = self.run_dir / "trace.jsonl"
+        self.result_path = self.run_dir / "result.json"
+        self.viewer_path = self.run_dir / "index.html"
+        self._record_every = record_every
+        self._playback_fps = playback_fps
+        self._jpeg_quality = jpeg_quality
+        self._image_class = image_class
+        self._frames: list[dict[str, object]] = []
+        self._last_recorded_step: int | None = None
+        self._finished = False
+
+    def capture(self, step: int, phase: str, observations: dict, env, *, force: bool = False) -> None:
+        if not force and step % self._record_every != 0:
+            return
+        if self._last_recorded_step == step:
+            return
+
+        front = observations["policy"]["front"]
+        if front.ndim != 4 or front.shape[0] != 1 or front.shape[-1] != 3:
+            raise RuntimeError(f"Unexpected recorder front camera shape: {tuple(front.shape)}")
+
+        relative_path = Path("frames") / f"frame_{len(self._frames):06d}.jpg"
+        image = front[0].detach().cpu().numpy()
+        self._image_class.fromarray(image).save(
+            self.run_dir / relative_path,
+            format="JPEG",
+            quality=self._jpeg_quality,
+        )
+
+        robot = env.scene["robot"]
+        cube = env.scene["cube"]
+        floor = env.scene["target_box_floor"]
+        ee_frame = env.scene["ee_frame"]
+        record = {
+            "frame": relative_path.as_posix(),
+            "step": step,
+            "phase": phase,
+            "joint_pos_rad": _rounded_row(robot.data.joint_pos[0]),
+            "gripper_pos_w": _rounded_row(ee_frame.data.target_pos_w[0, 0]),
+            "jaw_detection_pos_w": _rounded_row(ee_frame.data.target_pos_w[0, 1]),
+            "cube_pos_w": _rounded_row(cube.data.root_pos_w[0]),
+            "cube_offset_from_box": _rounded_row(cube.data.root_pos_w[0] - floor.data.root_pos_w[0]),
+            "pick_cube": bool(observations["subtask_terms"]["pick_cube"][0].item()),
+        }
+        with self.trace_path.open("a", encoding="utf-8") as trace_file:
+            trace_file.write(json.dumps(record) + "\n")
+        self._frames.append(record)
+        self._last_recorded_step = step
+        self._write_viewer()
+
+    def finish(self, result: dict[str, object]) -> None:
+        if self._finished:
+            return
+        self.result_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        self._write_viewer(result)
+        self._finished = True
+
+    def _write_viewer(self, result: dict[str, object] | None = None) -> None:
+        frames_json = json.dumps(self._frames)
+        result_json = json.dumps(result or {"status": "running"})
+        interval_ms = max(round(1000.0 / self._playback_fps), 1)
+        self.viewer_path.write_text(
+            f"""<!doctype html>
+<meta charset="utf-8">
+<title>RedCubeToBox expert diagnostic</title>
+<style>
+body {{ background:#111; color:#eee; font:16px system-ui; margin:24px; }}
+img {{ display:block; max-width:100%; border:1px solid #555; margin:12px 0; }}
+button,input {{ margin-right:8px; }} pre {{ white-space:pre-wrap; }}
+</style>
+<h1>RedCubeToBox expert diagnostic</h1>
+<pre id="result"></pre>
+<img id="frame" alt="recorded front camera frame">
+<button id="play">Play</button><button id="pause">Pause</button>
+<input id="slider" type="range" min="0" max="0" value="0">
+<pre id="state"></pre>
+<script>
+const frames = {frames_json};
+const result = {result_json};
+const intervalMs = {interval_ms};
+let index = 0;
+let timer = null;
+const image = document.getElementById('frame');
+const slider = document.getElementById('slider');
+const state = document.getElementById('state');
+document.getElementById('result').textContent = JSON.stringify(result, null, 2);
+slider.max = Math.max(frames.length - 1, 0);
+function show(next) {{
+  if (!frames.length) return;
+  index = Math.max(0, Math.min(next, frames.length - 1));
+  slider.value = index;
+  image.src = frames[index].frame;
+  state.textContent = JSON.stringify(frames[index], null, 2);
+}}
+function play() {{
+  if (timer || !frames.length) return;
+  timer = setInterval(() => show((index + 1) % frames.length), intervalMs);
+}}
+function pause() {{ clearInterval(timer); timer = null; }}
+document.getElementById('play').onclick = play;
+document.getElementById('pause').onclick = pause;
+slider.oninput = () => show(Number(slider.value));
+show(0);
+</script>
+""",
+            encoding="utf-8",
+        )
 
 
 def main() -> int:
@@ -47,11 +183,18 @@ def main() -> int:
         parser.error("The environment requires --enable_cameras")
     if not args.assets_root:
         parser.error("Set LEISAAC_ASSETS_ROOT or pass --assets_root")
+    if args.record_every <= 0:
+        parser.error("--record_every must be positive")
+    if args.record_fps <= 0:
+        parser.error("--record_fps must be positive")
+    if not 1 <= args.jpeg_quality <= 95:
+        parser.error("--jpeg_quality must be between 1 and 95")
 
     assets_root = Path(args.assets_root).expanduser().resolve()
     if not assets_root.is_dir():
         parser.error(f"Assets root does not exist: {assets_root}")
     os.environ["LEISAAC_ASSETS_ROOT"] = str(assets_root)
+    record_root = Path(args.record_dir).expanduser().resolve() if args.record_dir else None
 
     print("RED_CUBE_TO_BOX_EXPERT_PHASE=before_launcher", flush=True)
     print(f"assets_root: {assets_root}", flush=True)
@@ -63,6 +206,7 @@ def main() -> int:
     # Isaac Sim must be launched before importing the remaining simulation modules.
     # isort: off
     import gymnasium as gym
+    from PIL import Image
     import torch
     from isaaclab_tasks.utils import parse_env_cfg
     import leisaac.tasks  # noqa: F401
@@ -88,6 +232,8 @@ def main() -> int:
     # isort: on
 
     status = 1
+    completed_steps = 0
+    recorder = None
     try:
         task_id = red_cube_to_box_task.TASK_ID
         print("RED_CUBE_TO_BOX_EXPERT_PHASE=app_ready", flush=True)
@@ -146,6 +292,18 @@ def main() -> int:
         state_machine.reset()
         print(f"servo_parameters: {getattr(state_machine, 'servo_parameters', 'not_applicable')}", flush=True)
 
+        if record_root is not None:
+            recorder = _DiagnosticRecorder(
+                root=record_root,
+                expert=args.expert,
+                seed=args.seed,
+                record_every=args.record_every,
+                playback_fps=args.record_fps,
+                jpeg_quality=args.jpeg_quality,
+                image_class=Image,
+            )
+            print(f"diagnostic_record_dir: {recorder.run_dir}", flush=True)
+
         cube = env.scene["cube"]
         floor = env.scene["target_box_floor"]
         robot = env.scene["robot"]
@@ -158,11 +316,12 @@ def main() -> int:
         print(f"cube_initial_pos_w: {_rounded_row(cube.data.root_pos_w[0])}", flush=True)
         print(f"target_box_floor_pos_w: {_rounded_row(floor.data.root_pos_w[0])}", flush=True)
 
-        completed_steps = 0
         all_rewards_finite = True
         unexpected_reset = False
         previous_phase = None
         previous_pick_cube = bool(observations["subtask_terms"]["pick_cube"][0].item())
+        if recorder is not None:
+            recorder.capture(0, state_machine.phase_name, observations, env, force=True)
 
         with torch.inference_mode():
             while not state_machine.is_episode_done:
@@ -297,6 +456,8 @@ def main() -> int:
                 previous_pick_cube = pick_cube_after
                 state_machine.advance()
                 completed_steps += 1
+                if recorder is not None:
+                    recorder.capture(completed_steps, phase, observations, env)
 
         success = state_machine.check_success(env)
         cube_offset = cube.data.root_pos_w - floor.data.root_pos_w
@@ -325,16 +486,33 @@ def main() -> int:
         print(f"servo_abort_reason: {servo_abort_reason}", flush=True)
         print(f"expert_success: {success}", flush=True)
 
+        failure_message = None
         if not all_rewards_finite:
-            raise RuntimeError("A non-finite reward was observed")
-        if unexpected_reset:
-            raise RuntimeError("The environment reset before the expert episode completed")
-        if servo_abort_reason is not None:
-            raise RuntimeError(f"The servo expert aborted: {servo_abort_reason}")
-        if servo_timeout_phase is not None:
-            raise RuntimeError(f"The servo expert timed out in phase: {servo_timeout_phase}")
-        if not success:
-            raise RuntimeError("The scripted expert did not place a settled cube inside the target box")
+            failure_message = "A non-finite reward was observed"
+        elif unexpected_reset:
+            failure_message = "The environment reset before the expert episode completed"
+        elif servo_abort_reason is not None:
+            failure_message = f"The servo expert aborted: {servo_abort_reason}"
+        elif servo_timeout_phase is not None:
+            failure_message = f"The servo expert timed out in phase: {servo_timeout_phase}"
+        elif not success:
+            failure_message = "The scripted expert did not place a settled cube inside the target box"
+
+        if recorder is not None:
+            recorder.capture(completed_steps, state_machine.phase_name, observations, env, force=True)
+            recorder.finish(
+                {
+                    "status": "failed" if failure_message else "passed",
+                    "expert": args.expert,
+                    "seed": args.seed,
+                    "completed_steps": completed_steps,
+                    "expert_success": success,
+                    "failure_message": failure_message,
+                }
+            )
+
+        if failure_message is not None:
+            raise RuntimeError(failure_message)
 
         print("RED_CUBE_TO_BOX_EXPERT_SMOKE_OK", flush=True)
         status = 0
@@ -342,6 +520,20 @@ def main() -> int:
         traceback.print_exc()
         print("RED_CUBE_TO_BOX_EXPERT_SMOKE_FAILED", flush=True)
     finally:
+        if recorder is not None:
+            try:
+                recorder.finish(
+                    {
+                        "status": "passed" if status == 0 else "failed",
+                        "expert": args.expert,
+                        "seed": args.seed,
+                        "completed_steps": completed_steps,
+                    }
+                )
+                print(f"diagnostic_record_saved: {recorder.run_dir}", flush=True)
+            except Exception:
+                traceback.print_exc()
+                print(f"diagnostic_record_finalize_failed: {recorder.run_dir}", flush=True)
         print("RED_CUBE_TO_BOX_EXPERT_PHASE=immediate_close", flush=True)
         simulation_app.close(skip_cleanup=True)
 

@@ -161,6 +161,7 @@ export ISAACSIM_PORTABLE_ROOT=/home/data/xiaoqinchuan/cache/isaacsim-portable
 export OMNI_KIT_ACCEPT_EULA=YES
 export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
 export RED_CUBE_TO_BOX_EXPERT_LOG="$LEISAAC_BASE/results/leisaac/red-cube-to-box-expert-smoke.log"
+export RED_CUBE_TO_BOX_RECORD_DIR="$LEISAAC_BASE/results/leisaac/red-cube-to-box-expert-recordings"
 
 cd "$OPENPI_ROOT"
 mkdir -p "$LEISAAC_BASE/results/leisaac"
@@ -173,6 +174,9 @@ timeout --signal=KILL 240s \
   --assets_root "$LEISAAC_ASSETS_ROOT" \
   --expert servo \
   --seed 42 \
+  --record_dir "$RED_CUBE_TO_BOX_RECORD_DIR" \
+  --record_every 4 \
+  --record_fps 15 \
   2>&1 | tee "$RED_CUBE_TO_BOX_EXPERT_LOG"
 
 expert_status=${PIPESTATUS[0]}
@@ -187,13 +191,25 @@ fi
 echo "red_cube_to_box_expert_semantic_exit=$expert_semantic_status"
 
 grep -nE \
-  'RED_CUBE_TO_BOX|expert_variant|expert_orientation_policy|expert_ik_action_class|expert_ik_runtime_mode|servo_parameters|expert_phase|expert_state|expert_feedback|expert_tracking|expert_servo|expert_grasp_event|expert_abort_before_step|task_id|device_id|simulation_device|action_space|cube_|target_box|completed_steps|rewards_finite|unexpected_reset|grasp_confirmed|grasp_lost_before_release|box_aligned_before_release|servo_timeout_phase|servo_abort_reason|expert_success|Traceback|Error|RuntimeError' \
+  'RED_CUBE_TO_BOX|expert_variant|expert_orientation_policy|expert_ik_action_class|expert_ik_runtime_mode|servo_parameters|diagnostic_record|expert_phase|expert_state|expert_feedback|expert_tracking|expert_servo|expert_grasp_event|expert_abort_before_step|task_id|device_id|simulation_device|action_space|cube_|target_box|completed_steps|rewards_finite|unexpected_reset|grasp_confirmed|grasp_lost_before_release|box_aligned_before_release|servo_timeout_phase|servo_abort_reason|expert_success|Traceback|Error|RuntimeError' \
   "$RED_CUBE_TO_BOX_EXPERT_LOG" |
 tail -n 220
 ```
 
 Use `expert_semantic_status` as the authoritative result. Some Isaac Sim fast/skip-cleanup shutdown paths end
 the host process with status zero even after the Python diagnostic has printed its failure sentinel.
+
+When `--record_dir` is set, each smoke creates a unique `<expert>-seed<seed>-<timestamp>-pid<pid>` directory.
+It contains sampled JPEG frames, `trace.jsonl`, `result.json`, and an offline `index.html` player. Recording one
+frame every four 60 Hz control steps produces a 15 FPS diagnostic without requiring FFmpeg in the Isaac
+environment. Frames are written incrementally, so already-written evidence remains readable if a later step
+fails. Copy one run to Windows and open `index.html` locally:
+
+```powershell
+scp -r `
+  xiaoqinchuan@10.120.16.48:/home/data/xiaoqinchuan/results/leisaac/red-cube-to-box-expert-recordings/<run-directory> `
+  D:\Documents\Xprogram\HuiXIONG\EmbodiedAI\red-cube-failures\
+```
 
 The initial expert has `1100` control steps. A successful dynamic episode reports every phase, finite rewards,
 no unexpected reset, `expert_success: True`, and `RED_CUBE_TO_BOX_EXPERT_SMOKE_OK`. If it fails, the final cube
