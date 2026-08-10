@@ -191,7 +191,7 @@ fi
 echo "red_cube_to_box_expert_semantic_exit=$expert_semantic_status"
 
 grep -nE \
-  'RED_CUBE_TO_BOX|expert_variant|expert_orientation_policy|expert_ik_action_class|expert_ik_runtime_mode|servo_parameters|diagnostic_record|expert_phase|expert_state|expert_feedback|expert_tracking|expert_servo|expert_grasp_event|expert_abort_before_step|task_id|device_id|simulation_device|action_space|cube_|target_box|completed_steps|rewards_finite|unexpected_reset|grasp_confirmed|grasp_lost_before_release|box_aligned_before_release|servo_timeout_phase|servo_abort_reason|expert_success|Traceback|Error|RuntimeError' \
+  'RED_CUBE_TO_BOX|expert_variant|expert_orientation_policy|expert_ik_action_class|expert_ik_runtime_mode|servo_parameters|diagnostic_record|expert_phase|expert_state|expert_feedback|expert_jaw_anchor|expert_tracking|expert_servo|expert_grasp_event|expert_abort_before_step|task_id|device_id|simulation_device|action_space|cube_|target_box|completed_steps|rewards_finite|unexpected_reset|grasp_confirmed|grasp_lost_before_release|box_aligned_before_release|servo_timeout_phase|servo_abort_reason|expert_success|Traceback|Error|RuntimeError' \
   "$RED_CUBE_TO_BOX_EXPERT_LOG" |
 tail -n 220
 ```
