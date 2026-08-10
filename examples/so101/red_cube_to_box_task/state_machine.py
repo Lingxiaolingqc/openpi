@@ -14,8 +14,15 @@ from .env_cfg import TARGET_BOX_FLOOR_THICKNESS
 
 _GRIPPER_OPEN = 1.0
 _GRIPPER_CLOSE = -1.0
+# Empirical compensation for the fixed-world-orientation IK command. The
+# original (-0.03, -0.01, +0.10) grasp target left the closed jaw 27.57 mm
+# from the cube. Shifting X/Y by +10 mm and lowering Z by 20 mm reduced the
+# measured distance to 4.12 mm and produced a verified grasp.
 _PICK_XY_OFFSET = (-0.02, 0.0)
 _PICK_GRASP_HEIGHT = 0.08
+# The first successful held-cube release was (+0.06379, -0.00286) m from the
+# floor center. Applying its negative to the former (-0.02, 0.0) place offset
+# gives (-0.08379, +0.00286), rounded here to millimeters.
 _PLACE_XY_OFFSET = (-0.084, 0.003)
 
 
@@ -140,7 +147,7 @@ class RedCubeToBoxStateMachine(StateMachineBase):
     def _initialize_anchors(self, env) -> None:
         if self._initial_ee_pos is not None:
             return
-        self._initial_ee_pos = env.scene["robot"].data.body_pos_w[:, -1, :].clone()
+        self._initial_ee_pos = env.scene["ee_frame"].data.target_pos_w[:, 0, :].clone()
         self._cube_anchor = env.scene["cube"].data.root_pos_w.clone()
         self._floor_anchor = env.scene["target_box_floor"].data.root_pos_w.clone()
 

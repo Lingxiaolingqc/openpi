@@ -233,7 +233,7 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
     def _initialize_anchors(self, env) -> None:
         if self._initial_gripper_pos is not None:
             return
-        self._initial_gripper_pos = env.scene["robot"].data.body_pos_w[:, -2, :].clone()
+        self._initial_gripper_pos = env.scene["ee_frame"].data.target_pos_w[:, 0, :].clone()
         self._cube_anchor = env.scene["cube"].data.root_pos_w.clone()
         self._floor_anchor = env.scene["target_box_floor"].data.root_pos_w.clone()
 
@@ -277,7 +277,8 @@ class RedCubeToBoxAdaptiveStateMachine(StateMachineBase):
         jaw_pos_w: torch.Tensor,
     ) -> None:
         jaw_distance = torch.linalg.vector_norm(jaw_pos_w - cube_pos_w, dim=-1)
-        gripper_closed = robot.data.joint_pos[:, -1] < _GRIPPER_POSITION_THRESHOLD
+        gripper_joint_index = robot.data.joint_names.index("gripper")
+        gripper_closed = robot.data.joint_pos[:, gripper_joint_index] < _GRIPPER_POSITION_THRESHOLD
         grasped = bool(torch.logical_and(jaw_distance < _GRASP_DISTANCE_THRESHOLD, gripper_closed).all().item())
         if grasped:
             self._grasp_confirmed = True
