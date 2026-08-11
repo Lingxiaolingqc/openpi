@@ -491,19 +491,14 @@ tail -n 520
 
 The independent `autogen_reference` expert ports the bundled
 `autogen/so101-autogen-main/src/state_machine` implementation as a reference baseline. It does not inherit the
-legacy, adaptive, servo, or earlier Autogen-derived experts. The original state order and numerical constants are
-kept around one added safety phase: approach, **pregrasp align**, descend, grasp, grasp settle, lift, radial retreat,
-transport, release, and return home; the original
+legacy, adaptive, servo, or earlier Autogen-derived experts. Its active state order is approach, descend, grasp,
+grasp settle, lift, radial retreat, transport, release, and return home; the original
 Cartesian step sizes, phase limits, green-ray geometry, gripper timing/range, and effective release height are also
 preserved.
 
 Only framework adapters are changed. World targets are expressed in the robot-root frame expected by the source
-implementation. At the safe approach height, the five arm DoFs solve exactly five rows: wrist XYZ plus named
-`wrist_flex` and `wrist_roll` joint targets. `wrist_flex` makes gripper local `-Z` point down; `wrist_roll` makes the
-local `+X` closing direction parallel to the nearest of the square cube's local X/Y edge axes. Tilt must remain within
-5 degrees and the square-symmetric edge error within 7.5 degrees for 10 consecutive steps. Those two joint targets are
-then frozen through descent, closing, settle, and lift, preventing the approach orientation from drifting while the
-fingers contact the cube. Because the bundled URDF's `gripper_frame_link` local axes do
+implementation; the second-back port's XYZ wrist IK plus continuously recomputed `wrist_flex` correction is restored
+through the existing phase-aware Isaac Lab action term. Because the bundled URDF's `gripper_frame_link` local axes do
 not match the current USD detection-frame axes, this experimental grasp trigger starts at the live wrist body and
 points along `ee_frame.target[0] - wrist` toward and beyond the gripper frame, then evaluates that half-infinite ray
 against the live cube OBB; and the binary
@@ -558,7 +553,7 @@ fi
 echo "autogen_reference_semantic_exit=$autogen_reference_semantic_status"
 
 grep -nE \
-  'expert_variant|servo_parameters|expert_phase|expert_state|expert_autogen_reference|expert_ik_runtime_mode|expert_grasp_event|expert_abort|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
+  'expert_variant|servo_parameters|expert_phase|expert_state|expert_autogen_reference|expert_temp_jaw_angle_captured|expert_ik_runtime_mode|expert_grasp_event|expert_abort|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
   "$AUTOGEN_REFERENCE_LOG" |
 tail -n 520
 ```
@@ -567,7 +562,7 @@ The authoritative result is `autogen_reference_semantic_exit`, not only the tran
 `expert_autogen_reference` records expose the active gripper-local ray, wrist-to-gripper and wrist-to-jaw diagnostic lengths, and nearest hit
 distance, the cube's projection onto and shortest distance from that ray, the gripper and jaw detection
 frames, wrist/gripper/jaw height above the cube, robot-base command, actual wrist world position, descent XY tracking
-error, gripper command, and retreat/transport targets so that a failure can be compared directly with the source
+error, gripper command, captured temporary jaw angle, and retreat/transport targets so that a failure can be compared directly with the source
 state-machine assumptions. The jaw detection frame (`ee_frame.target[1]`) is diagnostic only: it is not used to
 construct/range-gate the open-gripper ray or to confirm a grasp. Grasp settle is feedback-gated: after at least 21
 steps, the real gripper must be below 0.01 rad/s and either track its target within 0.03 rad or be at least halfway
@@ -575,6 +570,11 @@ closed for eight consecutive steps. Merely crossing the target-error band while 
 It times out after 180 steps instead of beginning lift with a still-moving
 gripper. Lift confirmation is first evaluated after 30 actual lift steps and then requires the cube to be at least
 5 mm above its per-episode initial height; it no longer uses the incompatible fixed `gripper < 0.26 rad` threshold.
+The smoke and batch runners feed the environment's actual `subtask_terms.pick_cube` observation back to this expert.
+At its first `True`, the controller stores the measured gripper joint angle as `temp_jaw_angle_rad`, replaces the
+remaining close target with that value, and holds exactly that command through lift, retreat, and transport. It only
+releases the hold when entering the normal `release` phase. This avoids continuing to squeeze or reopen after the
+environment has already confirmed a grasp.
 
 The diagnostic recording renders the selected ray and all six gripper-frame axes as USD sphere markers in headless RTX
 video. The long selected ray is yellow while missing and green while intersecting the cube OBB. The six short axes are
@@ -601,9 +601,9 @@ applied XY correction, and alignment streak. This distinguishes "the infinite ra
 cube is centered and physically close enough to the gripper to start closing."
 
 This comparison intentionally combines the posture-correction behavior from commit `c1295cb` with the experimental
-wrist-origin/gripper-direction ray. It therefore does not claim to be a bit-for-bit reproduction of the bundled source; the log's
-`expert_ik_runtime_mode`, `posture_target_rad`, `wrist_roll_target_rad`, `pregrasp_tilt_error_rad`, and
-`pregrasp_edge_error_rad` fields make that experimental difference explicit.
+wrist-origin/gripper-direction ray. It therefore does not claim to be a bit-for-bit reproduction of the bundled source;
+the log's `expert_ik_runtime_mode`, `posture_target_rad`, `temp_jaw_angle_rad`, and
+`expert_temp_jaw_angle_captured` fields make that experimental difference explicit.
 
 The third implementation, `red_cube_to_box_task/servo_state_machine.py`, inherits the adaptive grasp, retry,
 and gradual lift logic but does not replace either comparison expert. Its companion

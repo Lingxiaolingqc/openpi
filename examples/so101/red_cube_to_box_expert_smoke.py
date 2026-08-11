@@ -698,13 +698,8 @@ def main() -> int:
                         f"{None if state_machine.jaw_height_above_cube is None else _rounded_row(state_machine.jaw_height_above_cube, digits=7)}:"
                         f"posture_target_rad="
                         f"{None if state_machine.posture_target is None else _rounded_row(state_machine.posture_target, digits=7)}:"
-                        f"wrist_roll_target_rad="
-                        f"{None if state_machine.wrist_roll_target is None else _rounded_row(state_machine.wrist_roll_target, digits=7)}:"
-                        f"pregrasp_tilt_error_rad="
-                        f"{None if state_machine.pregrasp_tilt_error is None else _rounded_row(state_machine.pregrasp_tilt_error, digits=7)}:"
-                        f"pregrasp_edge_error_rad="
-                        f"{None if state_machine.pregrasp_edge_error is None else _rounded_row(state_machine.pregrasp_edge_error, digits=7)}:"
-                        f"pregrasp_alignment_streak={state_machine.pregrasp_alignment_streak}:"
+                        f"temp_jaw_angle_rad={state_machine.held_gripper_angle}:"
+                        f"temp_jaw_capture_step={state_machine.held_gripper_angle_capture_step}:"
                         f"wrist_position_w="
                         f"{None if state_machine.wrist_position_w is None else _rounded_row(state_machine.wrist_position_w[0], digits=7)}:"
                         f"descent_wrist_xy_error="
@@ -1114,6 +1109,14 @@ def main() -> int:
                 all_rewards_finite = all_rewards_finite and bool(torch.isfinite(step_result[1]).all())
                 unexpected_reset = unexpected_reset or bool(step_result[2].any()) or bool(step_result[3].any())
                 pick_cube_after = bool(observations["subtask_terms"]["pick_cube"][0].item())
+                observe_pick_cube = getattr(state_machine, "observe_pick_cube", None)
+                if callable(observe_pick_cube) and observe_pick_cube(pick_cube_after, env):
+                    print(
+                        f"expert_temp_jaw_angle_captured:phase={state_machine.phase_name}:"
+                        f"control_step={completed_steps + 1}:"
+                        f"angle_rad={state_machine.held_gripper_angle:.7f}",
+                        flush=True,
+                    )
                 if previous_pick_cube and not pick_cube_after:
                     print(
                         f"expert_grasp_event:lost:phase={phase}:"

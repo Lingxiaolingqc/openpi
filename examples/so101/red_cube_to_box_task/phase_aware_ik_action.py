@@ -30,9 +30,6 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._xyz_joint_nullspace_name: str | None = None
         self._xyz_joint_nullspace_index: int | None = None
         self._xyz_joint_nullspace_target: torch.Tensor | None = None
-        self._xyz_two_joint_names: tuple[str, str] = ()
-        self._xyz_two_joint_indices: tuple[int, int] = ()
-        self._xyz_two_joint_targets: torch.Tensor | None = None
         self._xyz_joint_nullspace_damping = 0.05
         self._xyz_joint_nullspace_posture_gain = 0.08
         self._xyz_joint_nullspace_max_step = 0.03
@@ -59,7 +56,6 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._xyz_tilt = False
         self._clear_xyz_pitch_joint_target()
         self._clear_xyz_joint_nullspace_target()
-        self._clear_xyz_two_joint_targets()
         self._clear_solver_diagnostics()
         self._joint_target_slew_reference = None
         self._weighted_position_penalties = None
@@ -74,7 +70,6 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._xyz_tilt = False
         self._clear_xyz_pitch_joint_target()
         self._clear_xyz_joint_nullspace_target()
-        self._clear_xyz_two_joint_targets()
         self._orientation_weight = 0.0 if enabled else 1.0
         self._weighted_position_penalties = None
         self._weighted_position_damping = None
@@ -90,7 +85,6 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._xyz_tilt = False
         self._clear_xyz_pitch_joint_target()
         self._clear_xyz_joint_nullspace_target()
-        self._clear_xyz_two_joint_targets()
         self._orientation_weight = float(weight)
         self._weighted_position_penalties = None
         self._weighted_position_damping = None
@@ -104,7 +98,6 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._xyz_tilt = False
         self._clear_xyz_pitch_joint_target()
         self._clear_xyz_joint_nullspace_target()
-        self._clear_xyz_two_joint_targets()
         self._weighted_position_penalties = None
         self._weighted_position_damping = None
         self._weighted_joint_names = ()
@@ -119,7 +112,6 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._planar_pose = False
         self._clear_xyz_pitch_joint_target()
         self._clear_xyz_joint_nullspace_target()
-        self._clear_xyz_two_joint_targets()
         self._weighted_position_penalties = None
         self._weighted_position_damping = None
         self._weighted_joint_names = ()
@@ -155,7 +147,6 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._weighted_joint_names = ()
         self._last_weighted_delta_joint_pos = None
         self._clear_xyz_joint_nullspace_target()
-        self._clear_xyz_two_joint_targets()
         self._xyz_pitch_joint_name = joint_name
         self._xyz_pitch_joint_index = selected_joint_names.index(joint_name)
         self._xyz_pitch_joint_target = joint_target.detach().clone()
@@ -194,7 +185,6 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._xyz_tilt = False
         self._orientation_weight = 1.0
         self._clear_xyz_pitch_joint_target()
-        self._clear_xyz_two_joint_targets()
         self._weighted_position_penalties = None
         self._weighted_position_damping = None
         self._weighted_joint_names = ()
@@ -205,41 +195,6 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._xyz_joint_nullspace_damping = float(damping)
         self._xyz_joint_nullspace_posture_gain = float(posture_gain)
         self._xyz_joint_nullspace_max_step = float(max_posture_step)
-
-    def set_xyz_two_joint_targets(
-        self,
-        *,
-        joint_names: tuple[str, str],
-        joint_targets: torch.Tensor,
-    ) -> None:
-        """Solve XYZ plus two named joint rows for a square five-DoF task."""
-
-        expected_shape = (self._asset.data.joint_pos.shape[0], 2)
-        if joint_targets.shape != expected_shape:
-            raise ValueError(f"joint_targets must have shape {expected_shape}; received {tuple(joint_targets.shape)}")
-        if joint_names[0] == joint_names[1]:
-            raise ValueError(f"joint_names must be distinct; received {joint_names}")
-        all_joint_names = self._asset.data.joint_names
-        if isinstance(self._joint_ids, slice):
-            selected_joint_names = list(all_joint_names[self._joint_ids])
-        else:
-            selected_joint_names = [all_joint_names[joint_id] for joint_id in self._joint_ids]
-        missing = [name for name in joint_names if name not in selected_joint_names]
-        if missing:
-            raise ValueError(f"Joints {missing} are not controlled by this IK action: {selected_joint_names}")
-
-        self._planar_pose = False
-        self._xyz_tilt = False
-        self._orientation_weight = 1.0
-        self._clear_xyz_pitch_joint_target()
-        self._clear_xyz_joint_nullspace_target()
-        self._weighted_position_penalties = None
-        self._weighted_position_damping = None
-        self._weighted_joint_names = ()
-        self._last_weighted_delta_joint_pos = None
-        self._xyz_two_joint_names = joint_names
-        self._xyz_two_joint_indices = tuple(selected_joint_names.index(name) for name in joint_names)
-        self._xyz_two_joint_targets = joint_targets.detach().clone()
 
     def set_control_frame_offset(self, *, position: torch.Tensor, orientation: torch.Tensor) -> None:
         """Update the configured gripper-relative virtual control frame."""
@@ -314,7 +269,6 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._xyz_tilt = False
         self._clear_xyz_pitch_joint_target()
         self._clear_xyz_joint_nullspace_target()
-        self._clear_xyz_two_joint_targets()
         self._orientation_weight = 0.0
         self._weighted_position_penalties = torch.tensor(
             penalties,
@@ -350,8 +304,6 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
             return f"xyz_pitch_joint(xyz+orientation_y+{self._xyz_pitch_joint_name})"
         if self._xyz_joint_nullspace_target is not None:
             return f"xyz_joint_nullspace(xyz+{self._xyz_joint_nullspace_name},joint_limit_avoidance)"
-        if self._xyz_two_joint_targets is not None:
-            return f"xyz_two_joint(xyz+{'+'.join(self._xyz_two_joint_names)})"
         if self._weighted_position_penalties is not None:
             return f"weighted_position_only(damping={self._weighted_position_damping:g})"
         if self._orientation_weight == 1.0:
@@ -366,7 +318,6 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
             and not self._xyz_tilt
             and self._xyz_pitch_joint_target is None
             and self._xyz_joint_nullspace_target is None
-            and self._xyz_two_joint_targets is None
             and self._orientation_weight == 1.0
         ):
             self._clear_solver_diagnostics()
@@ -437,19 +388,6 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
             joint_row[:, 0, self._xyz_joint_nullspace_index] = 1.0
             task_error = torch.cat((position_error, joint_error), dim=1)
             task_jacobian = torch.cat((jacobian[:, :3, :], joint_row), dim=1)
-        elif self._xyz_two_joint_targets is not None:
-            position_error = desired_pos - ee_pos_curr
-            joint_indices = list(self._xyz_two_joint_indices)
-            joint_error = self._xyz_two_joint_targets - joint_pos[:, joint_indices]
-            joint_rows = torch.zeros(
-                (jacobian.shape[0], 2, jacobian.shape[2]),
-                device=jacobian.device,
-                dtype=jacobian.dtype,
-            )
-            joint_rows[:, 0, joint_indices[0]] = 1.0
-            joint_rows[:, 1, joint_indices[1]] = 1.0
-            task_error = torch.cat((position_error, joint_error), dim=1)
-            task_jacobian = torch.cat((jacobian[:, :3, :], joint_rows), dim=1)
         elif self.position_only:
             task_error = desired_pos - ee_pos_curr
             task_jacobian = jacobian[:, :3, :]
@@ -534,7 +472,6 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         if (
             self._xyz_pitch_joint_target is not None
             or self._xyz_joint_nullspace_target is not None
-            or self._xyz_two_joint_targets is not None
         ):
             self._last_task_error = task_error.detach().clone()
             self._last_task_singular_values = torch.linalg.svdvals(task_jacobian).detach().clone()
@@ -562,7 +499,6 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         if (
             self._xyz_pitch_joint_target is not None
             or self._xyz_joint_nullspace_target is not None
-            or self._xyz_two_joint_targets is not None
         ):
             self._last_delta_joint_pos = delta_joint_pos.detach().clone()
 
@@ -635,11 +571,6 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._xyz_joint_nullspace_name = None
         self._xyz_joint_nullspace_index = None
         self._xyz_joint_nullspace_target = None
-
-    def _clear_xyz_two_joint_targets(self) -> None:
-        self._xyz_two_joint_names = ()
-        self._xyz_two_joint_indices = ()
-        self._xyz_two_joint_targets = None
 
     def _clear_solver_diagnostics(self) -> None:
         self._last_delta_joint_pos = None

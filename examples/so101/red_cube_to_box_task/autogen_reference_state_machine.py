@@ -75,10 +75,6 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     MAX_DESCENT_WRIST_XY_ERROR = 0.05
     APPROACH_TRACKING_TOLERANCE = 0.01
     APPROACH_SETTLE_TIMEOUT_STEPS = 120
-    PREGRASP_ALIGNMENT_TILT_TOLERANCE = math.radians(5.0)
-    PREGRASP_ALIGNMENT_EDGE_TOLERANCE = math.radians(7.5)
-    PREGRASP_ALIGNMENT_STABLE_STEPS = 10
-    PREGRASP_ALIGNMENT_TIMEOUT_STEPS = 300
     RAY_ALIGNMENT_KP = 0.2
     RAY_ALIGNMENT_MAX_XY_STEP = 0.001
     RAY_ALIGNMENT_XY_TOLERANCE = 0.008
@@ -177,11 +173,8 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self._gripper_joint_velocity: torch.Tensor | None = None
         self._initial_cube_z_w: torch.Tensor | None = None
         self._posture_target: torch.Tensor | None = None
-        self._wrist_roll_target: torch.Tensor | None = None
-        self._frozen_pregrasp_joint_targets: torch.Tensor | None = None
-        self._pregrasp_tilt_error: torch.Tensor | None = None
-        self._pregrasp_edge_error: torch.Tensor | None = None
-        self._pregrasp_alignment_streak = 0
+        self._held_gripper_angle: float | None = None
+        self._held_gripper_angle_capture_step: int | None = None
         self._wrist_position_w: torch.Tensor | None = None
         self._approach_tracking_error: torch.Tensor | None = None
         self._descent_wrist_xy_error: torch.Tensor | None = None
@@ -227,6 +220,8 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         robot = env.scene["robot"]
         wrist_quat_w = robot.data.body_quat_w[:, self._wrist_body_index]
         target_quat_b = quat_mul(quat_inv(robot.data.root_quat_w), wrist_quat_w)
+        if self._held_gripper_angle is not None and self._state not in {"release", "return_home", "success"}:
+            self._gripper_command = self._held_gripper_angle
         gripper = torch.full(
             (env.num_envs, 1),
             self._gripper_command,
@@ -234,6 +229,26 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             dtype=self._command_pos_b.dtype,
         )
         return torch.cat((self._command_pos_b, target_quat_b, gripper), dim=-1)
+
+    def observe_pick_cube(self, pick_cube: bool | torch.Tensor, env) -> bool:
+        """Latch the measured gripper angle on the first environment-confirmed pick."""
+
+        picked = bool(pick_cube.all().item()) if isinstance(pick_cube, torch.Tensor) else bool(pick_cube)
+        if not picked or self._held_gripper_angle is not None:
+            return False
+        if self._state in {"release", "return_home", "success", "failed"}:
+            return False
+
+        robot = env.scene["robot"]
+        gripper_joint_index = list(robot.data.joint_names).index("gripper")
+        measured_angle = robot.data.joint_pos[:, gripper_joint_index]
+        if measured_angle.numel() != 1:
+            raise RuntimeError("autogen_reference gripper-angle hold currently requires exactly one environment")
+        self._held_gripper_angle = float(measured_angle.item())
+        self._held_gripper_angle_capture_step = self._step_count
+        self._grasp_end_position = self._held_gripper_angle
+        self._gripper_command = self._held_gripper_angle
+        return True
 
     def advance(self) -> None:
         if self._episode_done:
@@ -272,29 +287,9 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
                     dim=-1,
                 ).detach()
                 if bool((self._approach_tracking_error <= self.APPROACH_TRACKING_TOLERANCE).all().item()):
-                    self._transition("pregrasp_align")
+                    self._transition("descend")
                 elif self._state_step > self._move_duration + self.APPROACH_SETTLE_TIMEOUT_STEPS:
                     self._fail("actual wrist did not settle at the Autogen approach target")
-        elif self._state == "pregrasp_align":
-            self._update_pregrasp_alignment_errors(env)
-            assert self._pregrasp_tilt_error is not None
-            assert self._pregrasp_edge_error is not None
-            aligned = (self._pregrasp_tilt_error <= self.PREGRASP_ALIGNMENT_TILT_TOLERANCE) & (
-                self._pregrasp_edge_error <= self.PREGRASP_ALIGNMENT_EDGE_TOLERANCE
-            )
-            if bool(aligned.all().item()):
-                self._pregrasp_alignment_streak += 1
-            else:
-                self._pregrasp_alignment_streak = 0
-            if self._pregrasp_alignment_streak >= self.PREGRASP_ALIGNMENT_STABLE_STEPS:
-                assert self._posture_target is not None
-                assert self._wrist_roll_target is not None
-                self._frozen_pregrasp_joint_targets = torch.stack(
-                    (self._posture_target, self._wrist_roll_target), dim=-1
-                ).detach()
-                self._transition("descend")
-            elif self._state_step > self.PREGRASP_ALIGNMENT_TIMEOUT_STEPS:
-                self._fail("pregrasp tilt/edge alignment did not converge")
         elif self._state == "descend":
             self.green_ray_hit = self._green_ray_intersects_cube(env)
             robot = env.scene["robot"]
@@ -477,34 +472,11 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         return progress >= 1.0
 
     def _update_posture_target(self, env) -> None:
-        """Select the phase-aware five-DoF posture task used around grasping."""
+        """Restore the second-back port's wrist-flex correction within XYZ IK."""
 
         assert self._arm_action_term is not None
-        robot = env.scene["robot"]
-        if self._state == "pregrasp_align":
-            wrist_flex_target, wrist_roll_target = self._compute_pregrasp_joint_targets(env)
-            self._posture_target = wrist_flex_target.detach().clone()
-            self._wrist_roll_target = wrist_roll_target.detach().clone()
-            self._arm_action_term.set_xyz_two_joint_targets(
-                joint_names=("wrist_flex", "wrist_roll"),
-                joint_targets=torch.stack((wrist_flex_target, wrist_roll_target), dim=-1),
-            )
-            return
-
-        if self._state in {"descend", "grasp", "grasp_settle", "lift"}:
-            if self._frozen_pregrasp_joint_targets is None:
-                raise RuntimeError(f"{self._state} requires frozen pregrasp joint targets")
-            self._posture_target = self._frozen_pregrasp_joint_targets[:, 0].detach().clone()
-            self._wrist_roll_target = self._frozen_pregrasp_joint_targets[:, 1].detach().clone()
-            self._arm_action_term.set_xyz_two_joint_targets(
-                joint_names=("wrist_flex", "wrist_roll"),
-                joint_targets=self._frozen_pregrasp_joint_targets,
-            )
-            return
-
         target = self._compute_wrist_flex_target(env)
         self._posture_target = target.detach().clone()
-        self._wrist_roll_target = None
         self._arm_action_term.set_xyz_joint_nullspace_target(
             joint_name="wrist_flex",
             joint_target=target,
@@ -532,73 +504,6 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         wrist_joint_index = list(robot.data.joint_names).index("wrist_flex")
         limits = robot.data.soft_joint_pos_limits[:, wrist_joint_index]
         return torch.clamp(target, min=limits[:, 0], max=limits[:, 1])
-
-    def _compute_pregrasp_joint_targets(self, env) -> tuple[torch.Tensor, torch.Tensor]:
-        """Align tool-down tilt and the gripper closing axis to the nearest cube edge."""
-
-        robot = env.scene["robot"]
-        gripper_quat_w = env.scene["ee_frame"].data.target_quat_w[:, 0]
-        cube_quat_w = env.scene["cube"].data.root_quat_w
-        dtype = gripper_quat_w.dtype
-        local_x = torch.tensor((1.0, 0.0, 0.0), device=env.device, dtype=dtype).repeat(env.num_envs, 1)
-        local_y = torch.tensor((0.0, 1.0, 0.0), device=env.device, dtype=dtype).repeat(env.num_envs, 1)
-        closing_axis_w = quat_apply(gripper_quat_w, local_x)
-        cube_x_w = quat_apply(cube_quat_w, local_x)
-        cube_y_w = quat_apply(cube_quat_w, local_y)
-        closing_xy = closing_axis_w[:, :2]
-        closing_xy /= torch.clamp(torch.linalg.vector_norm(closing_xy, dim=-1, keepdim=True), min=1.0e-8)
-        cube_axes_xy = torch.stack((cube_x_w[:, :2], cube_y_w[:, :2]), dim=1)
-        cube_axes_xy /= torch.clamp(torch.linalg.vector_norm(cube_axes_xy, dim=-1, keepdim=True), min=1.0e-8)
-        dots = torch.sum(cube_axes_xy * closing_xy[:, None, :], dim=-1)
-        best_axis_index = torch.argmax(torch.abs(dots), dim=-1)
-        batch_indices = torch.arange(env.num_envs, device=env.device)
-        selected_axis_xy = cube_axes_xy[batch_indices, best_axis_index]
-        selected_dot = dots[batch_indices, best_axis_index]
-        desired_axis_xy = selected_axis_xy * torch.where(
-            selected_dot >= 0.0,
-            torch.ones_like(selected_dot),
-            -torch.ones_like(selected_dot),
-        ).unsqueeze(-1)
-        cross_z = closing_xy[:, 0] * desired_axis_xy[:, 1] - closing_xy[:, 1] * desired_axis_xy[:, 0]
-        dot = torch.sum(closing_xy * desired_axis_xy, dim=-1)
-        signed_edge_error = torch.atan2(cross_z, dot)
-
-        wrist_roll_index = list(robot.data.joint_names).index("wrist_roll")
-        wrist_roll_position = robot.data.joint_pos[:, wrist_roll_index]
-        wrist_roll_limits = robot.data.soft_joint_pos_limits[:, wrist_roll_index]
-        wrist_roll_target = torch.clamp(
-            wrist_roll_position + signed_edge_error,
-            min=wrist_roll_limits[:, 0],
-            max=wrist_roll_limits[:, 1],
-        )
-        return self._compute_wrist_flex_target(env), wrist_roll_target
-
-    def _update_pregrasp_alignment_errors(self, env) -> None:
-        """Measure physical tool tilt and square-symmetric cube-edge alignment."""
-
-        gripper_quat_w = env.scene["ee_frame"].data.target_quat_w[:, 0]
-        cube_quat_w = env.scene["cube"].data.root_quat_w
-        dtype = gripper_quat_w.dtype
-        local_x = torch.tensor((1.0, 0.0, 0.0), device=env.device, dtype=dtype).repeat(env.num_envs, 1)
-        local_y = torch.tensor((0.0, 1.0, 0.0), device=env.device, dtype=dtype).repeat(env.num_envs, 1)
-        local_neg_z = torch.tensor((0.0, 0.0, -1.0), device=env.device, dtype=dtype).repeat(env.num_envs, 1)
-        world_down = local_neg_z
-        tool_down_w = quat_apply(gripper_quat_w, local_neg_z)
-        self._pregrasp_tilt_error = torch.acos(
-            torch.clamp(torch.sum(tool_down_w * world_down, dim=-1), -1.0, 1.0)
-        ).detach()
-
-        closing_xy = quat_apply(gripper_quat_w, local_x)[:, :2]
-        closing_xy /= torch.clamp(torch.linalg.vector_norm(closing_xy, dim=-1, keepdim=True), min=1.0e-8)
-        cube_x_xy = quat_apply(cube_quat_w, local_x)[:, :2]
-        cube_y_xy = quat_apply(cube_quat_w, local_y)[:, :2]
-        cube_x_xy /= torch.clamp(torch.linalg.vector_norm(cube_x_xy, dim=-1, keepdim=True), min=1.0e-8)
-        cube_y_xy /= torch.clamp(torch.linalg.vector_norm(cube_y_xy, dim=-1, keepdim=True), min=1.0e-8)
-        nearest_edge_cosine = torch.maximum(
-            torch.abs(torch.sum(closing_xy * cube_x_xy, dim=-1)),
-            torch.abs(torch.sum(closing_xy * cube_y_xy, dim=-1)),
-        )
-        self._pregrasp_edge_error = torch.acos(torch.clamp(nearest_edge_cosine, 0.0, 1.0)).detach()
 
     def _green_ray_intersects_cube(self, env) -> bool:
         """Test the selected gripper-local axis against the cube OBB."""
@@ -792,22 +697,6 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         return self._posture_target
 
     @property
-    def wrist_roll_target(self) -> torch.Tensor | None:
-        return self._wrist_roll_target
-
-    @property
-    def pregrasp_tilt_error(self) -> torch.Tensor | None:
-        return self._pregrasp_tilt_error
-
-    @property
-    def pregrasp_edge_error(self) -> torch.Tensor | None:
-        return self._pregrasp_edge_error
-
-    @property
-    def pregrasp_alignment_streak(self) -> int:
-        return self._pregrasp_alignment_streak
-
-    @property
     def wrist_position_w(self) -> torch.Tensor | None:
         return self._wrist_position_w
 
@@ -862,17 +751,19 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         return self._gripper_joint_velocity
 
     @property
+    def held_gripper_angle(self) -> float | None:
+        return self._held_gripper_angle
+
+    @property
+    def held_gripper_angle_capture_step(self) -> int | None:
+        return self._held_gripper_angle_capture_step
+
+    @property
     def servo_parameters(self) -> dict[str, object]:
         return {
             "source": "bundled_so101_autogen_simple_state_machine",
             "control_frame": "wrist",
             "ik_adapter": "xyz_plus_autogen_wrist_flex_correction,restored_from_c1295cb",
-            "pregrasp_controller": "xyz_plus_wrist_flex_plus_wrist_roll",
-            "pregrasp_tilt_tolerance_deg": math.degrees(self.PREGRASP_ALIGNMENT_TILT_TOLERANCE),
-            "pregrasp_edge_tolerance_deg": math.degrees(self.PREGRASP_ALIGNMENT_EDGE_TOLERANCE),
-            "pregrasp_stable_steps": self.PREGRASP_ALIGNMENT_STABLE_STEPS,
-            "pregrasp_timeout_steps": self.PREGRASP_ALIGNMENT_TIMEOUT_STEPS,
-            "pregrasp_orientation_freeze_through": "lift",
             "grasp_trigger": "range_gated_gripper_local_axis_cube_obb",
             "green_ray_frame": "ee_frame.target[0]:gripper_frame",
             "green_ray_local_axis": self._green_ray_axis,
@@ -880,7 +771,9 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "green_ray_max_hit_distance": self.GREEN_RAY_MAX_HIT_DISTANCE,
             "grasp_confirmation": "feedback_settled_gripper_then_cube_lift_above_episode_initial_z",
             "gripper_target_reached_requires_low_velocity": True,
-            "closed_gripper_command_hold_until": "release",
+            "gripper_hold_trigger": "first_observed_pick_cube_true",
+            "gripper_hold_value": "measured_gripper_joint_angle_at_trigger",
+            "gripper_hold_until": "release",
             "minimum_confirmed_lift": self.MIN_CONFIRMED_LIFT,
             "gripper_settle_min_steps": self.GRASP_SETTLE_STEPS,
             "gripper_settle_max_steps": self.GRASP_SETTLE_MAX_STEPS,

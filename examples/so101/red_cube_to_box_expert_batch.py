@@ -410,6 +410,9 @@ def main() -> int:
                     rewards_finite = rewards_finite and bool(torch.isfinite(step_result[1]).all())
                     unexpected_reset = unexpected_reset or bool(step_result[2].any()) or bool(step_result[3].any())
                     pick_cube = bool(observations["subtask_terms"]["pick_cube"][0].item())
+                    observe_pick_cube = getattr(state_machine, "observe_pick_cube", None)
+                    if callable(observe_pick_cube):
+                        observe_pick_cube(pick_cube, env)
                     ever_grasped = ever_grasped or pick_cube
                     if phase_name == "lift_cube" and not lift_phase_seen:
                         lift_phase_seen = True
