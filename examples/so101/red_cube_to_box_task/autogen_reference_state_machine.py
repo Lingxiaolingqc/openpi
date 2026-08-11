@@ -52,9 +52,18 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     GRIPPER_OPEN_POSITION = 1.74533
     GRIPPER_CLOSED_POSITION = 0.0
     CLOSE_OPENNESS_RANGE = (0.18, 0.235)
+    MIN_CONFIRMED_LIFT = 0.005
 
     GREEN_RAY_ORIGIN_OFFSET = (0.0, 0.0, -0.04)
     GREEN_RAY_DIRECTION = (-1.0, 0.0, 0.0)
+    LOCAL_RAY_AXES = {
+        "+x": (1.0, 0.0, 0.0),
+        "-x": (-1.0, 0.0, 0.0),
+        "+y": (0.0, 1.0, 0.0),
+        "-y": (0.0, -1.0, 0.0),
+        "+z": (0.0, 0.0, 1.0),
+        "-z": (0.0, 0.0, -1.0),
+    }
 
     GROUND_GUARD_HEIGHT_W = 0.01
     MIN_WRIST_HEIGHT_W = 0.03
@@ -71,7 +80,10 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
 
     MAX_STEPS = 2500
 
-    def __init__(self) -> None:
+    def __init__(self, green_ray_axis: str = "-x") -> None:
+        if green_ray_axis not in self.LOCAL_RAY_AXES:
+            raise ValueError(f"Unsupported gripper ray axis: {green_ray_axis!r}")
+        self._green_ray_axis = green_ray_axis
         self._arm_action_term = None
         self._rng: random.Random | None = None
         self._wrist_body_index: int | None = None
@@ -99,13 +111,37 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
                         radius=0.003,
                         visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.05, 1.0, 0.12)),
                     ),
-                    "wrist_origin": sim_utils.SphereCfg(
+                    "ray_origin": sim_utils.SphereCfg(
                         radius=0.006,
                         visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.05, 0.25, 1.0)),
                     ),
                     "gripper_point": sim_utils.SphereCfg(
                         radius=0.006,
                         visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.9, 0.05, 1.0)),
+                    ),
+                    "axis_pos_x": sim_utils.SphereCfg(
+                        radius=0.002,
+                        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.05, 0.05)),
+                    ),
+                    "axis_neg_x": sim_utils.SphereCfg(
+                        radius=0.002,
+                        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.45, 0.0)),
+                    ),
+                    "axis_pos_y": sim_utils.SphereCfg(
+                        radius=0.002,
+                        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.05, 1.0, 0.05)),
+                    ),
+                    "axis_neg_y": sim_utils.SphereCfg(
+                        radius=0.002,
+                        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.85, 0.85, 0.05)),
+                    ),
+                    "axis_pos_z": sim_utils.SphereCfg(
+                        radius=0.002,
+                        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.05, 0.25, 1.0)),
+                    ),
+                    "axis_neg_z": sim_utils.SphereCfg(
+                        radius=0.002,
+                        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.05, 0.95, 0.95)),
                     ),
                 },
             )
@@ -409,19 +445,31 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         )
 
     def _green_ray_intersects_cube(self, env) -> bool:
-        """Test a wrist-origin ray directed through the live gripper frame."""
+        """Test the selected gripper-local axis against the cube OBB."""
 
         ee_frame = env.scene["ee_frame"]
         cube = env.scene["cube"]
         robot = env.scene["robot"]
         wrist_pos_w = robot.data.body_pos_w[:, self._wrist_body_index]
         gripper_pos_w = ee_frame.data.target_pos_w[:, 0]
+        gripper_quat_w = ee_frame.data.target_quat_w[:, 0]
         jaw_pos_w = ee_frame.data.target_pos_w[:, 1]
         wrist_to_gripper_w = gripper_pos_w - wrist_pos_w
         wrist_to_gripper_length = torch.linalg.vector_norm(wrist_to_gripper_w, dim=-1)
         wrist_to_jaw_length = torch.linalg.vector_norm(jaw_pos_w - wrist_pos_w, dim=-1)
-        direction_w = wrist_to_gripper_w / torch.clamp(wrist_to_gripper_length.unsqueeze(-1), min=1.0e-8)
-        origin_w = wrist_pos_w
+        local_direction = torch.tensor(
+            self.LOCAL_RAY_AXES[self._green_ray_axis],
+            device=env.device,
+            dtype=gripper_pos_w.dtype,
+        ).repeat(env.num_envs, 1)
+        local_origin_offset = torch.tensor(
+            self.GREEN_RAY_ORIGIN_OFFSET,
+            device=env.device,
+            dtype=gripper_pos_w.dtype,
+        ).repeat(env.num_envs, 1)
+        direction_w = quat_apply(gripper_quat_w, local_direction)
+        direction_w = direction_w / torch.clamp(torch.linalg.vector_norm(direction_w, dim=-1, keepdim=True), min=1.0e-8)
+        origin_w = gripper_pos_w + quat_apply(gripper_quat_w, local_origin_offset)
         self.gripper_frame_position_w = gripper_pos_w.detach().clone()
         self.jaw_detection_position_w = jaw_pos_w.detach().clone()
         self.green_ray_origin_w = origin_w.detach().clone()
@@ -460,10 +508,11 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         t_far = torch.min(far, dim=-1).values
         obb_hit = (~parallel_outside) & (t_far >= torch.clamp(t_near, min=0.0))
         nearest_forward_hit = torch.clamp(t_near, min=0.0)
-        hit_within_grasp_reach = obb_hit & (
-            nearest_forward_hit <= wrist_to_jaw_length + self.GRASP_REACH_MARGIN_BEYOND_JAW
-        )
-        hit = hit_within_grasp_reach
+        # Match the bundled Autogen assessor: the selected green ray is an
+        # infinite ray.  In particular, do not gate it with the Euclidean
+        # distance to the jaw frame, whose origin is not the open finger tip.
+        hit_within_grasp_reach = obb_hit
+        hit = obb_hit
         self.green_ray_obb_hit = bool(obb_hit.all().item())
         self.green_ray_within_grasp_reach = bool(hit_within_grasp_reach.all().item())
         self.green_ray_hit_distance = torch.where(
@@ -471,7 +520,14 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             nearest_forward_hit,
             torch.full_like(nearest_forward_hit, torch.nan),
         ).detach()
-        self._update_green_ray_visualization(env, origin_w, direction_w, gripper_pos_w, hit)
+        self._update_green_ray_visualization(
+            env,
+            origin_w,
+            direction_w,
+            gripper_pos_w,
+            gripper_quat_w,
+            hit,
+        )
         return bool(hit.all().item())
 
     def _update_green_ray_visualization(
@@ -480,9 +536,10 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         origin_w: torch.Tensor,
         direction_w: torch.Tensor,
         gripper_pos_w: torch.Tensor,
+        gripper_quat_w: torch.Tensor,
         hit: torch.Tensor,
     ) -> None:
-        """Render the experimental wrist-origin ray into recorded RTX frames."""
+        """Render the active ray and all six gripper-local axis directions."""
 
         if self._green_ray_visualizer is None:
             return
@@ -507,17 +564,37 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
                 torch.full((env.num_envs,), 3, device=env.device, dtype=torch.int32),
             )
         )
-        positions_w = torch.cat((ray_points_w, origin_w, gripper_pos_w), dim=0)
-        marker_indices = torch.cat((ray_marker_indices, endpoint_marker_indices), dim=0)
+        local_axes = torch.tensor(
+            tuple(self.LOCAL_RAY_AXES.values()),
+            device=env.device,
+            dtype=origin_w.dtype,
+        )
+        local_axes = local_axes.unsqueeze(0).expand(env.num_envs, -1, -1).reshape(-1, 3)
+        repeated_quat_w = gripper_quat_w[:, None, :].expand(-1, len(self.LOCAL_RAY_AXES), -1).reshape(-1, 4)
+        axes_w = quat_apply(repeated_quat_w, local_axes).reshape(env.num_envs, len(self.LOCAL_RAY_AXES), 3)
+        axis_distances = torch.linspace(0.0, 0.10, 11, device=env.device, dtype=origin_w.dtype)
+        axis_points_w = gripper_pos_w[:, None, None, :] + (
+            axis_distances[None, None, :, None] * axes_w[:, :, None, :]
+        )
+        axis_points_w = axis_points_w.reshape(-1, 3)
+        axis_marker_indices = (
+            torch.arange(4, 10, device=env.device, dtype=torch.int32)
+            .repeat_interleave(axis_distances.numel())
+            .repeat(env.num_envs)
+        )
+        positions_w = torch.cat((ray_points_w, origin_w, gripper_pos_w, axis_points_w), dim=0)
+        marker_indices = torch.cat((ray_marker_indices, endpoint_marker_indices, axis_marker_indices), dim=0)
         self._green_ray_visualizer.visualize(translations=positions_w, marker_indices=marker_indices)
 
-    @staticmethod
-    def _object_grasped(env) -> bool:
+    def _object_grasped(self, env) -> bool:
+        """Confirm transport from cube lift, not the open-jaw frame origin."""
+
+        if self._initial_cube_z_w is None:
+            return False
         robot = env.scene["robot"]
-        jaw_pos_w = env.scene["ee_frame"].data.target_pos_w[:, 1]
-        cube_pos_w = env.scene["cube"].data.root_pos_w
-        distance = torch.linalg.vector_norm(cube_pos_w - jaw_pos_w, dim=-1)
-        grasped = (distance < 0.02) & (robot.data.joint_pos[:, -1] < 0.26)
+        cube_z_w = env.scene["cube"].data.root_pos_w[:, 2]
+        lifted = cube_z_w >= self._initial_cube_z_w + self.MIN_CONFIRMED_LIFT
+        grasped = lifted & (robot.data.joint_pos[:, -1] < 0.26)
         return bool(grasped.all().item())
 
     @staticmethod
@@ -604,9 +681,12 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "source": "bundled_so101_autogen_simple_state_machine",
             "control_frame": "wrist",
             "ik_adapter": "xyz_plus_autogen_wrist_flex_correction,restored_from_c1295cb",
-            "grasp_trigger": "wrist_origin_ray_through_gripper_cube_obb",
-            "green_ray_frame": "robot.wrist->ee_frame.target[0]",
-            "grasp_confirmation_frame": "ee_frame.target[1]:jaw_detection_frame",
+            "grasp_trigger": "bundled_autogen_infinite_gripper_local_axis_cube_obb",
+            "green_ray_frame": "ee_frame.target[0]:gripper_frame",
+            "green_ray_local_axis": self._green_ray_axis,
+            "green_ray_local_origin_offset": self.GREEN_RAY_ORIGIN_OFFSET,
+            "grasp_confirmation": "cube_lift_above_episode_initial_z_and_closed_gripper",
+            "minimum_confirmed_lift": self.MIN_CONFIRMED_LIFT,
             "approach_height": self.APPROACH_HEIGHT,
             "lift_height": self.LIFT_HEIGHT,
             "safe_height": self.SAFE_HEIGHT,
@@ -625,10 +705,12 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "ray_alignment_max_xy_step": self.RAY_ALIGNMENT_MAX_XY_STEP,
             "ray_alignment_xy_tolerance": self.RAY_ALIGNMENT_XY_TOLERANCE,
             "ray_alignment_stable_steps": self.RAY_ALIGNMENT_STABLE_STEPS,
-            "grasp_reach_reference": "live_wrist_to_jaw_length",
-            "grasp_reach_margin_beyond_jaw": self.GRASP_REACH_MARGIN_BEYOND_JAW,
+            "grasp_reach_reference": "not_used;matches_bundled_autogen_infinite_ray",
             "green_ray_visual_length": self.GREEN_RAY_VISUAL_LENGTH,
-            "green_ray_visual_colors": "yellow=miss,green=hit,blue=wrist,purple=gripper",
+            "green_ray_visual_colors": (
+                "active:yellow=miss,green=hit; blue=ray_origin,purple=gripper; "
+                "+x=red,-x=orange,+y=green,-y=yellow,+z=blue,-z=cyan"
+            ),
         }
 
 

@@ -534,6 +534,7 @@ timeout --signal=KILL 480s \
   --device cuda:6 \
   --assets_root "$LEISAAC_ASSETS_ROOT" \
   --expert autogen_reference \
+  --autogen_ray_axis=-x \
   --seed 42 \
   --record_dir "$AUTOGEN_REFERENCE_RECORD_DIR" \
   --record_every 4 \
@@ -558,26 +559,29 @@ tail -n 520
 ```
 
 The authoritative result is `autogen_reference_semantic_exit`, not only the transport exit. The
-`expert_autogen_reference` records expose the live wrist-origin ray, wrist-to-gripper and wrist-to-jaw lengths, and nearest hit
+`expert_autogen_reference` records expose the active gripper-local ray, wrist-to-gripper and wrist-to-jaw diagnostic lengths, and nearest hit
 distance, the cube's projection onto and shortest distance from that ray, the gripper and jaw detection
 frames, wrist/gripper/jaw height above the cube, robot-base command, actual wrist world position, descent XY tracking
 error, gripper command, and retreat/transport targets so that a failure can be compared directly with the source
-state-machine assumptions. The jaw detection frame (`ee_frame.target[1]`) remains the post-close grasp-confirmation
-reference; it is not used as the source green-ray frame.
+state-machine assumptions. The jaw detection frame (`ee_frame.target[1]`) is diagnostic only: it is not used to
+construct/range-gate the open-gripper ray or to confirm a grasp. Lift/transport confirmation instead requires the
+closed gripper to have raised the cube at least 5 mm above its per-episode initial height.
 
-The diagnostic recording also renders the experimental ray as USD sphere markers so it is visible in headless RTX
-video: yellow means the ray currently misses the cube OBB, green means it intersects, blue marks the wrist origin, and
-purple marks the gripper point through which the ray is directed. The displayed ray extends 0.35 m beyond the wrist;
-this display length does not limit the mathematical half-infinite intersection test.
+The diagnostic recording renders the selected ray and all six gripper-frame axes as USD sphere markers in headless RTX
+video. The long selected ray is yellow while missing and green while intersecting the cube OBB. The six short axes are
+`+X` red, `-X` orange, `+Y` green, `-Y` yellow, `+Z` blue, and `-Z` cyan; blue and purple endpoint spheres mark the
+active-ray and gripper-frame origins. Select the active axis with `--autogen_ray_axis` (`-x` is the bundled Autogen default).
+The active ray starts at the bundled Autogen local offset `(0, 0, -0.04)` from the gripper frame and remains
+mathematically semi-infinite; the jaw-frame distance is deliberately not a descent/grasp condition.
 
 The adapted descent is now closed-loop instead of blindly lowering the original approach command. The approach phase
 first waits until the measured wrist is within 10 mm of its final Cartesian reference. During descent, the controller
-measures the cube's lateral displacement from the live wrist-to-gripper ray. While that XY error exceeds 8 mm, it holds
+measures the cube's lateral displacement from the selected live gripper-local ray. While that XY error exceeds 8 mm, it holds
 the commanded world Z and advances the previous XY reference with a proportional correction (`kp=0.2`) limited to
 1 mm per control step. The reference increment is accumulated rather than rebased on the measured wrist; the latter
 produced only about 0.025 mm of physical motion per step with this damped IK and timed out while apparently stuck. Only after
-five consecutive aligned samples does it lower by 1 mm per step. A raw OBB intersection is not enough to close the
-gripper: the first forward hit must also be no farther than the measured wrist-to-jaw length plus half the cube height.
+five consecutive aligned samples does it lower by 1 mm per step. As in the bundled Autogen assessor, the selected
+half-infinite ray intersecting the cube OBB is the grasp trigger; no jaw-origin distance is used while the jaw is open.
 The wrist-to-gripper length remains diagnostic only because `ee_frame.target[0]` is an internal gripper frame rather
 than the distal grasp point and underestimated the physical reach by about 69 mm in the seed-42 contact trace.
 The log separates `green_ray_obb_hit` from `green_ray_within_grasp_reach` and reports the approach error, ray XY error,

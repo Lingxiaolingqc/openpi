@@ -60,6 +60,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--record_every", type=int, default=4, help="Record one frame every N control steps.")
     parser.add_argument("--record_fps", type=float, default=15.0, help="Playback rate used by the HTML viewer.")
     parser.add_argument("--jpeg_quality", type=int, default=85)
+    parser.add_argument(
+        "--autogen_ray_axis",
+        choices=("+x", "-x", "+y", "-y", "+z", "-z"),
+        default="-x",
+        help="Gripper-frame local axis used as the active Autogen green ray; all six axes are visualized.",
+    )
     AppLauncher.add_app_launcher_args(parser)
     return parser
 
@@ -573,7 +579,10 @@ def main() -> int:
             "legacy_pd_position_servo": RedCubeToBoxLegacyPdPositionServoStateMachine,
             "legacy_trajectory_pd_servo": RedCubeToBoxLegacyTrajectoryPdServoStateMachine,
         }[args.expert]
-        state_machine = state_machine_class()
+        if args.expert == "autogen_reference":
+            state_machine = state_machine_class(green_ray_axis=args.autogen_ray_axis)
+        else:
+            state_machine = state_machine_class()
         state_machine.setup(env)
         state_machine.reset()
         print(f"servo_parameters: {getattr(state_machine, 'servo_parameters', 'not_applicable')}", flush=True)
