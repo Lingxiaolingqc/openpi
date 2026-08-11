@@ -98,7 +98,8 @@ class RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine(
             gripper = _GRIPPER_OPEN
 
         jaw_error_w = desired_jaw_w - jaw_pos_w
-        target_pos_w = gripper_pos_w + jaw_error_w
+        jaw_to_gripper_offset_w = gripper_pos_w - jaw_pos_w
+        target_pos_w = desired_jaw_w + jaw_to_gripper_offset_w
         self._last_desired_jaw_w = desired_jaw_w.clone()
         self._last_jaw_error_w = jaw_error_w.clone()
         self._last_gripper_target_w = target_pos_w.clone()

@@ -258,6 +258,10 @@ it locks X/Y to the box center and descends vertically to the same legacy releas
 only after the final X/Y/Z errors remain within tolerance for ten consecutive steps. The commanded descent
 occupies the first 120 steps and has another 60-step confirmation budget. Either stage reports its own timeout
 phase, so horizontal reachability and vertical placement failures remain distinguishable.
+Its gripper target is written explicitly as `desired_jaw_w + (gripper_pos_w - jaw_pos_w)`: desired jaw pose
+plus the currently measured jaw-to-gripper offset. This is algebraically identical to the original feedback
+form `gripper_pos_w + (desired_jaw_w - jaw_pos_w)`; the rewrite clarifies the frame interpretation but is not
+expected to change millimetre-scale convergence.
 
 The `legacy_gripper_anchor_position_align_then_lower` control isolates the suspected high-alignment
 over-constraint. Its phases and targets are identical to `legacy_gripper_anchor_align_then_lower`, but only
