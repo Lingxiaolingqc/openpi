@@ -99,6 +99,9 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self.green_ray_origin_w: torch.Tensor | None = None
         self.green_ray_direction_w: torch.Tensor | None = None
         self.green_ray_hit_distance: torch.Tensor | None = None
+        self.green_ray_segment_length: torch.Tensor | None = None
+        self.cube_distance_to_grasp_segment: torch.Tensor | None = None
+        self.cube_projection_on_grasp_segment: torch.Tensor | None = None
         self.gripper_frame_position_w: torch.Tensor | None = None
         self.jaw_detection_position_w: torch.Tensor | None = None
         self.wrist_height_above_cube: torch.Tensor | None = None
@@ -331,25 +334,36 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         )
 
     def _green_ray_intersects_cube(self, env) -> bool:
-        """Evaluate the original infinite green-ray versus cube OBB test."""
+        """Test whether the live gripper-to-jaw segment crosses the cube OBB."""
 
         ee_frame = env.scene["ee_frame"]
         cube = env.scene["cube"]
-        # The source Autogen implementation constructs this ray from
-        # ``gripper_frame_link``.  In this LeIsaac scene that frame is the
-        # first FrameTransformer target; the articulation body named
-        # ``gripper`` is a different frame and changes the ray geometry.
+        # The source Autogen local -X/-Z ray assumes the axes of its own URDF
+        # ``gripper_frame_link``.  Those axes are not equivalent to this USD.
+        # Build the grasp corridor from the two live LeIsaac detection frames
+        # instead, so both its direction and finite reach follow the actual
+        # gripper geometry as the gripper joint moves.
         gripper_pos_w = ee_frame.data.target_pos_w[:, 0]
-        gripper_quat_w = ee_frame.data.target_quat_w[:, 0]
         jaw_pos_w = ee_frame.data.target_pos_w[:, 1]
-        offset = torch.tensor(self.GREEN_RAY_ORIGIN_OFFSET, device=env.device).repeat(env.num_envs, 1)
-        direction = torch.tensor(self.GREEN_RAY_DIRECTION, device=env.device).repeat(env.num_envs, 1)
-        origin_w = gripper_pos_w + quat_apply(gripper_quat_w, offset)
-        direction_w = quat_apply(gripper_quat_w, direction)
+        segment_w = jaw_pos_w - gripper_pos_w
+        segment_length = torch.linalg.vector_norm(segment_w, dim=-1)
+        direction_w = segment_w / torch.clamp(segment_length.unsqueeze(-1), min=1.0e-8)
+        origin_w = gripper_pos_w
         self.gripper_frame_position_w = gripper_pos_w.detach().clone()
         self.jaw_detection_position_w = jaw_pos_w.detach().clone()
         self.green_ray_origin_w = origin_w.detach().clone()
         self.green_ray_direction_w = direction_w.detach().clone()
+        self.green_ray_segment_length = segment_length.detach()
+        cube_from_origin_w = cube.data.root_pos_w - origin_w
+        cube_projection = torch.sum(cube_from_origin_w * direction_w, dim=-1)
+        clamped_projection = torch.clamp(cube_projection, min=0.0)
+        clamped_projection = torch.minimum(clamped_projection, segment_length)
+        closest_segment_point_w = origin_w + clamped_projection.unsqueeze(-1) * direction_w
+        self.cube_projection_on_grasp_segment = cube_projection.detach()
+        self.cube_distance_to_grasp_segment = torch.linalg.vector_norm(
+            cube.data.root_pos_w - closest_segment_point_w,
+            dim=-1,
+        ).detach()
         cube_z_w = cube.data.root_pos_w[:, 2]
         wrist_z_w = env.scene["robot"].data.body_pos_w[:, self._wrist_body_index, 2]
         self.wrist_height_above_cube = (wrist_z_w - cube_z_w).detach()
@@ -372,7 +386,11 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         parallel_outside = torch.any(parallel & (torch.abs(origin_cube) > half_extents), dim=-1)
         t_near = torch.max(near, dim=-1).values
         t_far = torch.min(far, dim=-1).values
-        hit = (~parallel_outside) & (t_far >= torch.clamp(t_near, min=0.0))
+        hit = (
+            (~parallel_outside)
+            & (t_far >= torch.clamp(t_near, min=0.0))
+            & (t_near <= segment_length)
+        )
         nearest_forward_hit = torch.clamp(t_near, min=0.0)
         self.green_ray_hit_distance = torch.where(
             hit,
@@ -458,8 +476,8 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "source": "bundled_so101_autogen_simple_state_machine",
             "control_frame": "wrist",
             "ik_adapter": "xyz_plus_autogen_wrist_flex_correction,restored_from_c1295cb",
-            "grasp_trigger": "original_green_ray_cube_obb",
-            "green_ray_frame": "ee_frame.target[0]:gripper_frame_link_equivalent",
+            "grasp_trigger": "finite_gripper_to_jaw_segment_cube_obb",
+            "green_ray_frame": "ee_frame.target[0]->ee_frame.target[1]",
             "grasp_confirmation_frame": "ee_frame.target[1]:jaw_detection_frame",
             "approach_height": self.APPROACH_HEIGHT,
             "lift_height": self.LIFT_HEIGHT,

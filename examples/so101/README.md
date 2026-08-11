@@ -498,9 +498,10 @@ preserved.
 
 Only framework adapters are changed. World targets are expressed in the robot-root frame expected by the source
 implementation; the second-back port's XYZ wrist IK plus continuously recomputed `wrist_flex` correction is restored
-through the existing phase-aware Isaac Lab action term; the original green
-ray is constructed from `ee_frame.target[0]`, the LeIsaac `gripper_frame` equivalent of Autogen's
-`gripper_frame_link`, and evaluated against the live cube OBB; and the binary
+through the existing phase-aware Isaac Lab action term. Because the bundled URDF's `gripper_frame_link` local axes do
+not match the current USD detection-frame axes, the grasp trigger is a finite segment from
+`ee_frame.target[0]` (`gripper_frame`) to `ee_frame.target[1]` (`jaw_detection_frame`) evaluated against the live cube
+OBB; and the binary
 gripper action is replaced by a continuous gripper-joint target so the source openness range is meaningful. The
 single-object task uses the live target-box floor center instead of Autogen's multi-object placement manager. A failed
 grasp stops safely instead of issuing the source project's direct joint-space return-home recovery. Thus this is a
@@ -557,14 +558,15 @@ tail -n 520
 ```
 
 The authoritative result is `autogen_reference_semantic_exit`, not only the transport exit. The
-`expert_autogen_reference` records expose the live green ray and nearest hit distance, the gripper and jaw detection
+`expert_autogen_reference` records expose the live grasp segment, its length and nearest hit distance, the cube's
+projection onto and shortest distance from that segment, the gripper and jaw detection
 frames, wrist/gripper/jaw height above the cube, robot-base command, actual wrist world position, descent XY tracking
 error, gripper command, and retreat/transport targets so that a failure can be compared directly with the source
 state-machine assumptions. The jaw detection frame (`ee_frame.target[1]`) remains the post-close grasp-confirmation
 reference; it is not used as the source green-ray frame.
 
-This comparison intentionally combines the posture-correction behavior from commit `c1295cb` with the corrected
-green-ray frame mapping. It therefore does not claim to be a bit-for-bit reproduction of the bundled source; the log's
+This comparison intentionally combines the posture-correction behavior from commit `c1295cb` with a USD-native finite
+gripper-to-jaw grasp corridor. It therefore does not claim to be a bit-for-bit reproduction of the bundled source; the log's
 `expert_ik_runtime_mode` and `posture_target_rad` fields make that experimental difference explicit.
 
 The third implementation, `red_cube_to_box_task/servo_state_machine.py`, inherits the adaptive grasp, retry,
