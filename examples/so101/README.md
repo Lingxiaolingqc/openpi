@@ -855,6 +855,10 @@ This is deliberately non-recording. A passing preflight reports no numerical fai
 at least `9/10` successful episodes, and `RED_CUBE_TO_BOX_EXPERT_BATCH_OK`. Only then should the same loop be
 connected to the native streaming HDF5 recorder for large-scale generation.
 
+The batch runner accepts the same complete `--expert` choice list as the single-episode smoke runner, including all
+Autogen path variants and all legacy servo variants. This parity is covered by a source-level unit test so adding a
+new selectable expert to only one entry point fails CI instead of silently hiding it from randomized evaluation.
+
 ## Data contract
 
 Do not install LeRobot into the Isaac Sim environment. LeRobot 0.4.2 requires `packaging>=24.2`, while the

@@ -20,6 +20,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "legacy",
             "legacy_dynamic_grasp_offset",
             "legacy_dynamic_grasp_offset_residual_corrected",
+            "autogen_retreat_transport",
+            "autogen_independent_retreat_transport",
+            "autogen_polar_retreat_transport",
             "autogen_reference",
             "legacy_gripper_anchor",
             "legacy_gripper_anchor_align_then_lower",
@@ -37,6 +40,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "adaptive",
             "servo",
             "weighted_servo",
+            "legacy_weighted_servo",
+            "legacy_position_servo",
+            "legacy_pd_position_servo",
+            "legacy_trajectory_pd_servo",
         ),
         default="legacy",
     )
@@ -90,6 +97,15 @@ def main() -> int:
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
     import red_cube_to_box_task
     from red_cube_to_box_task.adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
+    from red_cube_to_box_task.autogen_retreat_transport_state_machine import (
+        RedCubeToBoxAutogenRetreatTransportStateMachine,
+    )
+    from red_cube_to_box_task.autogen_independent_retreat_transport_state_machine import (
+        RedCubeToBoxAutogenIndependentRetreatTransportStateMachine,
+    )
+    from red_cube_to_box_task.autogen_polar_retreat_transport_state_machine import (
+        RedCubeToBoxAutogenPolarRetreatTransportStateMachine,
+    )
     from red_cube_to_box_task.autogen_reference_state_machine import (
         RedCubeToBoxAutogenReferenceStateMachine,
         configure_autogen_reference_action,
@@ -137,6 +153,18 @@ def main() -> int:
     )
     from red_cube_to_box_task.legacy_dynamic_grasp_offset_residual_corrected_state_machine import (
         RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine,
+    )
+    from red_cube_to_box_task.legacy_weighted_servo_state_machine import (
+        RedCubeToBoxLegacyWeightedServoStateMachine,
+    )
+    from red_cube_to_box_task.legacy_position_servo_state_machine import (
+        RedCubeToBoxLegacyPositionServoStateMachine,
+    )
+    from red_cube_to_box_task.legacy_pd_position_servo_state_machine import (
+        RedCubeToBoxLegacyPdPositionServoStateMachine,
+    )
+    from red_cube_to_box_task.legacy_trajectory_pd_servo_state_machine import (
+        RedCubeToBoxLegacyTrajectoryPdServoStateMachine,
     )
     from red_cube_to_box_task.phase_aware_ik_action import (
         configure_dynamic_control_frame_offset,
@@ -187,6 +215,13 @@ def main() -> int:
             "jaw_frame_xyz_tilt",
             "servo",
             "weighted_servo",
+            "legacy_weighted_servo",
+            "legacy_position_servo",
+            "legacy_pd_position_servo",
+            "legacy_trajectory_pd_servo",
+            "autogen_retreat_transport",
+            "autogen_independent_retreat_transport",
+            "autogen_polar_retreat_transport",
         }:
             configure_servo_ik_action(env_cfg)
         if args.expert == "autogen_reference":
@@ -211,6 +246,9 @@ def main() -> int:
             "legacy_dynamic_grasp_offset_residual_corrected": (
                 RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine
             ),
+            "autogen_retreat_transport": RedCubeToBoxAutogenRetreatTransportStateMachine,
+            "autogen_independent_retreat_transport": (RedCubeToBoxAutogenIndependentRetreatTransportStateMachine),
+            "autogen_polar_retreat_transport": RedCubeToBoxAutogenPolarRetreatTransportStateMachine,
             "autogen_reference": RedCubeToBoxAutogenReferenceStateMachine,
             "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
             "legacy_gripper_anchor_align_then_lower": RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine,
@@ -244,6 +282,10 @@ def main() -> int:
             "adaptive": RedCubeToBoxAdaptiveStateMachine,
             "servo": RedCubeToBoxServoStateMachine,
             "weighted_servo": RedCubeToBoxWeightedServoStateMachine,
+            "legacy_weighted_servo": RedCubeToBoxLegacyWeightedServoStateMachine,
+            "legacy_position_servo": RedCubeToBoxLegacyPositionServoStateMachine,
+            "legacy_pd_position_servo": RedCubeToBoxLegacyPdPositionServoStateMachine,
+            "legacy_trajectory_pd_servo": RedCubeToBoxLegacyTrajectoryPdServoStateMachine,
         }[args.expert]
         state_machine = state_machine_class()
         state_machine.setup(env)
@@ -275,6 +317,18 @@ def main() -> int:
             "legacy_dynamic_grasp_offset": "legacy_fixed_world,dynamic_per-grasp_placement_xy",
             "legacy_dynamic_grasp_offset_residual_corrected": (
                 "legacy_fixed_world,dynamic_per-grasp_placement_xy,single_post-transfer_residual_correction"
+            ),
+            "autogen_retreat_transport": (
+                "legacy_pickup,live_gripper_retreat,live_gripper_transport,full_6d_pose,"
+                "target_box_floor_center_xy,no_grasp_offset,no_residual_correction"
+            ),
+            "autogen_independent_retreat_transport": (
+                "independent_pickup,retreat_and_lift_until_converged,"
+                "transport_until_converged,full_6d_pose,target_box_floor_center_xy,no_offset"
+            ),
+            "autogen_polar_retreat_transport": (
+                "independent_pickup,30mm_constant-bearing_retreat,root-centered_arc_with_yaw,"
+                "radial_box_approach,full_6d_pose,actual_xyz_and_bearing_completion"
             ),
             "autogen_reference": (
                 "bundled_autogen_state_flow,robot-base_coordinates,original_green_ray_obb,"
@@ -313,6 +367,10 @@ def main() -> int:
             "adaptive": "fixed_during_grasp,current_after_grasp",
             "servo": "fixed_world_through_lift,position_only_ik_after_lift",
             "weighted_servo": "fixed_world_through_lift,translation_priority_ik_after_lift",
+            "legacy_weighted_servo": "legacy_exact_through_lift,translation_priority_ik_after_lift",
+            "legacy_position_servo": "legacy_exact_through_lift,position_only_ik_after_lift",
+            "legacy_pd_position_servo": "legacy_exact_through_lift,velocity_damped_position_only_ik_after_lift",
+            "legacy_trajectory_pd_servo": "legacy_exact_through_lift,smooth_reference_pd_position_ik_after_lift",
         }[args.expert]
         print(f"expert_orientation_policy: {orientation_policy}", flush=True)
         print(f"servo_parameters: {getattr(state_machine, 'servo_parameters', 'not_applicable')}", flush=True)
