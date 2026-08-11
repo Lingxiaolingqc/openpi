@@ -572,8 +572,9 @@ video. The long selected ray is yellow while missing and green while intersectin
 `+X` red, `-X` orange, `+Y` green, `-Y` yellow, `+Z` blue, and `-Z` cyan; blue and purple endpoint spheres mark the
 active-ray and gripper-frame origins. Select the active axis with `--autogen_ray_axis`; the current SO-101 USD audit
 selects local `-Z`. Its origin is shifted from the gripper frame by one cube half-width along local `+X`, i.e.
-`(CUBE_HALF_HEIGHT, 0, 0)`. This moves the descent line away from the fixed side of the open gripper without changing
-its direction. The ray remains mathematically semi-infinite; jaw-frame distance is not a descent/grasp condition.
+`(CUBE_HALF_HEIGHT, 0, -0.04)`, including the bundled Autogen 40 mm local `-Z` offset. This moves the descent line away
+from the fixed side of the open gripper without changing its direction. The cube OBB must intersect the forward ray and
+its first hit must be within `CUBE_HALF_HEIGHT` of this offset origin; jaw-frame distance is not a descent/grasp condition.
 
 The adapted descent is now closed-loop instead of blindly lowering the original approach command. The approach phase
 first waits until the measured wrist is within 10 mm of its final Cartesian reference. During descent, the controller
@@ -581,8 +582,9 @@ measures the cube's lateral displacement from the selected live gripper-local ra
 the commanded world Z and advances the previous XY reference with a proportional correction (`kp=0.2`) limited to
 1 mm per control step. The reference increment is accumulated rather than rebased on the measured wrist; the latter
 produced only about 0.025 mm of physical motion per step with this damped IK and timed out while apparently stuck. Only after
-five consecutive aligned samples does it lower by 1 mm per step. As in the bundled Autogen assessor, the selected
-half-infinite ray intersecting the cube OBB is the grasp trigger; no jaw-origin distance is used while the jaw is open.
+five consecutive aligned samples does it lower by 1 mm per step. The selected ray must intersect the cube OBB and its
+first forward hit must be within one cube half-width of the offset ray origin. No jaw-origin distance is used while the
+jaw is open.
 The wrist-to-gripper length remains diagnostic only because `ee_frame.target[0]` is an internal gripper frame rather
 than the distal grasp point and underestimated the physical reach by about 69 mm in the seed-42 contact trace.
 The log separates `green_ray_obb_hit` from `green_ray_within_grasp_reach` and reports the approach error, ray XY error,

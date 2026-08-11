@@ -54,8 +54,9 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     CLOSE_OPENNESS_RANGE = (0.18, 0.235)
     MIN_CONFIRMED_LIFT = 0.005
 
-    GREEN_RAY_ORIGIN_OFFSET = (CUBE_HALF_HEIGHT, 0.0, 0.0)
+    GREEN_RAY_ORIGIN_OFFSET = (CUBE_HALF_HEIGHT, 0.0, -0.04)
     GREEN_RAY_DIRECTION = (0.0, 0.0, -1.0)
+    GREEN_RAY_MAX_HIT_DISTANCE = CUBE_HALF_HEIGHT
     LOCAL_RAY_AXES = {
         "+x": (1.0, 0.0, 0.0),
         "-x": (-1.0, 0.0, 0.0),
@@ -508,11 +509,11 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         t_far = torch.min(far, dim=-1).values
         obb_hit = (~parallel_outside) & (t_far >= torch.clamp(t_near, min=0.0))
         nearest_forward_hit = torch.clamp(t_near, min=0.0)
-        # Match the bundled Autogen assessor: the selected green ray is an
-        # infinite ray.  In particular, do not gate it with the Euclidean
-        # distance to the jaw frame, whose origin is not the open finger tip.
-        hit_within_grasp_reach = obb_hit
-        hit = obb_hit
+        # The bundled assessor uses an infinite ray, which closes too early in
+        # this USD.  Range-gate the first OBB hit from the offset ray origin;
+        # do not use the open jaw-frame origin as a distance reference.
+        hit_within_grasp_reach = obb_hit & (nearest_forward_hit <= self.GREEN_RAY_MAX_HIT_DISTANCE)
+        hit = hit_within_grasp_reach
         self.green_ray_obb_hit = bool(obb_hit.all().item())
         self.green_ray_within_grasp_reach = bool(hit_within_grasp_reach.all().item())
         self.green_ray_hit_distance = torch.where(
@@ -681,10 +682,11 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "source": "bundled_so101_autogen_simple_state_machine",
             "control_frame": "wrist",
             "ik_adapter": "xyz_plus_autogen_wrist_flex_correction,restored_from_c1295cb",
-            "grasp_trigger": "bundled_autogen_infinite_gripper_local_axis_cube_obb",
+            "grasp_trigger": "range_gated_gripper_local_axis_cube_obb",
             "green_ray_frame": "ee_frame.target[0]:gripper_frame",
             "green_ray_local_axis": self._green_ray_axis,
             "green_ray_local_origin_offset": self.GREEN_RAY_ORIGIN_OFFSET,
+            "green_ray_max_hit_distance": self.GREEN_RAY_MAX_HIT_DISTANCE,
             "grasp_confirmation": "cube_lift_above_episode_initial_z_and_closed_gripper",
             "minimum_confirmed_lift": self.MIN_CONFIRMED_LIFT,
             "approach_height": self.APPROACH_HEIGHT,
@@ -705,7 +707,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "ray_alignment_max_xy_step": self.RAY_ALIGNMENT_MAX_XY_STEP,
             "ray_alignment_xy_tolerance": self.RAY_ALIGNMENT_XY_TOLERANCE,
             "ray_alignment_stable_steps": self.RAY_ALIGNMENT_STABLE_STEPS,
-            "grasp_reach_reference": "not_used;matches_bundled_autogen_infinite_ray",
+            "grasp_reach_reference": "first_cube_obb_hit_from_offset_ray_origin",
             "green_ray_visual_length": self.GREEN_RAY_VISUAL_LENGTH,
             "green_ray_visual_colors": (
                 "active:yellow=miss,green=hit; blue=ray_origin,purple=gripper; "
