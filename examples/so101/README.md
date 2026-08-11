@@ -497,8 +497,8 @@ Cartesian step sizes, phase limits, green-ray geometry, gripper timing/range, an
 preserved.
 
 Only framework adapters are changed. World targets are expressed in the robot-root frame expected by the source
-implementation; the source's actually executed position-only wrist IK (its optional posture correction is disabled by
-the simple state machine) is implemented through the existing phase-aware Isaac Lab action term; the original green
+implementation; the second-back port's XYZ wrist IK plus continuously recomputed `wrist_flex` correction is restored
+through the existing phase-aware Isaac Lab action term; the original green
 ray is constructed from `ee_frame.target[0]`, the LeIsaac `gripper_frame` equivalent of Autogen's
 `gripper_frame_link`, and evaluated against the live cube OBB; and the binary
 gripper action is replaced by a continuous gripper-joint target so the source openness range is meaningful. The
@@ -562,6 +562,10 @@ frames, wrist/gripper/jaw height above the cube, robot-base command, actual wris
 error, gripper command, and retreat/transport targets so that a failure can be compared directly with the source
 state-machine assumptions. The jaw detection frame (`ee_frame.target[1]`) remains the post-close grasp-confirmation
 reference; it is not used as the source green-ray frame.
+
+This comparison intentionally combines the posture-correction behavior from commit `c1295cb` with the corrected
+green-ray frame mapping. It therefore does not claim to be a bit-for-bit reproduction of the bundled source; the log's
+`expert_ik_runtime_mode` and `posture_target_rad` fields make that experimental difference explicit.
 
 The third implementation, `red_cube_to_box_task/servo_state_machine.py`, inherits the adaptive grasp, retry,
 and gradual lift logic but does not replace either comparison expert. Its companion

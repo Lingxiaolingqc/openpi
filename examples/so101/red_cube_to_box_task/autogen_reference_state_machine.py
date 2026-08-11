@@ -11,6 +11,7 @@ term.
 
 from __future__ import annotations
 
+import math
 import random
 
 import isaaclab.envs.mdp as isaac_mdp
@@ -72,11 +73,6 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self._arm_action_term = resolve_action_term(env.action_manager, "arm_action")
         if not isinstance(self._arm_action_term, PhaseAwareDifferentialInverseKinematicsAction):
             raise RuntimeError("autogen_reference requires PhaseAwareDifferentialInverseKinematicsAction")
-        # simple_state_machine.py explicitly disables its optional posture
-        # correction before descending. Its Lula call constrains wrist_link
-        # position only; retain that actual runtime behavior here.
-        self._arm_action_term.set_position_only(enabled=True)
-
         body_names = list(env.scene["robot"].data.body_names)
         self._wrist_body_index = body_names.index("wrist")
         if self._rng is None:
@@ -124,6 +120,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         if not self._initialized:
             self._initialize_episode(env)
 
+        self._update_posture_target(env)
         self._update_state(env)
 
         assert self._command_pos_b is not None
@@ -305,6 +302,34 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self._command_pos_b = torch.lerp(self._move_start_b, self._move_end_b, progress)
         return progress >= 1.0
 
+    def _update_posture_target(self, env) -> None:
+        """Restore the second-back port's wrist-flex correction within XYZ IK."""
+
+        assert self._arm_action_term is not None
+        robot = env.scene["robot"]
+        wrist_quat_w = robot.data.body_quat_w[:, self._wrist_body_index]
+        local_forward = torch.tensor((0.0, -1.0, 0.0), device=env.device).repeat(env.num_envs, 1)
+        local_flex_axis = torch.tensor((1.0, 0.0, 0.0), device=env.device).repeat(env.num_envs, 1)
+        desired_down = torch.tensor((0.0, 0.0, -1.0), device=env.device).repeat(env.num_envs, 1)
+        forward_w = quat_apply(wrist_quat_w, local_forward)
+        flex_axis_w = quat_apply(wrist_quat_w, local_flex_axis)
+        angle = torch.acos(torch.clamp(torch.sum(forward_w * desired_down, dim=-1), -1.0, 1.0))
+        rotation_axis = torch.linalg.cross(forward_w, desired_down, dim=-1)
+        correction_sign = -torch.sign(torch.sum(rotation_axis * flex_axis_w, dim=-1))
+        target = math.pi / 2.0 + correction_sign * angle
+
+        wrist_joint_index = list(robot.data.joint_names).index("wrist_flex")
+        limits = robot.data.soft_joint_pos_limits[:, wrist_joint_index]
+        target = torch.clamp(target, min=limits[:, 0], max=limits[:, 1])
+        self._posture_target = target.detach().clone()
+        self._arm_action_term.set_xyz_joint_nullspace_target(
+            joint_name="wrist_flex",
+            joint_target=target,
+            damping=0.04,
+            posture_gain=0.0,
+            max_posture_step=0.03,
+        )
+
     def _green_ray_intersects_cube(self, env) -> bool:
         """Evaluate the original infinite green-ray versus cube OBB test."""
 
@@ -432,7 +457,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         return {
             "source": "bundled_so101_autogen_simple_state_machine",
             "control_frame": "wrist",
-            "ik_adapter": "position_only_wrist_xyz,source_posture_correction_disabled",
+            "ik_adapter": "xyz_plus_autogen_wrist_flex_correction,restored_from_c1295cb",
             "grasp_trigger": "original_green_ray_cube_obb",
             "green_ray_frame": "ee_frame.target[0]:gripper_frame_link_equivalent",
             "grasp_confirmation_frame": "ee_frame.target[1]:jaw_detection_frame",
