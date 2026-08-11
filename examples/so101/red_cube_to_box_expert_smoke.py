@@ -63,7 +63,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--autogen_ray_axis",
         choices=("+x", "-x", "+y", "-y", "+z", "-z"),
-        default="-x",
+        default="-z",
         help="Gripper-frame local axis used as the active Autogen green ray; all six axes are visualized.",
     )
     AppLauncher.add_app_launcher_args(parser)

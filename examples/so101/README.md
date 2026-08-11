@@ -534,7 +534,7 @@ timeout --signal=KILL 480s \
   --device cuda:6 \
   --assets_root "$LEISAAC_ASSETS_ROOT" \
   --expert autogen_reference \
-  --autogen_ray_axis=-x \
+  --autogen_ray_axis=-z \
   --seed 42 \
   --record_dir "$AUTOGEN_REFERENCE_RECORD_DIR" \
   --record_every 4 \
@@ -570,9 +570,10 @@ closed gripper to have raised the cube at least 5 mm above its per-episode initi
 The diagnostic recording renders the selected ray and all six gripper-frame axes as USD sphere markers in headless RTX
 video. The long selected ray is yellow while missing and green while intersecting the cube OBB. The six short axes are
 `+X` red, `-X` orange, `+Y` green, `-Y` yellow, `+Z` blue, and `-Z` cyan; blue and purple endpoint spheres mark the
-active-ray and gripper-frame origins. Select the active axis with `--autogen_ray_axis` (`-x` is the bundled Autogen default).
-The active ray starts at the bundled Autogen local offset `(0, 0, -0.04)` from the gripper frame and remains
-mathematically semi-infinite; the jaw-frame distance is deliberately not a descent/grasp condition.
+active-ray and gripper-frame origins. Select the active axis with `--autogen_ray_axis`; the current SO-101 USD audit
+selects local `-Z`. Its origin is shifted from the gripper frame by one cube half-width along local `+X`, i.e.
+`(CUBE_HALF_HEIGHT, 0, 0)`. This moves the descent line away from the fixed side of the open gripper without changing
+its direction. The ray remains mathematically semi-infinite; jaw-frame distance is not a descent/grasp condition.
 
 The adapted descent is now closed-loop instead of blindly lowering the original approach command. The approach phase
 first waits until the measured wrist is within 10 mm of its final Cartesian reference. During descent, the controller

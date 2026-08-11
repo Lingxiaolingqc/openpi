@@ -54,8 +54,8 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     CLOSE_OPENNESS_RANGE = (0.18, 0.235)
     MIN_CONFIRMED_LIFT = 0.005
 
-    GREEN_RAY_ORIGIN_OFFSET = (0.0, 0.0, -0.04)
-    GREEN_RAY_DIRECTION = (-1.0, 0.0, 0.0)
+    GREEN_RAY_ORIGIN_OFFSET = (CUBE_HALF_HEIGHT, 0.0, 0.0)
+    GREEN_RAY_DIRECTION = (0.0, 0.0, -1.0)
     LOCAL_RAY_AXES = {
         "+x": (1.0, 0.0, 0.0),
         "-x": (-1.0, 0.0, 0.0),
@@ -80,7 +80,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
 
     MAX_STEPS = 2500
 
-    def __init__(self, green_ray_axis: str = "-x") -> None:
+    def __init__(self, green_ray_axis: str = "-z") -> None:
         if green_ray_axis not in self.LOCAL_RAY_AXES:
             raise ValueError(f"Unsupported gripper ray axis: {green_ray_axis!r}")
         self._green_ray_axis = green_ray_axis
