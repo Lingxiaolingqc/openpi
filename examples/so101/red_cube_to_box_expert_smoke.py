@@ -595,7 +595,7 @@ def main() -> int:
                         "legacy_dynamic_grasp_offset_residual_corrected",
                     }
                     and phase in {"lift_cube", "transfer_to_box", "lower_into_box", "release_cube"}
-                    and (phase_changed or state_machine.step_count % 25 == 0)
+                    and (phase_changed or completed_steps % 25 == 0)
                 ):
                     print(
                         f"expert_dynamic_grasp_offset:{phase}:"
@@ -614,7 +614,7 @@ def main() -> int:
                 if (
                     args.expert == "legacy_dynamic_grasp_offset_residual_corrected"
                     and phase in {"lower_into_box", "release_cube", "retract_gripper", "settle"}
-                    and (phase_changed or state_machine.step_count % 25 == 0)
+                    and (phase_changed or completed_steps % 25 == 0)
                 ):
                     print(
                         f"expert_transfer_residual_correction:{phase}:"
