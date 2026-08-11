@@ -68,6 +68,7 @@ class RedCubeToBoxLegacyGripperAnchorSafeDirectJawXyzPanNullspaceAlignThenLowerS
             )
         else:
             self._arm_action_term.set_identity_control_frame_offset()
+            self._arm_action_term.reset_joint_target_slew_reference()
 
         action = super().get_action(env)
         if phase_name == "align_over_box":
@@ -88,6 +89,7 @@ class RedCubeToBoxLegacyGripperAnchorSafeDirectJawXyzPanNullspaceAlignThenLowerS
         self._table_projection_point_w = None
         if self._arm_action_term is not None:
             self._arm_action_term.set_identity_control_frame_offset()
+            self._arm_action_term.reset_joint_target_slew_reference()
 
     def _capture_direct_jaw_offset(self, env) -> None:
         ee_frame = env.scene["ee_frame"]

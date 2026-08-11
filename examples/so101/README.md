@@ -326,6 +326,16 @@ joint component exceeds `0.02 rad`. Uniform scaling preserves the requested join
 to this new expert; older experts retain their original behavior. Smoke logs expose both the unlimited delta and
 the actually applied limited delta.
 
+The separate `legacy_gripper_anchor_safe_jaw_trajectory_direct_xyz_pan_nullspace_align_then_lower` experiment also
+removes the legacy transfer calibration from the control path. `target_box_floor` is verified to be centered at
+`(0.52, -0.36161)`; the apparent corner target came from adding the historical gripper-frame
+`_PLACE_XY_OFFSET=(-0.084, 0.003)`. Because the gripper-to-jaw world offset changes with arm posture, that fixed
+single-trial compensation placed the live jaw near `(0.568, -0.407)` at align entry. The new transfer captures its
+actual starting jaw, follows a cubic smoothstep trajectory to the floor-center XY at a safe height, and holds the
+last 40 of 160 steps to reduce entry velocity. It then uses direct-jaw alignment with a persistent joint-target
+slew limit of `0.01 rad/application`. Unlike limiting the target to remain close to the moving actual joint, the
+persistent command can remain behind an overshooting joint and therefore provide braking effort.
+
 That direct-jaw expert also adds two scene-only markers. A red sphere marks the live jaw point controlled by IK;
 a cyan sphere marks the same world X/Y projected vertically onto `TABLE_SURFACE_Z`. The markers do not alter the
 observation, action, safety gates, or success predicate. Smoke logs emit the desired jaw, captured offset, live
@@ -376,6 +386,9 @@ zero-error pose instead of returning to an old fixed Z target.
 
 # Directly control the closed-jaw frame during high align and draw jaw/table-projection markers.
 --expert legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower
+
+# Smoothly transfer the jaw to the true floor center, then direct-align with persistent target slew limiting.
+--expert legacy_gripper_anchor_safe_jaw_trajectory_direct_xyz_pan_nullspace_align_then_lower
 
 # Add staged weak-orientation then position-only IK during final jaw alignment.
 --expert legacy_gripper_anchor_relaxed_ik

@@ -40,6 +40,9 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._last_task_singular_values: torch.Tensor | None = None
         self._maximum_joint_target_step: float | None = None
         self._last_unlimited_delta_joint_pos: torch.Tensor | None = None
+        self._joint_target_slew_max_step: float | None = None
+        self._joint_target_slew_reference: torch.Tensor | None = None
+        self._last_joint_position_target: torch.Tensor | None = None
         self._weighted_position_penalties: torch.Tensor | None = None
         self._weighted_position_damping: float | None = None
         self._weighted_joint_names: tuple[str, ...] = ()
@@ -53,6 +56,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._clear_xyz_pitch_joint_target()
         self._clear_xyz_joint_nullspace_target()
         self._clear_solver_diagnostics()
+        self._joint_target_slew_reference = None
         self._weighted_position_penalties = None
         self._weighted_position_damping = None
         self._weighted_joint_names = ()
@@ -222,6 +226,19 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         if maximum_step is not None and maximum_step <= 0.0:
             raise ValueError(f"Maximum joint target step must be positive, received {maximum_step}")
         self._maximum_joint_target_step = maximum_step
+
+    def set_joint_target_slew_limit(self, *, maximum_step: float | None) -> None:
+        """Rate-limit the persistent joint target rather than its distance from the live joint position."""
+
+        if maximum_step is not None and maximum_step <= 0.0:
+            raise ValueError(f"Joint target slew step must be positive, received {maximum_step}")
+        self._joint_target_slew_max_step = maximum_step
+        self._joint_target_slew_reference = None
+
+    def reset_joint_target_slew_reference(self) -> None:
+        """Start the next limited target trajectory from the then-current joint state."""
+
+        self._joint_target_slew_reference = None
 
     def set_weighted_position_only(
         self,
@@ -450,15 +467,33 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
             )
             delta_joint_pos = delta_joint_pos * scale
         if self._xyz_pitch_joint_target is not None or self._xyz_joint_nullspace_target is not None:
-            self._last_delta_joint_pos = delta_joint_pos.detach().clone()
             self._last_task_error = task_error.detach().clone()
             self._last_task_singular_values = torch.linalg.svdvals(task_jacobian).detach().clone()
         else:
             self._clear_solver_diagnostics()
         joint_pos_des = joint_pos + delta_joint_pos
 
+        if self._joint_target_slew_max_step is not None:
+            if self._joint_target_slew_reference is None:
+                self._joint_target_slew_reference = joint_pos.detach().clone()
+            target_step = joint_pos_des - self._joint_target_slew_reference
+            maximum_component = torch.amax(torch.abs(target_step), dim=-1, keepdim=True)
+            scale = torch.clamp(
+                self._joint_target_slew_max_step / torch.clamp(maximum_component, min=1.0e-8),
+                max=1.0,
+            )
+            joint_pos_des = self._joint_target_slew_reference + target_step * scale
+            soft_limits = self._asset.data.soft_joint_pos_limits[:, self._joint_ids]
+            joint_pos_des = torch.clamp(joint_pos_des, min=soft_limits[..., 0], max=soft_limits[..., 1])
+            self._joint_target_slew_reference = joint_pos_des.detach().clone()
+            delta_joint_pos = joint_pos_des - joint_pos
+
+        if self._xyz_pitch_joint_target is not None or self._xyz_joint_nullspace_target is not None:
+            self._last_delta_joint_pos = delta_joint_pos.detach().clone()
+
         if not bool(torch.isfinite(joint_pos_des).all()):
             raise RuntimeError("Translation-priority differential IK produced a non-finite joint target")
+        self._last_joint_position_target = joint_pos_des.detach().clone()
         self._asset.set_joint_position_target(joint_pos_des, self._joint_ids)
 
     @property
@@ -498,6 +533,14 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         return self._last_unlimited_delta_joint_pos
 
     @property
+    def joint_target_slew_max_step(self) -> float | None:
+        return self._joint_target_slew_max_step
+
+    @property
+    def last_joint_position_target(self) -> torch.Tensor | None:
+        return self._last_joint_position_target
+
+    @property
     def controlled_joint_names(self) -> tuple[str, ...]:
         all_joint_names = self._asset.data.joint_names
         if isinstance(self._joint_ids, slice):
@@ -521,6 +564,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._last_task_error = None
         self._last_task_singular_values = None
         self._last_unlimited_delta_joint_pos = None
+        self._last_joint_position_target = None
 
 
 def configure_servo_ik_action(env_cfg) -> None:
