@@ -3,14 +3,14 @@
 The state order and motion constants intentionally follow
 ``autogen/so101-autogen-main/src/state_machine/simple_state_machine.py``.
 Only the simulator interfaces are adapted: targets live in the robot-base
-frame, the original green-ray test is evaluated against the cube OBB, and the
-original wrist-position IK plus wrist-flex posture correction is expressed
-through the phase-aware Isaac Lab action term.
+frame, source height constants retain their world-Z meaning, the original
+green-ray test is evaluated against the cube OBB, and the original
+position-only wrist IK is expressed through the phase-aware Isaac Lab action
+term.
 """
 
 from __future__ import annotations
 
-import math
 import random
 
 import isaaclab.envs.mdp as isaac_mdp
@@ -53,6 +53,10 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     GREEN_RAY_ORIGIN_OFFSET = (0.0, 0.0, -0.04)
     GREEN_RAY_DIRECTION = (-1.0, 0.0, 0.0)
 
+    GROUND_GUARD_HEIGHT_W = 0.01
+    MIN_WRIST_HEIGHT_W = 0.03
+    MAX_DESCENT_WRIST_XY_ERROR = 0.05
+
     MAX_STEPS = 2500
 
     def __init__(self) -> None:
@@ -69,6 +73,10 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self._arm_action_term = resolve_action_term(env.action_manager, "arm_action")
         if not isinstance(self._arm_action_term, PhaseAwareDifferentialInverseKinematicsAction):
             raise RuntimeError("autogen_reference requires PhaseAwareDifferentialInverseKinematicsAction")
+        # simple_state_machine.py explicitly disables its optional posture
+        # correction before descending. Its Lula call constrains wrist_link
+        # position only; retain that actual runtime behavior here.
+        self._arm_action_term.set_position_only(enabled=True)
 
         body_names = list(env.scene["robot"].data.body_names)
         self._wrist_body_index = body_names.index("wrist")
@@ -91,6 +99,8 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self._grasp_end_position = self.GRIPPER_CLOSED_POSITION
         self._initial_cube_z_w: torch.Tensor | None = None
         self._posture_target: torch.Tensor | None = None
+        self._wrist_position_w: torch.Tensor | None = None
+        self._descent_wrist_xy_error: torch.Tensor | None = None
         self.green_ray_hit = False
         self.green_ray_origin_w: torch.Tensor | None = None
         self.green_ray_direction_w: torch.Tensor | None = None
@@ -110,7 +120,6 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         if not self._initialized:
             self._initialize_episode(env)
 
-        self._update_posture_target(env)
         self._update_state(env)
 
         assert self._command_pos_b is not None
@@ -144,8 +153,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self._gripper_command = self.GRIPPER_OPEN_POSITION
 
         cube_pos_b = self._world_position_to_base(robot, env.scene["cube"].data.root_pos_w)
-        approach_target_b = cube_pos_b.clone()
-        approach_target_b[:, 2] = self.APPROACH_HEIGHT
+        approach_target_b = self._set_world_height(robot, cube_pos_b, self.APPROACH_HEIGHT)
         self._start_move(approach_target_b, self.TRAVEL_STEP)
         self._initialized = True
 
@@ -158,14 +166,26 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
                 self._transition("descend")
         elif self._state == "descend":
             self.green_ray_hit = self._green_ray_intersects_cube(env)
+            robot = env.scene["robot"]
+            wrist_pos_w = robot.data.body_pos_w[:, self._wrist_body_index]
+            command_pos_w = self._base_position_to_world(robot, self._command_pos_b)
+            self._wrist_position_w = wrist_pos_w.detach().clone()
+            self._descent_wrist_xy_error = torch.linalg.vector_norm(
+                wrist_pos_w[:, :2] - command_pos_w[:, :2], dim=-1
+            ).detach()
             if self.green_ray_hit:
                 self._transition("grasp")
+            elif bool((self._descent_wrist_xy_error > self.MAX_DESCENT_WRIST_XY_ERROR).any().item()):
+                self._fail("actual wrist XY drifted more than 50 mm during Autogen descent")
+            elif bool((wrist_pos_w[:, 2] < self.MIN_WRIST_HEIGHT_W).any().item()):
+                self._fail("actual wrist reached the Autogen descent safety height")
             elif self._state_step > self.MAX_DESCEND_STEPS:
                 self._fail("descent timed out before the Autogen green ray intersected the cube")
             else:
                 assert self._command_pos_b is not None
-                self._command_pos_b[:, 2] -= self.DESCEND_STEP
-                if bool((self._command_pos_b[:, 2] < 0.01).any().item()):
+                command_pos_w[:, 2] -= self.DESCEND_STEP
+                self._command_pos_b = self._world_position_to_base(robot, command_pos_w)
+                if bool((command_pos_w[:, 2] < self.GROUND_GUARD_HEIGHT_W).any().item()):
                     self._fail("descent reached the Autogen 10 mm ground guard")
         elif self._state == "grasp":
             progress = min(self._state_step / self.GRASP_DURATION_STEPS, 1.0)
@@ -182,17 +202,18 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
                     return
                 self.grasp_confirmed = True
                 assert self._command_pos_b is not None
-                if bool((self._command_pos_b[:, 2] >= self.LIFT_HEIGHT).all().item()):
-                    self._transition("retreat")
+                command_pos_w = self._base_position_to_world(env.scene["robot"], self._command_pos_b)
+                if bool((command_pos_w[:, 2] >= self.LIFT_HEIGHT).all().item()):
+                    self._transition("retreat", env)
                     return
             if self._state_step > self.MAX_LIFT_STEPS:
                 self._fail("Autogen lift timed out")
                 return
             assert self._command_pos_b is not None
-            self._command_pos_b[:, 2] = torch.clamp(
-                self._command_pos_b[:, 2] + self.LIFT_STEP,
-                max=self.LIFT_HEIGHT,
-            )
+            robot = env.scene["robot"]
+            command_pos_w = self._base_position_to_world(robot, self._command_pos_b)
+            command_pos_w[:, 2] = torch.clamp(command_pos_w[:, 2] + self.LIFT_STEP, max=self.LIFT_HEIGHT)
+            self._command_pos_b = self._world_position_to_base(robot, command_pos_w)
         elif self._state == "retreat":
             if self._update_move():
                 self._transition("transport", env)
@@ -227,6 +248,9 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             self._gripper_command = self._grasp_end_position
         elif state == "retreat":
             assert self._command_pos_b is not None
+            if env is None:
+                raise RuntimeError("retreat initialization requires the environment")
+            robot = env.scene["robot"]
             target = self._command_pos_b.clone()
             distance_from_origin = torch.linalg.vector_norm(target[:, :2], dim=-1)
             target[:, :2] *= 5.0 / 7.0
@@ -236,7 +260,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
                 default_xy.unsqueeze(0),
                 target[:, :2],
             )
-            target[:, 2] = self.SAFE_HEIGHT
+            target = self._set_world_height(robot, target, self.SAFE_HEIGHT)
             self.retreat_target_b = target.detach().clone()
             self._start_move(target, self.TRAVEL_STEP)
         elif state == "transport":
@@ -247,7 +271,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             # The original _start_transport first creates a 0.25 m target, but
             # _update_transport replaces it on the next frame with release_height.
             # Preserve the target that is actually executed by that implementation.
-            target[:, 2] = self.RELEASE_HEIGHT
+            target = self._set_world_height(robot, target, self.RELEASE_HEIGHT)
             self.transport_target_b = target.detach().clone()
             self._start_move(target, self.TRAVEL_STEP)
         elif state == "release":
@@ -276,34 +300,6 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         progress = min((self._state_step + 1) / self._move_duration, 1.0)
         self._command_pos_b = torch.lerp(self._move_start_b, self._move_end_b, progress)
         return progress >= 1.0
-
-    def _update_posture_target(self, env) -> None:
-        """Mirror Autogen's wrist-flex correction within the XYZ IK solve."""
-
-        assert self._arm_action_term is not None
-        robot = env.scene["robot"]
-        wrist_quat_w = robot.data.body_quat_w[:, self._wrist_body_index]
-        local_forward = torch.tensor((0.0, -1.0, 0.0), device=env.device).repeat(env.num_envs, 1)
-        local_flex_axis = torch.tensor((1.0, 0.0, 0.0), device=env.device).repeat(env.num_envs, 1)
-        desired_down = torch.tensor((0.0, 0.0, -1.0), device=env.device).repeat(env.num_envs, 1)
-        forward_w = quat_apply(wrist_quat_w, local_forward)
-        flex_axis_w = quat_apply(wrist_quat_w, local_flex_axis)
-        angle = torch.acos(torch.clamp(torch.sum(forward_w * desired_down, dim=-1), -1.0, 1.0))
-        rotation_axis = torch.linalg.cross(forward_w, desired_down, dim=-1)
-        correction_sign = -torch.sign(torch.sum(rotation_axis * flex_axis_w, dim=-1))
-        target = math.pi / 2.0 + correction_sign * angle
-
-        wrist_joint_index = list(robot.data.joint_names).index("wrist_flex")
-        limits = robot.data.soft_joint_pos_limits[:, wrist_joint_index]
-        target = torch.clamp(target, min=limits[:, 0], max=limits[:, 1])
-        self._posture_target = target.detach().clone()
-        self._arm_action_term.set_xyz_joint_nullspace_target(
-            joint_name="wrist_flex",
-            joint_target=target,
-            damping=0.04,
-            posture_gain=0.0,
-            max_posture_step=0.03,
-        )
 
     def _green_ray_intersects_cube(self, env) -> bool:
         """Evaluate the original infinite green-ray versus cube OBB test."""
@@ -351,6 +347,16 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     def _world_position_to_base(robot, position_w: torch.Tensor) -> torch.Tensor:
         return quat_apply(quat_inv(robot.data.root_quat_w), position_w - robot.data.root_pos_w)
 
+    @staticmethod
+    def _base_position_to_world(robot, position_b: torch.Tensor) -> torch.Tensor:
+        return robot.data.root_pos_w + quat_apply(robot.data.root_quat_w, position_b)
+
+    @classmethod
+    def _set_world_height(cls, robot, position_b: torch.Tensor, height_w: float) -> torch.Tensor:
+        position_w = cls._base_position_to_world(robot, position_b)
+        position_w[:, 2] = height_w
+        return cls._world_position_to_base(robot, position_w)
+
     def _fail(self, reason: str) -> None:
         self.servo_abort_reason = reason
         self._state = "failed"
@@ -378,6 +384,14 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         return self._posture_target
 
     @property
+    def wrist_position_w(self) -> torch.Tensor | None:
+        return self._wrist_position_w
+
+    @property
+    def descent_wrist_xy_error(self) -> torch.Tensor | None:
+        return self._descent_wrist_xy_error
+
+    @property
     def command_position_b(self) -> torch.Tensor | None:
         return self._command_pos_b
 
@@ -390,7 +404,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         return {
             "source": "bundled_so101_autogen_simple_state_machine",
             "control_frame": "wrist",
-            "ik_adapter": "xyz_plus_autogen_wrist_flex_correction",
+            "ik_adapter": "position_only_wrist_xyz,source_posture_correction_disabled",
             "grasp_trigger": "original_green_ray_cube_obb",
             "approach_height": self.APPROACH_HEIGHT,
             "lift_height": self.LIFT_HEIGHT,
@@ -401,6 +415,9 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "descend_step": self.DESCEND_STEP,
             "lift_step": self.LIFT_STEP,
             "close_openness_range": self.CLOSE_OPENNESS_RANGE,
+            "height_coordinate": "world_z",
+            "descent_wrist_xy_guard": self.MAX_DESCENT_WRIST_XY_ERROR,
+            "descent_wrist_height_guard_w": self.MIN_WRIST_HEIGHT_W,
         }
 
 

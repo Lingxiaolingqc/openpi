@@ -497,8 +497,9 @@ Cartesian step sizes, phase limits, green-ray geometry, gripper timing/range, an
 preserved.
 
 Only framework adapters are changed. World targets are expressed in the robot-root frame expected by the source
-implementation; the original wrist-position IK plus wrist-flex posture correction is implemented through the existing
-phase-aware Isaac Lab action term; the original green ray is evaluated against the live cube OBB; and the binary
+implementation; the source's actually executed position-only wrist IK (its optional posture correction is disabled by
+the simple state machine) is implemented through the existing phase-aware Isaac Lab action term; the original green
+ray is evaluated against the live cube OBB; and the binary
 gripper action is replaced by a continuous gripper-joint target so the source openness range is meaningful. The
 single-object task uses the live target-box floor center instead of Autogen's multi-object placement manager. A failed
 grasp stops safely instead of issuing the source project's direct joint-space return-home recovery. Thus this is a
@@ -555,9 +556,9 @@ tail -n 520
 ```
 
 The authoritative result is `autogen_reference_semantic_exit`, not only the transport exit. The
-`expert_autogen_reference` records expose the live green ray, robot-base command, wrist posture target, gripper
-command, and retreat/transport targets so that a failure can be compared directly with the source state-machine
-assumptions.
+`expert_autogen_reference` records expose the live green ray, robot-base command, actual wrist world position,
+descent XY tracking error, gripper command, and retreat/transport targets so that a failure can be compared directly
+with the source state-machine assumptions.
 
 The third implementation, `red_cube_to_box_task/servo_state_machine.py`, inherits the adaptive grasp, retry,
 and gradual lift logic but does not replace either comparison expert. Its companion
