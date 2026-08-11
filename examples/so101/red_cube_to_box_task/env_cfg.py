@@ -110,10 +110,10 @@ class RedCubeToBoxSceneCfg(LiftCubeSceneCfg):
         (TARGET_BOX_INNER_SIZE, TARGET_BOX_WALL_THICKNESS, TARGET_BOX_WALL_HEIGHT),
         (_BOX_X, _BOX_Y + _WALL_OFFSET, _WALL_Z),
     )
-    lower_arm_box_contact: ContactSensorCfg = _robot_box_contact("lower_arm")
-    wrist_box_contact: ContactSensorCfg = _robot_box_contact("wrist")
-    gripper_box_contact: ContactSensorCfg = _robot_box_contact("gripper")
-    jaw_box_contact: ContactSensorCfg = _robot_box_contact("jaw")
+    lower_arm_box_contact: ContactSensorCfg | None = None
+    wrist_box_contact: ContactSensorCfg | None = None
+    gripper_box_contact: ContactSensorCfg | None = None
+    jaw_box_contact: ContactSensorCfg | None = None
 
 
 @configclass
@@ -141,13 +141,19 @@ class RedCubeToBoxEnvCfg(LiftCubeEnvCfg):
     terminations: RedCubeToBoxTerminationsCfg = RedCubeToBoxTerminationsCfg()
     task_description: str = "Pick up the red cube and place it inside the green box."
 
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        self.scene.robot.spawn.activate_contact_sensors = True
-
     def use_teleop_device(self, teleop_device) -> None:
         super().use_teleop_device(teleop_device)
         if teleop_device == "so101_state_machine":
             self.actions.gripper_action.close_command_expr = {
                 "gripper": STATE_MACHINE_GRIPPER_CLOSE_POSITION,
             }
+
+
+def configure_planar_safety_sensors(env_cfg: RedCubeToBoxEnvCfg) -> None:
+    """Enable box-contact reporting only for the collision-gated expert."""
+
+    env_cfg.scene.lower_arm_box_contact = _robot_box_contact("lower_arm")
+    env_cfg.scene.wrist_box_contact = _robot_box_contact("wrist")
+    env_cfg.scene.gripper_box_contact = _robot_box_contact("gripper")
+    env_cfg.scene.jaw_box_contact = _robot_box_contact("jaw")
+    env_cfg.scene.robot.spawn.activate_contact_sensors = True
