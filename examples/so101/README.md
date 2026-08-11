@@ -570,6 +570,16 @@ video: yellow means the ray currently misses the cube OBB, green means it inters
 purple marks the gripper point through which the ray is directed. The displayed ray extends 0.35 m beyond the wrist;
 this display length does not limit the mathematical half-infinite intersection test.
 
+The adapted descent is now closed-loop instead of blindly lowering the original approach command. The approach phase
+first waits until the measured wrist is within 10 mm of its final Cartesian reference. During descent, the controller
+measures the cube's lateral displacement from the live wrist-to-gripper ray. While that XY error exceeds 8 mm, it holds
+the commanded world Z and applies a proportional XY correction (`kp=0.2`) limited to 1 mm per control step. Only after
+five consecutive aligned samples does it lower by 1 mm per step. A raw OBB intersection is not enough to close the
+gripper: the first forward hit must also be no farther than the measured wrist-to-gripper length plus one cube width.
+The log separates `green_ray_obb_hit` from `green_ray_within_grasp_reach` and reports the approach error, ray XY error,
+applied XY correction, and alignment streak. This distinguishes "the infinite ray points through the cube" from "the
+cube is centered and physically close enough to the gripper to start closing."
+
 This comparison intentionally combines the posture-correction behavior from commit `c1295cb` with the experimental
 wrist-origin/gripper-direction ray. It therefore does not claim to be a bit-for-bit reproduction of the bundled source; the log's
 `expert_ik_runtime_mode` and `posture_target_rad` fields make that experimental difference explicit.

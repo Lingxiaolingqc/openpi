@@ -15,14 +15,13 @@ import math
 import random
 
 import isaaclab.envs.mdp as isaac_mdp
-from isaaclab.markers import VisualizationMarkers
-from isaaclab.markers import VisualizationMarkersCfg
 import isaaclab.sim as sim_utils
+import torch
+from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.utils.math import quat_apply
 from isaaclab.utils.math import quat_inv
 from isaaclab.utils.math import quat_mul
 from leisaac.datagen.state_machine.base import StateMachineBase
-import torch
 
 from . import mdp
 from .env_cfg import CUBE_HALF_HEIGHT
@@ -60,6 +59,13 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     GROUND_GUARD_HEIGHT_W = 0.01
     MIN_WRIST_HEIGHT_W = 0.03
     MAX_DESCENT_WRIST_XY_ERROR = 0.05
+    APPROACH_TRACKING_TOLERANCE = 0.01
+    APPROACH_SETTLE_TIMEOUT_STEPS = 120
+    RAY_ALIGNMENT_KP = 0.2
+    RAY_ALIGNMENT_MAX_XY_STEP = 0.001
+    RAY_ALIGNMENT_XY_TOLERANCE = 0.008
+    RAY_ALIGNMENT_STABLE_STEPS = 5
+    GRASP_REACH_MARGIN_BEYOND_GRIPPER = 2.0 * CUBE_HALF_HEIGHT
     GREEN_RAY_VISUAL_LENGTH = 0.35
     GREEN_RAY_VISUAL_POINT_COUNT = 36
 
@@ -123,14 +129,21 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self._initial_cube_z_w: torch.Tensor | None = None
         self._posture_target: torch.Tensor | None = None
         self._wrist_position_w: torch.Tensor | None = None
+        self._approach_tracking_error: torch.Tensor | None = None
         self._descent_wrist_xy_error: torch.Tensor | None = None
+        self._descent_ray_xy_error: torch.Tensor | None = None
+        self._descent_xy_correction_w: torch.Tensor | None = None
+        self._ray_alignment_streak = 0
         self.green_ray_hit = False
+        self.green_ray_obb_hit = False
+        self.green_ray_within_grasp_reach = False
         self.green_ray_origin_w: torch.Tensor | None = None
         self.green_ray_direction_w: torch.Tensor | None = None
         self.green_ray_hit_distance: torch.Tensor | None = None
         self.wrist_to_gripper_length: torch.Tensor | None = None
         self.cube_distance_to_green_ray: torch.Tensor | None = None
         self.cube_projection_on_green_ray: torch.Tensor | None = None
+        self.cube_to_green_ray_error_w: torch.Tensor | None = None
         self.gripper_frame_position_w: torch.Tensor | None = None
         self.jaw_detection_position_w: torch.Tensor | None = None
         self.wrist_height_above_cube: torch.Tensor | None = None
@@ -196,7 +209,17 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
 
         if self._state == "approach":
             if self._update_move():
-                self._transition("descend")
+                robot = env.scene["robot"]
+                wrist_pos_w = robot.data.body_pos_w[:, self._wrist_body_index]
+                command_pos_w = self._base_position_to_world(robot, self._command_pos_b)
+                self._approach_tracking_error = torch.linalg.vector_norm(
+                    wrist_pos_w - command_pos_w,
+                    dim=-1,
+                ).detach()
+                if bool((self._approach_tracking_error <= self.APPROACH_TRACKING_TOLERANCE).all().item()):
+                    self._transition("descend")
+                elif self._state_step > self._move_duration + self.APPROACH_SETTLE_TIMEOUT_STEPS:
+                    self._fail("actual wrist did not settle at the Autogen approach target")
         elif self._state == "descend":
             self.green_ray_hit = self._green_ray_intersects_cube(env)
             robot = env.scene["robot"]
@@ -216,7 +239,26 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
                 self._fail("descent timed out before the Autogen green ray intersected the cube")
             else:
                 assert self._command_pos_b is not None
-                command_pos_w[:, 2] -= self.DESCEND_STEP
+                assert self.cube_to_green_ray_error_w is not None
+                ray_xy_error_w = self.cube_to_green_ray_error_w[:, :2]
+                ray_xy_error_norm = torch.linalg.vector_norm(ray_xy_error_w, dim=-1)
+                self._descent_ray_xy_error = ray_xy_error_norm.detach()
+                if bool((ray_xy_error_norm > self.RAY_ALIGNMENT_XY_TOLERANCE).any().item()):
+                    self._ray_alignment_streak = 0
+                    raw_correction_w = self.RAY_ALIGNMENT_KP * ray_xy_error_w
+                    raw_norm = torch.linalg.vector_norm(raw_correction_w, dim=-1, keepdim=True)
+                    correction_scale = torch.clamp(
+                        self.RAY_ALIGNMENT_MAX_XY_STEP / torch.clamp(raw_norm, min=1.0e-8),
+                        max=1.0,
+                    )
+                    correction_w = raw_correction_w * correction_scale
+                    command_pos_w[:, :2] = wrist_pos_w[:, :2] + correction_w
+                    self._descent_xy_correction_w = correction_w.detach()
+                else:
+                    self._ray_alignment_streak += 1
+                    self._descent_xy_correction_w = torch.zeros_like(ray_xy_error_w)
+                    if self._ray_alignment_streak >= self.RAY_ALIGNMENT_STABLE_STEPS:
+                        command_pos_w[:, 2] -= self.DESCEND_STEP
                 self._command_pos_b = self._world_position_to_base(robot, command_pos_w)
                 if bool((command_pos_w[:, 2] < self.GROUND_GUARD_HEIGHT_W).any().item()):
                     self._fail("descent reached the Autogen 10 mm ground guard")
@@ -385,10 +427,9 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         clamped_projection = torch.clamp(cube_projection, min=0.0)
         closest_ray_point_w = origin_w + clamped_projection.unsqueeze(-1) * direction_w
         self.cube_projection_on_green_ray = cube_projection.detach()
-        self.cube_distance_to_green_ray = torch.linalg.vector_norm(
-            cube.data.root_pos_w - closest_ray_point_w,
-            dim=-1,
-        ).detach()
+        cube_to_ray_error_w = cube.data.root_pos_w - closest_ray_point_w
+        self.cube_to_green_ray_error_w = cube_to_ray_error_w.detach()
+        self.cube_distance_to_green_ray = torch.linalg.vector_norm(cube_to_ray_error_w, dim=-1).detach()
         cube_z_w = cube.data.root_pos_w[:, 2]
         wrist_z_w = env.scene["robot"].data.body_pos_w[:, self._wrist_body_index, 2]
         self.wrist_height_above_cube = (wrist_z_w - cube_z_w).detach()
@@ -411,10 +452,16 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         parallel_outside = torch.any(parallel & (torch.abs(origin_cube) > half_extents), dim=-1)
         t_near = torch.max(near, dim=-1).values
         t_far = torch.min(far, dim=-1).values
-        hit = (~parallel_outside) & (t_far >= torch.clamp(t_near, min=0.0))
+        obb_hit = (~parallel_outside) & (t_far >= torch.clamp(t_near, min=0.0))
         nearest_forward_hit = torch.clamp(t_near, min=0.0)
+        hit_within_grasp_reach = obb_hit & (
+            nearest_forward_hit <= wrist_to_gripper_length + self.GRASP_REACH_MARGIN_BEYOND_GRIPPER
+        )
+        hit = hit_within_grasp_reach
+        self.green_ray_obb_hit = bool(obb_hit.all().item())
+        self.green_ray_within_grasp_reach = bool(hit_within_grasp_reach.all().item())
         self.green_ray_hit_distance = torch.where(
-            hit,
+            obb_hit,
             nearest_forward_hit,
             torch.full_like(nearest_forward_hit, torch.nan),
         ).detach()
@@ -516,6 +563,22 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         return self._descent_wrist_xy_error
 
     @property
+    def approach_tracking_error(self) -> torch.Tensor | None:
+        return self._approach_tracking_error
+
+    @property
+    def descent_ray_xy_error(self) -> torch.Tensor | None:
+        return self._descent_ray_xy_error
+
+    @property
+    def descent_xy_correction_w(self) -> torch.Tensor | None:
+        return self._descent_xy_correction_w
+
+    @property
+    def ray_alignment_streak(self) -> int:
+        return self._ray_alignment_streak
+
+    @property
     def ik_runtime_mode(self) -> str:
         if self._arm_action_term is None:
             return "uninitialized"
@@ -550,6 +613,13 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "height_coordinate": "world_z",
             "descent_wrist_xy_guard": self.MAX_DESCENT_WRIST_XY_ERROR,
             "descent_wrist_height_guard_w": self.MIN_WRIST_HEIGHT_W,
+            "approach_tracking_tolerance": self.APPROACH_TRACKING_TOLERANCE,
+            "approach_settle_timeout_steps": self.APPROACH_SETTLE_TIMEOUT_STEPS,
+            "ray_alignment_kp": self.RAY_ALIGNMENT_KP,
+            "ray_alignment_max_xy_step": self.RAY_ALIGNMENT_MAX_XY_STEP,
+            "ray_alignment_xy_tolerance": self.RAY_ALIGNMENT_XY_TOLERANCE,
+            "ray_alignment_stable_steps": self.RAY_ALIGNMENT_STABLE_STEPS,
+            "grasp_reach_margin_beyond_gripper": self.GRASP_REACH_MARGIN_BEYOND_GRIPPER,
             "green_ray_visual_length": self.GREEN_RAY_VISUAL_LENGTH,
             "green_ray_visual_colors": "yellow=miss,green=hit,blue=wrist,purple=gripper",
         }

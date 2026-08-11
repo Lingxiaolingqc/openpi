@@ -150,6 +150,7 @@ class _DiagnosticRecorder:
         if state_machine is not None:
             ee_point_w = getattr(state_machine, "ee_point_w", None)
             ee_table_projection_w = getattr(state_machine, "ee_table_projection_w", None)
+            descent_xy_correction_w = getattr(state_machine, "descent_xy_correction_w", None)
             record.update(
                 {
                     "ik_runtime_mode": getattr(state_machine, "ik_runtime_mode", "pose"),
@@ -169,6 +170,21 @@ class _DiagnosticRecorder:
                     "lower_target_stable_streak": getattr(state_machine, "lower_target_stable_streak", None),
                     "lower_hold_steps": getattr(state_machine, "lower_hold_steps", None),
                     "release_authorized": getattr(state_machine, "release_authorized", None),
+                    "green_ray_hit": getattr(state_machine, "green_ray_hit", None),
+                    "green_ray_obb_hit": getattr(state_machine, "green_ray_obb_hit", None),
+                    "green_ray_within_grasp_reach": getattr(
+                        state_machine, "green_ray_within_grasp_reach", None
+                    ),
+                    "approach_tracking_error": _finite_or_none(
+                        getattr(state_machine, "approach_tracking_error", None)
+                    ),
+                    "descent_ray_xy_error": _finite_or_none(
+                        getattr(state_machine, "descent_ray_xy_error", None)
+                    ),
+                    "descent_xy_correction_w": (
+                        None if descent_xy_correction_w is None else _rounded_row(descent_xy_correction_w[0])
+                    ),
+                    "ray_alignment_streak": getattr(state_machine, "ray_alignment_streak", None),
                     "measured_gripper_above_jaw_z": (
                         None
                         if getattr(state_machine, "measured_gripper_above_jaw_z", None) is None
@@ -638,6 +654,8 @@ def main() -> int:
                         f"command_position_b={_rounded_row(state_machine.command_position_b[0], digits=7)}:"
                         f"gripper_command={state_machine.gripper_command:.7f}:"
                         f"green_ray_hit={state_machine.green_ray_hit}:"
+                        f"green_ray_obb_hit={state_machine.green_ray_obb_hit}:"
+                        f"green_ray_within_grasp_reach={state_machine.green_ray_within_grasp_reach}:"
                         f"green_ray_origin_w="
                         f"{None if state_machine.green_ray_origin_w is None else _rounded_row(state_machine.green_ray_origin_w[0], digits=7)}:"
                         f"green_ray_direction_w="
@@ -666,6 +684,13 @@ def main() -> int:
                         f"{None if state_machine.wrist_position_w is None else _rounded_row(state_machine.wrist_position_w[0], digits=7)}:"
                         f"descent_wrist_xy_error="
                         f"{None if state_machine.descent_wrist_xy_error is None else _rounded_row(state_machine.descent_wrist_xy_error, digits=7)}:"
+                        f"approach_tracking_error="
+                        f"{None if state_machine.approach_tracking_error is None else _rounded_row(state_machine.approach_tracking_error, digits=7)}:"
+                        f"descent_ray_xy_error="
+                        f"{None if state_machine.descent_ray_xy_error is None else _rounded_row(state_machine.descent_ray_xy_error, digits=7)}:"
+                        f"descent_xy_correction_w="
+                        f"{None if state_machine.descent_xy_correction_w is None else _rounded_row(state_machine.descent_xy_correction_w[0], digits=7)}:"
+                        f"ray_alignment_streak={state_machine.ray_alignment_streak}:"
                         f"retreat_target_b="
                         f"{None if state_machine.retreat_target_b is None else _rounded_row(state_machine.retreat_target_b[0], digits=7)}:"
                         f"transport_target_b="
