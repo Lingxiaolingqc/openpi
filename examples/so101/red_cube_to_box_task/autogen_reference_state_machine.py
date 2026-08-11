@@ -252,7 +252,10 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
                         max=1.0,
                     )
                     correction_w = raw_correction_w * correction_scale
-                    command_pos_w[:, :2] = wrist_pos_w[:, :2] + correction_w
+                    # Rate-limit the reference itself. Rebasing every step on the measured
+                    # wrist leaves only a 1 mm tracking error, which this damped IK follows
+                    # too slowly to remove the ray error before the descent deadline.
+                    command_pos_w[:, :2] += correction_w
                     self._descent_xy_correction_w = correction_w.detach()
                 else:
                     self._ray_alignment_streak += 1
