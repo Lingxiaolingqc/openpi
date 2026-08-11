@@ -23,6 +23,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "legacy",
             "legacy_gripper_anchor",
             "legacy_gripper_anchor_align_then_lower",
+            "legacy_gripper_anchor_position_align_then_lower",
             "legacy_gripper_anchor_relaxed_ik",
             "legacy_gripper_anchor_planar_ik",
             "adaptive",
@@ -266,6 +267,9 @@ def main() -> int:
     from red_cube_to_box_task.legacy_gripper_anchor_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine,
     )
+    from red_cube_to_box_task.legacy_gripper_anchor_position_align_then_lower_state_machine import (
+        RedCubeToBoxLegacyGripperAnchorPositionAlignThenLowerStateMachine,
+    )
     from red_cube_to_box_task.legacy_weighted_servo_state_machine import (
         RedCubeToBoxLegacyWeightedServoStateMachine,
     )
@@ -305,6 +309,7 @@ def main() -> int:
         if args.expert in {
             "legacy_gripper_anchor_relaxed_ik",
             "legacy_gripper_anchor_planar_ik",
+            "legacy_gripper_anchor_position_align_then_lower",
             "servo",
             "weighted_servo",
             "legacy_weighted_servo",
@@ -322,6 +327,7 @@ def main() -> int:
             "legacy": "fixed_world",
             "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
             "legacy_gripper_anchor_align_then_lower": "legacy_fixed_world,align_high_then_descend",
+            "legacy_gripper_anchor_position_align_then_lower": "position_only_high_align,legacy_pose_descent",
             "legacy_gripper_anchor_relaxed_ik": "legacy_fixed_world,jaw_anchor_then_staged_relaxation",
             "legacy_gripper_anchor_planar_ik": "legacy_fixed_world,collision_gated_xy_plus_orientation",
             "adaptive": "fixed_during_grasp,current_after_grasp",
@@ -342,6 +348,9 @@ def main() -> int:
             "legacy": RedCubeToBoxStateMachine,
             "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
             "legacy_gripper_anchor_align_then_lower": RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine,
+            "legacy_gripper_anchor_position_align_then_lower": (
+                RedCubeToBoxLegacyGripperAnchorPositionAlignThenLowerStateMachine
+            ),
             "legacy_gripper_anchor_relaxed_ik": RedCubeToBoxLegacyGripperAnchorRelaxedIkStateMachine,
             "legacy_gripper_anchor_planar_ik": RedCubeToBoxLegacyGripperAnchorPlanarIkStateMachine,
             "adaptive": RedCubeToBoxAdaptiveStateMachine,
@@ -442,6 +451,7 @@ def main() -> int:
                     in {
                         "legacy_gripper_anchor",
                         "legacy_gripper_anchor_align_then_lower",
+                        "legacy_gripper_anchor_position_align_then_lower",
                         "legacy_gripper_anchor_relaxed_ik",
                         "legacy_gripper_anchor_planar_ik",
                     }
@@ -478,6 +488,7 @@ def main() -> int:
                     in {
                         "legacy_gripper_anchor",
                         "legacy_gripper_anchor_align_then_lower",
+                        "legacy_gripper_anchor_position_align_then_lower",
                         "legacy_gripper_anchor_relaxed_ik",
                         "legacy_gripper_anchor_planar_ik",
                         "servo",

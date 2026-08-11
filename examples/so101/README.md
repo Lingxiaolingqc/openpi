@@ -259,6 +259,13 @@ only after the final X/Y/Z errors remain within tolerance for ten consecutive st
 occupies the first 120 steps and has another 60-step confirmation budget. Either stage reports its own timeout
 phase, so horizontal reachability and vertical placement failures remain distinguishable.
 
+The `legacy_gripper_anchor_position_align_then_lower` control isolates the suspected high-alignment
+over-constraint. Its phases and targets are identical to `legacy_gripper_anchor_align_then_lower`, but only
+`align_over_box` removes all three orientation rows and solves the three XYZ position rows. The Z target in
+that phase is the measured high jaw position captured on entry, so it serves as a height hold rather than a
+descent command. `lower_into_box` restores the original legacy full-pose IK. Comparing these two variants with
+the same seed tests the effect of alignment orientation constraints without also changing the descent solver.
+
 The separate `legacy_gripper_anchor_relaxed_ik` variant keeps that same jaw target and safety gate but uses the
 phase-aware IK action only for constraint weighting. All phases through lowering retain the exact pose solve.
 During the first 120 alignment steps it sets orientation weight to `0.1`; if alignment still has not converged,
@@ -283,6 +290,9 @@ zero-error pose instead of returning to an old fixed Z target.
 
 # Preserve legacy pose IK, but align above the box before descending vertically.
 --expert legacy_gripper_anchor_align_then_lower
+
+# Use position-only XYZ IK for high alignment, then restore legacy pose IK for descent.
+--expert legacy_gripper_anchor_position_align_then_lower
 
 # Add staged weak-orientation then position-only IK during final jaw alignment.
 --expert legacy_gripper_anchor_relaxed_ik
