@@ -16,7 +16,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--assets_root", default=os.environ.get("LEISAAC_ASSETS_ROOT"))
     parser.add_argument(
         "--expert",
-        choices=("legacy", "legacy_gripper_anchor", "adaptive", "servo", "weighted_servo"),
+        choices=(
+            "legacy",
+            "legacy_gripper_anchor",
+            "legacy_gripper_anchor_relaxed_ik",
+            "adaptive",
+            "servo",
+            "weighted_servo",
+        ),
         default="legacy",
     )
     parser.add_argument("--episodes", type=int, default=10)
@@ -72,6 +79,9 @@ def main() -> int:
     from red_cube_to_box_task.legacy_gripper_anchor_state_machine import (
         RedCubeToBoxLegacyGripperAnchorStateMachine,
     )
+    from red_cube_to_box_task.legacy_gripper_anchor_relaxed_ik_state_machine import (
+        RedCubeToBoxLegacyGripperAnchorRelaxedIkStateMachine,
+    )
     from red_cube_to_box_task.phase_aware_ik_action import configure_servo_ik_action, resolve_action_term
     from red_cube_to_box_task.servo_state_machine import RedCubeToBoxServoStateMachine
     from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
@@ -92,7 +102,7 @@ def main() -> int:
         env_cfg.recorders = None
         env_cfg.terminations.success = None
         env_cfg.terminations.time_out = None
-        if args.expert in {"servo", "weighted_servo"}:
+        if args.expert in {"legacy_gripper_anchor_relaxed_ik", "servo", "weighted_servo"}:
             configure_servo_ik_action(env_cfg)
 
         cube_randomization = env_cfg.events.domain_randomize_0.params["pose_range"]
@@ -105,6 +115,7 @@ def main() -> int:
         state_machine_class = {
             "legacy": RedCubeToBoxStateMachine,
             "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
+            "legacy_gripper_anchor_relaxed_ik": RedCubeToBoxLegacyGripperAnchorRelaxedIkStateMachine,
             "adaptive": RedCubeToBoxAdaptiveStateMachine,
             "servo": RedCubeToBoxServoStateMachine,
             "weighted_servo": RedCubeToBoxWeightedServoStateMachine,
@@ -137,6 +148,7 @@ def main() -> int:
         orientation_policy = {
             "legacy": "fixed_world",
             "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
+            "legacy_gripper_anchor_relaxed_ik": "legacy_fixed_world,jaw_anchor_then_staged_relaxation",
             "adaptive": "fixed_during_grasp,current_after_grasp",
             "servo": "fixed_world_through_lift,position_only_ik_after_lift",
             "weighted_servo": "fixed_world_through_lift,translation_priority_ik_after_lift",

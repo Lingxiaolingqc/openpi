@@ -251,12 +251,21 @@ target. It opens only after the jaw remains within the configured XY/Z tolerance
 alignment times out, it stops before opening and leaves the diagnostic recording intact. The original `legacy`
 implementation remains unchanged for comparison.
 
+The separate `legacy_gripper_anchor_relaxed_ik` variant keeps that same jaw target and safety gate but uses the
+phase-aware IK action only for constraint weighting. All phases through lowering retain the exact pose solve.
+During the first 120 alignment steps it sets orientation weight to `0.1`; if alignment still has not converged,
+the remaining alignment steps use position-only IK. The weight that achieved stable alignment remains active
+through release and retraction. A detected grasp loss ends the episode before another action is applied.
+
 ```bash
 # Reproduce the fixed-offset baseline.
 --expert legacy
 
 # Keep legacy pickup/transport and align placement through the jaw frame.
 --expert legacy_gripper_anchor
+
+# Add staged weak-orientation then position-only IK during final jaw alignment.
+--expert legacy_gripper_anchor_relaxed_ik
 
 # Test the jaw-feedback upgrade.
 --expert adaptive

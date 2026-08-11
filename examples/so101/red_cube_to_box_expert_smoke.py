@@ -21,6 +21,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=(
             "legacy",
             "legacy_gripper_anchor",
+            "legacy_gripper_anchor_relaxed_ik",
             "adaptive",
             "servo",
             "weighted_servo",
@@ -217,6 +218,9 @@ def main() -> int:
     from red_cube_to_box_task.legacy_gripper_anchor_state_machine import (
         RedCubeToBoxLegacyGripperAnchorStateMachine,
     )
+    from red_cube_to_box_task.legacy_gripper_anchor_relaxed_ik_state_machine import (
+        RedCubeToBoxLegacyGripperAnchorRelaxedIkStateMachine,
+    )
     from red_cube_to_box_task.legacy_weighted_servo_state_machine import (
         RedCubeToBoxLegacyWeightedServoStateMachine,
     )
@@ -252,6 +256,7 @@ def main() -> int:
         env_cfg.terminations.success = None
         env_cfg.terminations.time_out = None
         if args.expert in {
+            "legacy_gripper_anchor_relaxed_ik",
             "servo",
             "weighted_servo",
             "legacy_weighted_servo",
@@ -268,6 +273,7 @@ def main() -> int:
         orientation_policy = {
             "legacy": "fixed_world",
             "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
+            "legacy_gripper_anchor_relaxed_ik": "legacy_fixed_world,jaw_anchor_then_staged_relaxation",
             "adaptive": "fixed_during_grasp,current_after_grasp",
             "servo": "fixed_world_through_lift,position_only_ik_after_lift",
             "weighted_servo": "fixed_world_through_lift,translation_priority_ik_after_lift",
@@ -285,6 +291,7 @@ def main() -> int:
         state_machine_class = {
             "legacy": RedCubeToBoxStateMachine,
             "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
+            "legacy_gripper_anchor_relaxed_ik": RedCubeToBoxLegacyGripperAnchorRelaxedIkStateMachine,
             "adaptive": RedCubeToBoxAdaptiveStateMachine,
             "servo": RedCubeToBoxServoStateMachine,
             "weighted_servo": RedCubeToBoxWeightedServoStateMachine,
@@ -325,6 +332,7 @@ def main() -> int:
         all_rewards_finite = True
         unexpected_reset = False
         previous_phase = None
+        previous_ik_runtime_mode = None
         previous_pick_cube = bool(observations["subtask_terms"]["pick_cube"][0].item())
         if recorder is not None:
             recorder.capture(0, state_machine.phase_name, observations, env, force=True)
@@ -362,10 +370,6 @@ def main() -> int:
                     raise RuntimeError("Expert produced a non-finite action")
                 if phase_changed:
                     print(f"expert_action:{phase}:{_rounded_row(action[0])}", flush=True)
-                    print(
-                        f"expert_ik_runtime_mode:{phase}:{getattr(state_machine, 'ik_runtime_mode', 'pose')}",
-                        flush=True,
-                    )
                     desired_cube = getattr(state_machine, "last_desired_cube_w", None)
                     cube_error = getattr(state_machine, "last_cube_error_w", None)
                     gripper_target = getattr(state_machine, "last_gripper_target_w", None)
@@ -377,21 +381,32 @@ def main() -> int:
                             f"gripper_target_w={_rounded_row(gripper_target[0])}",
                             flush=True,
                         )
-                    desired_jaw = getattr(state_machine, "last_desired_jaw_w", None)
-                    jaw_error = getattr(state_machine, "last_jaw_error_w", None)
+                ik_runtime_mode = getattr(state_machine, "ik_runtime_mode", "pose")
+                if phase_changed or ik_runtime_mode != previous_ik_runtime_mode:
+                    print(f"expert_ik_runtime_mode:{phase}:{ik_runtime_mode}", flush=True)
+                    previous_ik_runtime_mode = ik_runtime_mode
+                if (
+                    args.expert in {"legacy_gripper_anchor", "legacy_gripper_anchor_relaxed_ik"}
+                    and phase in {"lower_into_box", "align_over_box"}
+                    and (phase_changed or state_machine.step_count % 25 == 0)
+                ):
+                    desired_jaw = state_machine.last_desired_jaw_w
+                    jaw_error = state_machine.last_jaw_error_w
+                    gripper_target = state_machine.last_gripper_target_w
                     if desired_jaw is not None and jaw_error is not None and gripper_target is not None:
                         print(
                             f"expert_jaw_anchor:{phase}:"
                             f"desired_jaw_w={_rounded_row(desired_jaw[0])}:"
                             f"jaw_error_w={_rounded_row(jaw_error[0])}:"
                             f"gripper_target_w={_rounded_row(gripper_target[0])}:"
-                            f"alignment_streak={getattr(state_machine, 'alignment_streak', 0)}",
+                            f"alignment_streak={state_machine.alignment_streak}",
                             flush=True,
                         )
                 if (
                     args.expert
                     in {
                         "legacy_gripper_anchor",
+                        "legacy_gripper_anchor_relaxed_ik",
                         "servo",
                         "weighted_servo",
                         "legacy_weighted_servo",
