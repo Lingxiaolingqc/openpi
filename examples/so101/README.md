@@ -382,11 +382,12 @@ tail -n 360
 The separate `autogen_independent_retreat_transport` expert is a clean-room state-machine comparison. It does not
 inherit `RedCubeToBoxStateMachine` or either dynamic-offset expert. The pickup keyframes are repeated locally and the
 standalone `lift_cube` phase is removed. `retreat_to_safe` is one combined XYZ Cartesian segment: it raises the
-gripper toward `0.25 m` above the target-box floor center while reducing its root-relative XY radius to `5/7` of the
+gripper toward `0.22 m` above the target-box floor center while reducing its root-relative XY radius to `5/7` of the
 phase-entry radius. Unlike the original `0.0025 m` reference step that dropped the cube, this isolated variant limits
 the combined path to `0.0008 m` per control step. The phase finishes when the measured gripper has both reached the
 safe-height band and reduced its root-relative XY radius sufficiently; it does not require an unreachable exact XYZ
-endpoint. A confirmed grasp whose measured
+endpoint. The following transfer hover uses the same `floor + 0.22 m` height, so transfer remains approximately
+horizontal. A confirmed grasp whose measured
 jaw-to-cube distance exceeds `0.025 m` aborts immediately instead of carrying an already dropped cube through later
 phases. Retreat, transport, lower, and retract otherwise advance only after their measured completion conditions stay
 true for a configured number of consecutive steps. Placement XY is the live target-box floor center, offsets are
@@ -429,6 +430,55 @@ grep -nE \
   'expert_phase|expert_state|expert_independent_path|retreat_subphase|jaw_cube_distance|expert_tracking|expert_grasp_event|expert_abort|expert_ik_runtime_mode|servo_timeout_phase|servo_abort_reason|release_block_reason|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
   "$AUTOGEN_INDEPENDENT_LOG" |
 tail -n 420
+```
+
+The additional `autogen_polar_retreat_transport` expert preserves the independent expert as a comparison and changes
+only the grasped-object route. After closing, it shortens the measured root-relative radius by exactly `0.030 m`
+while preserving the entry bearing and raising the gripper toward `floor + 0.22 m`. The measured safe height at the
+arc entry is then frozen. It follows a root-centered arc at constant radius and that frozen height to the live box
+bearing; the commanded yaw rotates by the same angle as the arc. A final radial segment moves at fixed box bearing and
+the same frozen height to the live box-floor center before the existing safe lower,
+release, and retract phases. Retreat, arc, and radial phases require the bounded reference to finish and the measured
+gripper XYZ and root bearing to remain within tolerance. This prevents the old false completion where radius and
+height matched even though the arm had rotated to the wrong Cartesian point.
+
+```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_ROOT=/home/data/xiaoqinchuan/projects/leisaac
+export LEISAAC_ENV=/home/data/xiaoqinchuan/envs/leisaac-so101
+export LEISAAC_ASSETS_ROOT=/home/data/xiaoqinchuan/assets/leisaac-v0.4.0
+export ISAACSIM_PORTABLE_ROOT=/home/data/xiaoqinchuan/cache/isaacsim-portable
+export OMNI_KIT_ACCEPT_EULA=YES
+export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
+
+export AUTOGEN_POLAR_LOG="$LEISAAC_BASE/results/leisaac/autogen-polar-retreat-transport-seed42.log"
+export AUTOGEN_POLAR_RECORD_DIR="$LEISAAC_BASE/results/leisaac/autogen-polar-retreat-transport-recordings"
+
+cd "$OPENPI_ROOT"
+mkdir -p "$LEISAAC_BASE/results/leisaac"
+
+timeout --signal=KILL 480s \
+  "$LEISAAC_ENV/bin/python" \
+  examples/so101/red_cube_to_box_expert_smoke.py \
+  --headless \
+  --enable_cameras \
+  --device cuda:6 \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --expert autogen_polar_retreat_transport \
+  --seed 42 \
+  --record_dir "$AUTOGEN_POLAR_RECORD_DIR" \
+  --record_every 4 \
+  --record_fps 15 \
+  2>&1 | tee "$AUTOGEN_POLAR_LOG"
+
+autogen_polar_status=${PIPESTATUS[0]}
+echo "autogen_polar_retreat_transport_exit=$autogen_polar_status"
+
+grep -nE \
+  'expert_variant|servo_parameters|expert_phase|expert_state|expert_polar_path|bearing_error|expert_tracking|expert_grasp_event|expert_abort|expert_ik_runtime_mode|servo_timeout_phase|servo_abort_reason|release_block_reason|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
+  "$AUTOGEN_POLAR_LOG" |
+tail -n 520
 ```
 
 The third implementation, `red_cube_to_box_task/servo_state_machine.py`, inherits the adaptive grasp, retry,
