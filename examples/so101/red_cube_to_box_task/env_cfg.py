@@ -3,6 +3,7 @@
 from isaaclab.assets import RigidObjectCfg
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
+from isaaclab.sensors import ContactSensorCfg
 import isaaclab.sim as sim_utils
 from isaaclab.utils import configclass
 from leisaac.tasks.lift_cube.lift_cube_env_cfg import LiftCubeEnvCfg
@@ -18,7 +19,27 @@ TARGET_BOX_WALL_THICKNESS = 0.012
 TARGET_BOX_FLOOR_THICKNESS = 0.008
 TARGET_BOX_WALL_HEIGHT = 0.060
 TARGET_BOX_INNER_HALF_EXTENT_FOR_SUCCESS = 0.045
+TARGET_BOX_OUTER_SIZE = TARGET_BOX_INNER_SIZE + 2.0 * TARGET_BOX_WALL_THICKNESS
+TARGET_BOX_WALL_TOP_Z = TABLE_SURFACE_Z + TARGET_BOX_FLOOR_THICKNESS + TARGET_BOX_WALL_HEIGHT
+CUBE_HALF_HEIGHT = 0.0151
 STATE_MACHINE_GRIPPER_CLOSE_POSITION = 0.05
+
+_BOX_PART_PRIM_PATHS = [
+    "{ENV_REGEX_NS}/TargetBoxFloor",
+    "{ENV_REGEX_NS}/TargetBoxLeftWall",
+    "{ENV_REGEX_NS}/TargetBoxRightWall",
+    "{ENV_REGEX_NS}/TargetBoxFrontWall",
+    "{ENV_REGEX_NS}/TargetBoxBackWall",
+]
+
+
+def _robot_box_contact(body_name: str) -> ContactSensorCfg:
+    return ContactSensorCfg(
+        prim_path=f"{{ENV_REGEX_NS}}/Robot/{body_name}",
+        update_period=0.0,
+        history_length=1,
+        filter_prim_paths_expr=_BOX_PART_PRIM_PATHS,
+    )
 
 
 def _target_box_part(
@@ -56,7 +77,7 @@ def _target_box_part(
 _BOX_X, _BOX_Y = TARGET_BOX_CENTER_XY
 _FLOOR_Z = TABLE_SURFACE_Z + TARGET_BOX_FLOOR_THICKNESS / 2.0
 _WALL_Z = TABLE_SURFACE_Z + TARGET_BOX_FLOOR_THICKNESS + TARGET_BOX_WALL_HEIGHT / 2.0
-_OUTER_SIZE = TARGET_BOX_INNER_SIZE + 2.0 * TARGET_BOX_WALL_THICKNESS
+_OUTER_SIZE = TARGET_BOX_OUTER_SIZE
 _WALL_OFFSET = TARGET_BOX_INNER_SIZE / 2.0 + TARGET_BOX_WALL_THICKNESS / 2.0
 
 
@@ -89,6 +110,10 @@ class RedCubeToBoxSceneCfg(LiftCubeSceneCfg):
         (TARGET_BOX_INNER_SIZE, TARGET_BOX_WALL_THICKNESS, TARGET_BOX_WALL_HEIGHT),
         (_BOX_X, _BOX_Y + _WALL_OFFSET, _WALL_Z),
     )
+    lower_arm_box_contact: ContactSensorCfg = _robot_box_contact("lower_arm")
+    wrist_box_contact: ContactSensorCfg = _robot_box_contact("wrist")
+    gripper_box_contact: ContactSensorCfg = _robot_box_contact("gripper")
+    jaw_box_contact: ContactSensorCfg = _robot_box_contact("jaw")
 
 
 @configclass
@@ -115,6 +140,10 @@ class RedCubeToBoxEnvCfg(LiftCubeEnvCfg):
     scene: RedCubeToBoxSceneCfg = RedCubeToBoxSceneCfg(env_spacing=8.0)
     terminations: RedCubeToBoxTerminationsCfg = RedCubeToBoxTerminationsCfg()
     task_description: str = "Pick up the red cube and place it inside the green box."
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.robot.spawn.activate_contact_sensors = True
 
     def use_teleop_device(self, teleop_device) -> None:
         super().use_teleop_device(teleop_device)

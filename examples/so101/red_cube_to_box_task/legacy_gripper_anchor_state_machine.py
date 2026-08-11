@@ -116,14 +116,7 @@ class RedCubeToBoxLegacyGripperAnchorStateMachine(RedCubeToBoxStateMachine):
         self._last_gripper_target_w = target_pos_w.clone()
         self._update_alignment(phase_name, jaw_error_w)
 
-        robot_base_pos_w = robot.data.root_pos_w
-        robot_base_quat_w = robot.data.root_quat_w
-        target_pos_local = quat_apply(quat_inv(robot_base_quat_w), target_pos_w - robot_base_pos_w)
-        zero = torch.zeros((), device=env.device)
-        target_quat_w = quat_from_euler_xyz(zero, zero, zero).repeat(env.num_envs, 1)
-        target_quat_local = quat_mul(quat_inv(robot_base_quat_w), target_quat_w)
-        gripper_command = torch.full((env.num_envs, 1), gripper, device=env.device)
-        return torch.cat([target_pos_local, target_quat_local, gripper_command], dim=-1)
+        return self._compose_pose_action(env, robot, target_pos_w, gripper)
 
     def advance(self) -> None:
         phase_name, phase_step, phase_duration = self._phase_state()
@@ -175,6 +168,24 @@ class RedCubeToBoxLegacyGripperAnchorStateMachine(RedCubeToBoxStateMachine):
         self._last_desired_jaw_w = None
         self._last_jaw_error_w = None
         self._last_gripper_target_w = None
+
+    @staticmethod
+    def _compose_pose_action(
+        env,
+        robot,
+        target_pos_w: torch.Tensor,
+        gripper: float,
+        target_quat_w: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        robot_base_pos_w = robot.data.root_pos_w
+        robot_base_quat_w = robot.data.root_quat_w
+        target_pos_local = quat_apply(quat_inv(robot_base_quat_w), target_pos_w - robot_base_pos_w)
+        if target_quat_w is None:
+            zero = torch.zeros((), device=env.device)
+            target_quat_w = quat_from_euler_xyz(zero, zero, zero).repeat(env.num_envs, 1)
+        target_quat_local = quat_mul(quat_inv(robot_base_quat_w), target_quat_w)
+        gripper_command = torch.full((env.num_envs, 1), gripper, device=env.device)
+        return torch.cat([target_pos_local, target_quat_local, gripper_command], dim=-1)
 
     def _phase_start(self, target_phase: str) -> int:
         phase_start = 0

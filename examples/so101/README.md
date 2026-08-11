@@ -191,7 +191,7 @@ fi
 echo "red_cube_to_box_expert_semantic_exit=$expert_semantic_status"
 
 grep -nE \
-  'RED_CUBE_TO_BOX|expert_variant|expert_orientation_policy|expert_ik_action_class|expert_ik_runtime_mode|servo_parameters|diagnostic_record|expert_phase|expert_state|expert_feedback|expert_jaw_anchor|expert_tracking|expert_servo|expert_grasp_event|expert_abort_before_step|task_id|device_id|simulation_device|action_space|cube_|target_box|completed_steps|rewards_finite|unexpected_reset|grasp_confirmed|grasp_lost_before_release|box_aligned_before_release|servo_timeout_phase|servo_abort_reason|expert_success|Traceback|Error|RuntimeError' \
+  'RED_CUBE_TO_BOX|expert_variant|expert_orientation_policy|expert_ik_action_class|expert_ik_runtime_mode|servo_parameters|diagnostic_record|expert_phase|expert_state|expert_feedback|expert_jaw_anchor|expert_safety|expert_tracking|expert_servo|expert_grasp_event|expert_abort_before_step|task_id|device_id|simulation_device|action_space|cube_|target_box|completed_steps|rewards_finite|unexpected_reset|grasp_confirmed|grasp_lost_before_release|box_aligned_before_release|servo_timeout_phase|servo_abort_reason|expert_success|Traceback|Error|RuntimeError' \
   "$RED_CUBE_TO_BOX_EXPERT_LOG" |
 tail -n 220
 ```
@@ -257,6 +257,15 @@ During the first 120 alignment steps it sets orientation weight to `0.1`; if ali
 the remaining alignment steps use position-only IK. The weight that achieved stable alignment remains active
 through release and retraction. A detected grasp loss ends the episode before another action is applied.
 
+The `legacy_gripper_anchor_planar_ik` variant instead removes only the Z translation row during final
+alignment, producing a five-row task from jaw X/Y plus three orientation rows for the five-joint arm. Cube Z
+is a safety inequality rather than an IK target: the cube bottom must remain at least `0.010 m` above the box
+wall, and horizontal alignment resumes only after `0.015 m` clearance. Candidate jaw X/Y motion is capped at
+`0.002 m` per control step. Conservative bounding spheres guard the lower arm, wrist, gripper, and jaw, while
+four filtered contact sensors abort on measured robot-to-box contact above `0.25 N`. An unsafe state receives
+only a bounded upward recovery action. Stable alignment captures the measured gripper pose; release holds that
+zero-error pose instead of returning to an old fixed Z target.
+
 ```bash
 # Reproduce the fixed-offset baseline.
 --expert legacy
@@ -266,6 +275,9 @@ through release and retraction. A detected grasp loss ends the episode before an
 
 # Add staged weak-orientation then position-only IK during final jaw alignment.
 --expert legacy_gripper_anchor_relaxed_ik
+
+# Keep Z as a collision-gated inequality and solve jaw XY plus orientation.
+--expert legacy_gripper_anchor_planar_ik
 
 # Test the jaw-feedback upgrade.
 --expert adaptive

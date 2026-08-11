@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from datetime import UTC, datetime
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -22,6 +23,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "legacy",
             "legacy_gripper_anchor",
             "legacy_gripper_anchor_relaxed_ik",
+            "legacy_gripper_anchor_planar_ik",
             "adaptive",
             "servo",
             "weighted_servo",
@@ -47,6 +49,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _rounded_row(values, digits: int = 5) -> tuple[float, ...]:
     return tuple(round(float(value), digits) for value in values.detach().cpu().tolist())
+
+
+def _finite_or_none(value):
+    """Keep diagnostic JSON standards-compliant before the first safety update."""
+
+    if value is None:
+        return None
+    numeric_value = float(value)
+    return numeric_value if math.isfinite(numeric_value) else None
 
 
 class _DiagnosticRecorder:
@@ -77,7 +88,16 @@ class _DiagnosticRecorder:
         self._last_recorded_step: int | None = None
         self._finished = False
 
-    def capture(self, step: int, phase: str, observations: dict, env, *, force: bool = False) -> None:
+    def capture(
+        self,
+        step: int,
+        phase: str,
+        observations: dict,
+        env,
+        state_machine=None,
+        *,
+        force: bool = False,
+    ) -> None:
         if not force and step % self._record_every != 0:
             return
         if self._last_recorded_step == step:
@@ -110,8 +130,22 @@ class _DiagnosticRecorder:
             "cube_offset_from_box": _rounded_row(cube.data.root_pos_w[0] - floor.data.root_pos_w[0]),
             "pick_cube": bool(observations["subtask_terms"]["pick_cube"][0].item()),
         }
+        if state_machine is not None:
+            record.update(
+                {
+                    "ik_runtime_mode": getattr(state_machine, "ik_runtime_mode", "pose"),
+                    "safety_mode": getattr(state_machine, "safety_mode", None),
+                    "cube_clearance": _finite_or_none(getattr(state_machine, "cube_clearance", None)),
+                    "minimum_robot_clearance": _finite_or_none(
+                        getattr(state_machine, "minimum_robot_clearance", None)
+                    ),
+                    "maximum_box_contact_force": _finite_or_none(
+                        getattr(state_machine, "maximum_box_contact_force", None)
+                    ),
+                }
+            )
         with self.trace_path.open("a", encoding="utf-8") as trace_file:
-            trace_file.write(json.dumps(record) + "\n")
+            trace_file.write(json.dumps(record, allow_nan=False) + "\n")
         self._frames.append(record)
         self._last_recorded_step = step
         self._write_viewer()
@@ -119,13 +153,16 @@ class _DiagnosticRecorder:
     def finish(self, result: dict[str, object]) -> None:
         if self._finished:
             return
-        self.result_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        self.result_path.write_text(
+            json.dumps(result, indent=2, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
         self._write_viewer(result)
         self._finished = True
 
     def _write_viewer(self, result: dict[str, object] | None = None) -> None:
-        frames_json = json.dumps(self._frames)
-        result_json = json.dumps(result or {"status": "running"})
+        frames_json = json.dumps(self._frames, allow_nan=False)
+        result_json = json.dumps(result or {"status": "running"}, allow_nan=False)
         interval_ms = max(round(1000.0 / self._playback_fps), 1)
         self.viewer_path.write_text(
             f"""<!doctype html>
@@ -221,6 +258,9 @@ def main() -> int:
     from red_cube_to_box_task.legacy_gripper_anchor_relaxed_ik_state_machine import (
         RedCubeToBoxLegacyGripperAnchorRelaxedIkStateMachine,
     )
+    from red_cube_to_box_task.legacy_gripper_anchor_planar_ik_state_machine import (
+        RedCubeToBoxLegacyGripperAnchorPlanarIkStateMachine,
+    )
     from red_cube_to_box_task.legacy_weighted_servo_state_machine import (
         RedCubeToBoxLegacyWeightedServoStateMachine,
     )
@@ -257,6 +297,7 @@ def main() -> int:
         env_cfg.terminations.time_out = None
         if args.expert in {
             "legacy_gripper_anchor_relaxed_ik",
+            "legacy_gripper_anchor_planar_ik",
             "servo",
             "weighted_servo",
             "legacy_weighted_servo",
@@ -274,6 +315,7 @@ def main() -> int:
             "legacy": "fixed_world",
             "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
             "legacy_gripper_anchor_relaxed_ik": "legacy_fixed_world,jaw_anchor_then_staged_relaxation",
+            "legacy_gripper_anchor_planar_ik": "legacy_fixed_world,collision_gated_xy_plus_orientation",
             "adaptive": "fixed_during_grasp,current_after_grasp",
             "servo": "fixed_world_through_lift,position_only_ik_after_lift",
             "weighted_servo": "fixed_world_through_lift,translation_priority_ik_after_lift",
@@ -292,6 +334,7 @@ def main() -> int:
             "legacy": RedCubeToBoxStateMachine,
             "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
             "legacy_gripper_anchor_relaxed_ik": RedCubeToBoxLegacyGripperAnchorRelaxedIkStateMachine,
+            "legacy_gripper_anchor_planar_ik": RedCubeToBoxLegacyGripperAnchorPlanarIkStateMachine,
             "adaptive": RedCubeToBoxAdaptiveStateMachine,
             "servo": RedCubeToBoxServoStateMachine,
             "weighted_servo": RedCubeToBoxWeightedServoStateMachine,
@@ -335,7 +378,7 @@ def main() -> int:
         previous_ik_runtime_mode = None
         previous_pick_cube = bool(observations["subtask_terms"]["pick_cube"][0].item())
         if recorder is not None:
-            recorder.capture(0, state_machine.phase_name, observations, env, force=True)
+            recorder.capture(0, state_machine.phase_name, observations, env, state_machine, force=True)
 
         with torch.inference_mode():
             while not state_machine.is_episode_done:
@@ -386,7 +429,12 @@ def main() -> int:
                     print(f"expert_ik_runtime_mode:{phase}:{ik_runtime_mode}", flush=True)
                     previous_ik_runtime_mode = ik_runtime_mode
                 if (
-                    args.expert in {"legacy_gripper_anchor", "legacy_gripper_anchor_relaxed_ik"}
+                    args.expert
+                    in {
+                        "legacy_gripper_anchor",
+                        "legacy_gripper_anchor_relaxed_ik",
+                        "legacy_gripper_anchor_planar_ik",
+                    }
                     and phase in {"lower_into_box", "align_over_box"}
                     and (phase_changed or state_machine.step_count % 25 == 0)
                 ):
@@ -403,10 +451,24 @@ def main() -> int:
                             flush=True,
                         )
                 if (
+                    args.expert == "legacy_gripper_anchor_planar_ik"
+                    and phase in {"lower_into_box", "align_over_box", "release_cube"}
+                    and (phase_changed or state_machine.step_count % 25 == 0)
+                ):
+                    print(
+                        f"expert_safety:{phase}:"
+                        f"mode={state_machine.safety_mode}:"
+                        f"cube_clearance={state_machine.cube_clearance:.6f}:"
+                        f"minimum_robot_clearance={state_machine.minimum_robot_clearance:.6f}:"
+                        f"maximum_box_contact_force={state_machine.maximum_box_contact_force:.6f}",
+                        flush=True,
+                    )
+                if (
                     args.expert
                     in {
                         "legacy_gripper_anchor",
                         "legacy_gripper_anchor_relaxed_ik",
+                        "legacy_gripper_anchor_planar_ik",
                         "servo",
                         "weighted_servo",
                         "legacy_weighted_servo",
@@ -490,7 +552,7 @@ def main() -> int:
                 state_machine.advance()
                 completed_steps += 1
                 if recorder is not None:
-                    recorder.capture(completed_steps, phase, observations, env)
+                    recorder.capture(completed_steps, phase, observations, env, state_machine)
 
         success = state_machine.check_success(env)
         cube_offset = cube.data.root_pos_w - floor.data.root_pos_w
@@ -532,7 +594,14 @@ def main() -> int:
             failure_message = "The scripted expert did not place a settled cube inside the target box"
 
         if recorder is not None:
-            recorder.capture(completed_steps, state_machine.phase_name, observations, env, force=True)
+            recorder.capture(
+                completed_steps,
+                state_machine.phase_name,
+                observations,
+                env,
+                state_machine,
+                force=True,
+            )
             recorder.finish(
                 {
                     "status": "failed" if failure_message else "passed",
@@ -551,6 +620,14 @@ def main() -> int:
                     "cube_offset_from_box": _rounded_row(cube_offset[0]),
                     "gripper_final_pos_w": _rounded_row(ee_frame.data.target_pos_w[0, 0]),
                     "jaw_final_pos_w": _rounded_row(ee_frame.data.target_pos_w[0, 1]),
+                    "safety_mode": getattr(state_machine, "safety_mode", None),
+                    "cube_clearance": _finite_or_none(getattr(state_machine, "cube_clearance", None)),
+                    "minimum_robot_clearance": _finite_or_none(
+                        getattr(state_machine, "minimum_robot_clearance", None)
+                    ),
+                    "maximum_box_contact_force": _finite_or_none(
+                        getattr(state_machine, "maximum_box_contact_force", None)
+                    ),
                 }
             )
 

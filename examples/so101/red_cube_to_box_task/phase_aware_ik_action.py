@@ -21,14 +21,17 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
     def __init__(self, cfg, env) -> None:
         super().__init__(cfg, env)
         self._orientation_weight = 1.0
+        self._planar_pose = False
 
     def reset(self, env_ids=None) -> None:
         super().reset(env_ids)
         self._orientation_weight = 1.0
+        self._planar_pose = False
 
     def set_position_only(self, *, enabled: bool) -> None:
         """Select whether the next physics applications solve translation only."""
 
+        self._planar_pose = False
         self._orientation_weight = 0.0 if enabled else 1.0
 
     def set_orientation_weight(self, *, weight: float) -> None:
@@ -36,11 +39,23 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
 
         if not 0.0 <= weight <= 1.0:
             raise ValueError(f"Orientation weight must be in [0, 1], received {weight}")
+        self._planar_pose = False
         self._orientation_weight = float(weight)
+
+    def set_planar_pose(self, *, enabled: bool) -> None:
+        """Solve X/Y translation and all three orientation rows while leaving Z free."""
+
+        self._planar_pose = enabled
+        if enabled:
+            self._orientation_weight = 1.0
 
     @property
     def position_only(self) -> bool:
-        return self._orientation_weight == 0.0
+        return not self._planar_pose and self._orientation_weight == 0.0
+
+    @property
+    def planar_pose(self) -> bool:
+        return self._planar_pose
 
     @property
     def orientation_weight(self) -> float:
@@ -48,6 +63,8 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
 
     @property
     def runtime_mode(self) -> str:
+        if self._planar_pose:
+            return "planar_pose(xy+orientation)"
         if self._orientation_weight == 1.0:
             return "pose"
         if self._orientation_weight == 0.0:
@@ -55,7 +72,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         return f"translation_priority(weight={self._orientation_weight:g})"
 
     def apply_actions(self) -> None:
-        if self._orientation_weight == 1.0:
+        if not self._planar_pose and self._orientation_weight == 1.0:
             super().apply_actions()
             return
 
@@ -71,7 +88,17 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         if desired_quat is None:
             desired_quat = self._ik_controller._ee_quat_des  # noqa: SLF001
 
-        if self.position_only:
+        if self._planar_pose:
+            position_error, orientation_error = compute_pose_error(
+                ee_pos_curr,
+                ee_quat_curr,
+                desired_pos,
+                desired_quat,
+                rot_error_type="axis_angle",
+            )
+            task_error = torch.cat((position_error[:, :2], orientation_error), dim=1)
+            task_jacobian = torch.cat((jacobian[:, :2, :], jacobian[:, 3:, :]), dim=1)
+        elif self.position_only:
             task_error = desired_pos - ee_pos_curr
             task_jacobian = jacobian[:, :3, :]
         else:
