@@ -22,6 +22,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         super().__init__(cfg, env)
         self._orientation_weight = 1.0
         self._planar_pose = False
+        self._xyz_tilt = False
         self._weighted_position_penalties: torch.Tensor | None = None
         self._weighted_position_damping: float | None = None
         self._weighted_joint_names: tuple[str, ...] = ()
@@ -31,6 +32,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         super().reset(env_ids)
         self._orientation_weight = 1.0
         self._planar_pose = False
+        self._xyz_tilt = False
         self._weighted_position_penalties = None
         self._weighted_position_damping = None
         self._weighted_joint_names = ()
@@ -40,6 +42,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         """Select whether the next physics applications solve translation only."""
 
         self._planar_pose = False
+        self._xyz_tilt = False
         self._orientation_weight = 0.0 if enabled else 1.0
         self._weighted_position_penalties = None
         self._weighted_position_damping = None
@@ -52,6 +55,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         if not 0.0 <= weight <= 1.0:
             raise ValueError(f"Orientation weight must be in [0, 1], received {weight}")
         self._planar_pose = False
+        self._xyz_tilt = False
         self._orientation_weight = float(weight)
         self._weighted_position_penalties = None
         self._weighted_position_damping = None
@@ -62,6 +66,19 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         """Solve X/Y translation and all three orientation rows while leaving Z free."""
 
         self._planar_pose = enabled
+        self._xyz_tilt = False
+        self._weighted_position_penalties = None
+        self._weighted_position_damping = None
+        self._weighted_joint_names = ()
+        self._last_weighted_delta_joint_pos = None
+        if enabled:
+            self._orientation_weight = 1.0
+
+    def set_xyz_tilt(self, *, enabled: bool) -> None:
+        """Solve XYZ and world-frame roll/pitch rows while leaving yaw free."""
+
+        self._xyz_tilt = enabled
+        self._planar_pose = False
         self._weighted_position_penalties = None
         self._weighted_position_damping = None
         self._weighted_joint_names = ()
@@ -92,6 +109,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
             raise ValueError(f"Weighted-DLS penalties must be positive, received {penalties}")
 
         self._planar_pose = False
+        self._xyz_tilt = False
         self._orientation_weight = 0.0
         self._weighted_position_penalties = torch.tensor(
             penalties,
@@ -110,6 +128,10 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         return self._planar_pose
 
     @property
+    def xyz_tilt(self) -> bool:
+        return self._xyz_tilt
+
+    @property
     def orientation_weight(self) -> float:
         return self._orientation_weight
 
@@ -117,6 +139,8 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
     def runtime_mode(self) -> str:
         if self._planar_pose:
             return "planar_pose(xy+orientation)"
+        if self._xyz_tilt:
+            return "xyz_tilt(xyz+orientation_xy)"
         if self._weighted_position_penalties is not None:
             return f"weighted_position_only(damping={self._weighted_position_damping:g})"
         if self._orientation_weight == 1.0:
@@ -126,7 +150,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         return f"translation_priority(weight={self._orientation_weight:g})"
 
     def apply_actions(self) -> None:
-        if not self._planar_pose and self._orientation_weight == 1.0:
+        if not self._planar_pose and not self._xyz_tilt and self._orientation_weight == 1.0:
             super().apply_actions()
             return
 
@@ -152,6 +176,16 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
             )
             task_error = torch.cat((position_error[:, :2], orientation_error), dim=1)
             task_jacobian = torch.cat((jacobian[:, :2, :], jacobian[:, 3:, :]), dim=1)
+        elif self._xyz_tilt:
+            position_error, orientation_error = compute_pose_error(
+                ee_pos_curr,
+                ee_quat_curr,
+                desired_pos,
+                desired_quat,
+                rot_error_type="axis_angle",
+            )
+            task_error = torch.cat((position_error, orientation_error[:, :2]), dim=1)
+            task_jacobian = torch.cat((jacobian[:, :3, :], jacobian[:, 3:5, :]), dim=1)
         elif self.position_only:
             task_error = desired_pos - ee_pos_curr
             task_jacobian = jacobian[:, :3, :]
@@ -183,9 +217,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
                 + self._weighted_position_damping**2 * task_identity
             )
             task_solution = torch.linalg.solve(damped_system, task_error.unsqueeze(-1))
-            delta_joint_pos = (
-                inverse_penalties @ jacobian_transpose @ task_solution
-            ).squeeze(-1)
+            delta_joint_pos = (inverse_penalties @ jacobian_transpose @ task_solution).squeeze(-1)
             self._last_weighted_delta_joint_pos = delta_joint_pos.detach().clone()
         else:
             # Reuse IsaacLab's exact configured IK method for every unweighted mode.

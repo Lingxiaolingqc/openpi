@@ -282,10 +282,16 @@ IK joint delta, making it possible to distinguish solver preference from actuato
 The `legacy_gripper_anchor_safe_planar_align_then_lower` variant replaces the visually contorted
 position-only high align without overwriting that comparison expert. Pickup, transfer, align-first ordering,
 and full-pose descent remain identical to the legacy control. High alignment solves jaw X/Y plus all three
-orientation rows; Z is absent from the IK error and Jacobian. Z is instead safety-gated: cube height must stay
-within `0.020 m` of its value on align entry, cube-bottom clearance above the box wall must remain at least
-`0.015 m`, robot geometry clearance at least `0.010 m`, and filtered box contact below `0.25 N`. A violation
+orientation rows; Z is absent from the IK error and Jacobian. Z is allowed to move freely while safety gates
+require cube-bottom clearance above the box wall to remain at least `0.015 m`, robot geometry clearance at
+least `0.010 m`, and filtered box contact below `0.25 N`. A violation
 aborts before another action is applied instead of invoking a position-only recovery motion.
+
+The companion `legacy_gripper_anchor_safe_xyz_tilt_align_then_lower` control includes XYZ in the high-align
+task while retaining two world-frame orientation rows and leaving world yaw free. It therefore also presents
+five task rows to the five arm joints, holds Z at the height measured on align entry, and avoids both the
+three-row position-only posture freedom and the six-row full-pose over-constraint. It uses the same physical
+clearance and contact gates as the no-Z control.
 
 The separate `legacy_gripper_anchor_relaxed_ik` variant keeps that same jaw target and safety gate but uses the
 phase-aware IK action only for constraint weighting. All phases through lowering retain the exact pose solve.
@@ -320,6 +326,9 @@ zero-error pose instead of returning to an old fixed Z target.
 
 # Solve jaw XY plus orientation at high align; observe Z only through safety gates.
 --expert legacy_gripper_anchor_safe_planar_align_then_lower
+
+# Control XYZ plus world roll/pitch at high align; leave world yaw free.
+--expert legacy_gripper_anchor_safe_xyz_tilt_align_then_lower
 
 # Add staged weak-orientation then position-only IK during final jaw alignment.
 --expert legacy_gripper_anchor_relaxed_ik

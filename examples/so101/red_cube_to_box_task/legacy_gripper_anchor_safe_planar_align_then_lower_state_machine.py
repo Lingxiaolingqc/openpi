@@ -1,4 +1,4 @@
-"""Align high with XY-plus-orientation IK while treating Z as a safety band."""
+"""Align high with XY-plus-orientation IK and physical Z-clearance gates."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ from .phase_aware_ik_action import resolve_action_term
 _GRIPPER_CLOSE = -1.0
 _MIN_CUBE_CLEARANCE = 0.015
 _MIN_ROBOT_CLEARANCE = 0.010
-_ALIGN_Z_HALF_BAND = 0.020
 _CONTACT_FORCE_THRESHOLD = 0.25
 _BOX_CONTACT_SENSOR_NAMES = (
     "lower_arm_box_contact",
@@ -79,9 +78,17 @@ class RedCubeToBoxLegacyGripperAnchorSafePlanarAlignThenLowerStateMachine(
         # The task has exactly five rows for the five arm joints: jaw X/Y and
         # all three orientation rows. Z is observed by the safety gate above,
         # but it is deliberately absent from the IK error and Jacobian.
-        self._arm_action_term.set_planar_pose(enabled=True)
-        self._safety_mode = "planar_xy_orientation_z_gated"
+        self._configure_high_align_ik()
+        self._safety_mode = self._high_align_safety_mode
         return super().get_action(env)
+
+    def _configure_high_align_ik(self) -> None:
+        assert self._arm_action_term is not None
+        self._arm_action_term.set_planar_pose(enabled=True)
+
+    @property
+    def _high_align_safety_mode(self) -> str:
+        return "planar_xy_orientation_physical_z_gates"
 
     def reset(self) -> None:
         super().reset()
@@ -122,8 +129,6 @@ class RedCubeToBoxLegacyGripperAnchorSafePlanarAlignThenLowerStateMachine(
             self._servo_abort_reason = "align_cube_clearance_below_safe_range"
         elif self._minimum_robot_clearance < _MIN_ROBOT_CLEARANCE:
             self._servo_abort_reason = "align_robot_clearance_below_safe_range"
-        elif self._align_cube_z_error > _ALIGN_Z_HALF_BAND:
-            self._servo_abort_reason = "align_cube_z_left_safe_band"
 
     @staticmethod
     def _robot_geometry_clearance(env, box_xy: torch.Tensor) -> float:
@@ -159,10 +164,9 @@ class RedCubeToBoxLegacyGripperAnchorSafePlanarAlignThenLowerStateMachine(
         parameters.update(
             {
                 "high_align_controller": "planar_pose_xy_plus_orientation",
-                "high_align_z_policy": "excluded_from_ik_and_safety_gated",
+                "high_align_z_policy": "excluded_from_ik_physical_clearance_only",
                 "minimum_cube_clearance": _MIN_CUBE_CLEARANCE,
                 "minimum_robot_clearance": _MIN_ROBOT_CLEARANCE,
-                "align_z_half_band": _ALIGN_Z_HALF_BAND,
                 "contact_force_threshold": _CONTACT_FORCE_THRESHOLD,
             }
         )

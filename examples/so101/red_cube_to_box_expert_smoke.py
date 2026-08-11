@@ -27,6 +27,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "legacy_gripper_anchor_position_align_then_lower",
             "legacy_gripper_anchor_weighted_position_align_then_lower",
             "legacy_gripper_anchor_safe_planar_align_then_lower",
+            "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
             "legacy_gripper_anchor_relaxed_ik",
             "legacy_gripper_anchor_planar_ik",
             "adaptive",
@@ -279,6 +280,9 @@ def main() -> int:
     from red_cube_to_box_task.legacy_gripper_anchor_safe_planar_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorSafePlanarAlignThenLowerStateMachine,
     )
+    from red_cube_to_box_task.legacy_gripper_anchor_safe_xyz_tilt_align_then_lower_state_machine import (
+        RedCubeToBoxLegacyGripperAnchorSafeXyzTiltAlignThenLowerStateMachine,
+    )
     from red_cube_to_box_task.legacy_weighted_servo_state_machine import (
         RedCubeToBoxLegacyWeightedServoStateMachine,
     )
@@ -316,6 +320,7 @@ def main() -> int:
         if args.expert in {
             "legacy_gripper_anchor_planar_ik",
             "legacy_gripper_anchor_safe_planar_align_then_lower",
+            "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
         }:
             configure_planar_safety_sensors(env_cfg)
         if args.expert in {
@@ -324,6 +329,7 @@ def main() -> int:
             "legacy_gripper_anchor_position_align_then_lower",
             "legacy_gripper_anchor_weighted_position_align_then_lower",
             "legacy_gripper_anchor_safe_planar_align_then_lower",
+            "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
             "servo",
             "weighted_servo",
             "legacy_weighted_servo",
@@ -346,7 +352,10 @@ def main() -> int:
                 "shoulder_pan_priority_xyz_align,legacy_pose_descent"
             ),
             "legacy_gripper_anchor_safe_planar_align_then_lower": (
-                "xy_plus_orientation_high_align,z_safety_band,legacy_pose_descent"
+                "xy_plus_orientation_high_align,physical_z_gates,legacy_pose_descent"
+            ),
+            "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower": (
+                "xyz_plus_world_tilt_high_align,free_yaw,physical_safety_gates,legacy_pose_descent"
             ),
             "legacy_gripper_anchor_relaxed_ik": "legacy_fixed_world,jaw_anchor_then_staged_relaxation",
             "legacy_gripper_anchor_planar_ik": "legacy_fixed_world,collision_gated_xy_plus_orientation",
@@ -376,6 +385,9 @@ def main() -> int:
             ),
             "legacy_gripper_anchor_safe_planar_align_then_lower": (
                 RedCubeToBoxLegacyGripperAnchorSafePlanarAlignThenLowerStateMachine
+            ),
+            "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower": (
+                RedCubeToBoxLegacyGripperAnchorSafeXyzTiltAlignThenLowerStateMachine
             ),
             "legacy_gripper_anchor_relaxed_ik": RedCubeToBoxLegacyGripperAnchorRelaxedIkStateMachine,
             "legacy_gripper_anchor_planar_ik": RedCubeToBoxLegacyGripperAnchorPlanarIkStateMachine,
@@ -480,6 +492,7 @@ def main() -> int:
                         "legacy_gripper_anchor_position_align_then_lower",
                         "legacy_gripper_anchor_weighted_position_align_then_lower",
                         "legacy_gripper_anchor_safe_planar_align_then_lower",
+                        "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
                         "legacy_gripper_anchor_relaxed_ik",
                         "legacy_gripper_anchor_planar_ik",
                     }
@@ -503,6 +516,7 @@ def main() -> int:
                     in {
                         "legacy_gripper_anchor_planar_ik",
                         "legacy_gripper_anchor_safe_planar_align_then_lower",
+                        "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
                     }
                     and phase in {"lower_into_box", "align_over_box", "release_cube"}
                     and (phase_changed or state_machine.step_count % 25 == 0)
@@ -544,6 +558,7 @@ def main() -> int:
                         "legacy_gripper_anchor_position_align_then_lower",
                         "legacy_gripper_anchor_weighted_position_align_then_lower",
                         "legacy_gripper_anchor_safe_planar_align_then_lower",
+                        "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
                         "legacy_gripper_anchor_relaxed_ik",
                         "legacy_gripper_anchor_planar_ik",
                         "servo",
