@@ -426,8 +426,8 @@ def main() -> int:
                 "legacy_fixed_world,dynamic_per-grasp_placement_xy,single_post-transfer_residual_correction"
             ),
             "autogen_retreat_transport": (
-                "legacy_pickup,live_gripper_retreat,live_gripper_transport,xyz_tilt_free_yaw,"
-                "dynamic_per-grasp_placement_xy,single_post-transfer_residual_correction"
+                "legacy_pickup,live_gripper_retreat,live_gripper_transport,full_6d_pose,"
+                "target_box_floor_center_xy,no_grasp_offset,no_residual_correction"
             ),
             "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
             "legacy_gripper_anchor_align_then_lower": "legacy_fixed_world,align_high_then_descend",
@@ -603,7 +603,6 @@ def main() -> int:
                     in {
                         "legacy_dynamic_grasp_offset",
                         "legacy_dynamic_grasp_offset_residual_corrected",
-                        "autogen_retreat_transport",
                     }
                     and phase in {"lift_cube", "retreat_to_safe", "transfer_to_box", "lower_into_box", "release_cube"}
                     and (phase_changed or completed_steps % 25 == 0)
@@ -626,7 +625,6 @@ def main() -> int:
                     args.expert
                     in {
                         "legacy_dynamic_grasp_offset_residual_corrected",
-                        "autogen_retreat_transport",
                     }
                     and phase in {"lower_into_box", "release_cube", "retract_gripper", "settle"}
                     and (phase_changed or completed_steps % 25 == 0)
@@ -676,7 +674,8 @@ def main() -> int:
                         f"transport_start_gripper_w="
                         f"{None if state_machine.transport_start_gripper_w is None else _rounded_row(state_machine.transport_start_gripper_w[0], digits=7)}:"
                         f"transport_target_w="
-                        f"{None if state_machine.transport_target_w is None else _rounded_row(state_machine.transport_target_w[0], digits=7)}",
+                        f"{None if state_machine.transport_target_w is None else _rounded_row(state_machine.transport_target_w[0], digits=7)}:"
+                        f"placement_xy_policy=target_box_floor_center_without_offset",
                         flush=True,
                     )
                 ik_runtime_mode = getattr(state_machine, "ik_runtime_mode", "pose")
@@ -855,10 +854,12 @@ def main() -> int:
                         "legacy_position_servo",
                         "legacy_pd_position_servo",
                         "legacy_trajectory_pd_servo",
+                        "autogen_retreat_transport",
                     }
                     and phase
                     in {
                         "lift_cube",
+                        "retreat_to_safe",
                         "transfer_to_box",
                         "lower_into_box",
                         "align_over_box",

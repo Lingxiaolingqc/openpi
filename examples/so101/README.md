@@ -334,12 +334,13 @@ tail -n 320
 
 The independent `autogen_retreat_transport` expert adapts the movement pattern from
 [`haoran1062/so101-autogen`](https://github.com/haoran1062/so101-autogen/) without replacing any existing expert.
-It preserves the validated legacy pickup and the dynamic per-grasp placement/release safeguards above. After lift it
+It preserves the validated legacy pickup and the safe release-height/release-gate safeguards above. After lift it
 captures the live gripper pose, moves to a high safe point whose XY radius about the robot root is `5/7` of the entry
-radius, then captures the live pose again and transports to the compensated box hover target. Both segments move their
-Cartesian reference by at most `0.0025 m` per control step. From retreat through settle it uses the five-row `xyz_tilt`
-IK mode: XYZ and world roll/pitch remain constrained while yaw is free, avoiding a discontinuous yaw re-lock when lower
-begins. This is not a pre-rotation phase and it does not command `shoulder_pan` directly.
+radius, then captures the live pose again and transports directly to the live target-box floor-center XY. Both segments
+move their Cartesian reference by at most `0.0025 m` per control step. This comparison disables both inherited
+`cube_xy - gripper_xy` samplers and the residual placement correction. It keeps the complete 6D legacy pose constraint
+through retreat, transport, lower, and release so yaw cannot drift while the cube is held. This is not a pre-rotation
+phase and it does not command `shoulder_pan` directly.
 
 ```bash
 export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
@@ -373,7 +374,7 @@ autogen_retreat_status=${PIPESTATUS[0]}
 echo "autogen_retreat_transport_exit=$autogen_retreat_status"
 
 grep -nE \
-  'expert_phase|expert_state|expert_autogen_path|expert_ik_runtime_mode|expert_dynamic_grasp_offset|expert_transfer_residual_correction|expert_lower_release_gate|release_block_reason|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
+  'expert_phase|expert_state|expert_autogen_path|expert_tracking|expert_grasp_event|expert_ik_runtime_mode|expert_lower_release_gate|release_block_reason|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
   "$AUTOGEN_RETREAT_LOG" |
 tail -n 360
 ```

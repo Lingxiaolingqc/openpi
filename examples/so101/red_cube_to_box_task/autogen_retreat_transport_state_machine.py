@@ -16,14 +16,6 @@ _RETREAT_HEIGHT_ABOVE_FLOOR_CENTER = 0.30
 _BOX_HOVER_HEIGHT_ABOVE_FLOOR_CENTER = 0.25
 _RETREAT_CARTESIAN_STEP = 0.0025
 _TRANSPORT_CARTESIAN_STEP = 0.0025
-_PLACEMENT_XYZ_TILT_PHASES = {
-    "retreat_to_safe",
-    "transfer_to_box",
-    "lower_into_box",
-    "release_cube",
-    "retract_gripper",
-    "settle",
-}
 
 
 class RedCubeToBoxAutogenRetreatTransportStateMachine(
@@ -35,9 +27,10 @@ class RedCubeToBoxAutogenRetreatTransportStateMachine(
     Pickup and lift remain the validated legacy sequence. At retreat entry the
     live gripper position is captured, moved to five sevenths of its horizontal
     radius from the robot root, and raised above the scene. Transport captures
-    the live gripper position again and moves from there to the dynamically
-    compensated box hover target. Both moves are bounded to 2.5 mm per control
-    step. XYZ plus world roll/pitch are constrained while yaw remains free.
+    the live gripper position again and moves from there to the box-floor
+    center without a grasp offset or residual placement correction. Both moves
+    are bounded to 2.5 mm per control step. Full 6D pose IK is retained so the
+    grasp orientation cannot drift during retreat and transport.
     """
 
     _PHASES = (
@@ -74,10 +67,7 @@ class RedCubeToBoxAutogenRetreatTransportStateMachine(
             raise RuntimeError("Call setup(env) before requesting an AutoGen-style expert action")
 
         phase_name, phase_step, _ = self._phase_state()
-        if phase_name in _PLACEMENT_XYZ_TILT_PHASES:
-            self._arm_action_term.set_xyz_tilt(enabled=True)
-        else:
-            self._arm_action_term.set_orientation_weight(weight=1.0)
+        self._arm_action_term.set_orientation_weight(weight=1.0)
 
         if phase_name == "retreat_to_safe":
             self._initialize_retreat(env)
@@ -94,7 +84,6 @@ class RedCubeToBoxAutogenRetreatTransportStateMachine(
 
         if phase_name == "transfer_to_box":
             self._initialize_transport(env)
-            self._sample_transfer_grasp_offset(env, phase_step)
             assert self._transport_start_gripper_w is not None
             assert self._transport_target_w is not None
             target_pos_w = self._constant_speed_target(
@@ -144,13 +133,37 @@ class RedCubeToBoxAutogenRetreatTransportStateMachine(
             return
 
         assert self._floor_anchor is not None
-        placement_target_xy = self._placement_gripper_target_xy(env, "transfer_to_box")
         transport_target_w = self._floor_anchor.clone()
-        transport_target_w[:, :2] = placement_target_xy
         transport_target_w[:, 2] += _BOX_HOVER_HEIGHT_ABOVE_FLOOR_CENTER
 
         self._transport_start_gripper_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :].detach().clone()
         self._transport_target_w = transport_target_w.detach().clone()
+
+    def _sample_grasp_offset(self, env, phase_step: int) -> None:
+        """Disable the inherited late-lift placement-offset measurement."""
+        del env, phase_step
+
+    def _sample_transfer_grasp_offset(self, env, phase_step: int) -> None:
+        """Disable the inherited late-transfer residual measurement."""
+        del env, phase_step
+
+    def _finalize_grasp_offset(self, env) -> None:
+        """Populate parent fields with an explicit box-center zero offset."""
+        if self._dynamic_gripper_target_xy is not None:
+            return
+        self._initialize_anchors(env)
+        assert self._floor_anchor is not None
+        zero_xy = torch.zeros_like(self._floor_anchor[:, :2])
+        self._gripper_to_cube_xy = zero_xy.clone()
+        self._desired_cube_xy = self._floor_anchor[:, :2].detach().clone()
+        self._dynamic_gripper_target_xy = self._floor_anchor[:, :2].detach().clone()
+        self._dynamic_place_offset_xy = zero_xy.clone()
+
+    def _placement_gripper_target_xy(self, env, phase_name: str) -> torch.Tensor:
+        """Use the box-floor center directly in every placement phase."""
+        del env, phase_name
+        assert self._floor_anchor is not None
+        return self._floor_anchor[:, :2]
 
     @staticmethod
     def _constant_speed_target(
@@ -168,8 +181,23 @@ class RedCubeToBoxAutogenRetreatTransportStateMachine(
     @property
     def servo_parameters(self) -> dict[str, float | int | str]:
         parameters = super().servo_parameters
+        for key in (
+            "grasp_offset_sample_start_step",
+            "minimum_captured_lift",
+            "box_to_root_safety_distance",
+            "residual_correction_phase",
+            "maximum_residual_correction",
+            "transfer_grasp_offset_measurement",
+            "transfer_grasp_offset_sample_start_step",
+            "minimum_transfer_cube_height",
+        ):
+            parameters.pop(key, None)
         parameters.update(
             {
+                "changed_component": "retreat_transport_path_and_box_center_placement",
+                "placement_xy_policy": "target_box_floor_center_without_offset",
+                "grasp_offset_measurement": "disabled",
+                "residual_correction_policy": "disabled",
                 "transport_reference": "so101-autogen-retreat-pattern",
                 "retreat_policy": "live_gripper_to_root_centered_five_sevenths_radius",
                 "retreat_radial_scale": _RETREAT_RADIAL_SCALE,
@@ -177,7 +205,7 @@ class RedCubeToBoxAutogenRetreatTransportStateMachine(
                 "retreat_cartesian_step": _RETREAT_CARTESIAN_STEP,
                 "transport_start": "live_gripper_at_transfer_entry",
                 "transport_cartesian_step": _TRANSPORT_CARTESIAN_STEP,
-                "post_lift_ik_mode": "xyz_tilt_free_yaw_through_settle",
+                "post_lift_ik_mode": "full_6d_pose",
             }
         )
         return parameters
