@@ -19,6 +19,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=(
             "legacy",
             "legacy_dynamic_grasp_offset",
+            "legacy_dynamic_grasp_offset_residual_corrected",
             "legacy_gripper_anchor",
             "legacy_gripper_anchor_align_then_lower",
             "legacy_gripper_anchor_position_align_then_lower",
@@ -129,6 +130,9 @@ def main() -> int:
     from red_cube_to_box_task.legacy_dynamic_grasp_offset_state_machine import (
         RedCubeToBoxLegacyDynamicGraspOffsetStateMachine,
     )
+    from red_cube_to_box_task.legacy_dynamic_grasp_offset_residual_corrected_state_machine import (
+        RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine,
+    )
     from red_cube_to_box_task.phase_aware_ik_action import (
         configure_dynamic_control_frame_offset,
         configure_servo_ik_action,
@@ -197,6 +201,9 @@ def main() -> int:
         state_machine_class = {
             "legacy": RedCubeToBoxStateMachine,
             "legacy_dynamic_grasp_offset": RedCubeToBoxLegacyDynamicGraspOffsetStateMachine,
+            "legacy_dynamic_grasp_offset_residual_corrected": (
+                RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine
+            ),
             "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
             "legacy_gripper_anchor_align_then_lower": RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine,
             "legacy_gripper_anchor_position_align_then_lower": (
@@ -258,6 +265,9 @@ def main() -> int:
         orientation_policy = {
             "legacy": "fixed_world",
             "legacy_dynamic_grasp_offset": "legacy_fixed_world,dynamic_per-grasp_placement_xy",
+            "legacy_dynamic_grasp_offset_residual_corrected": (
+                "legacy_fixed_world,dynamic_per-grasp_placement_xy,single_post-transfer_residual_correction"
+            ),
             "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
             "legacy_gripper_anchor_align_then_lower": "legacy_fixed_world,align_high_then_descend",
             "legacy_gripper_anchor_position_align_then_lower": "position_only_high_align,legacy_pose_descent",

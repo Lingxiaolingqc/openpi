@@ -55,6 +55,7 @@ class RedCubeToBoxLegacyDynamicGraspOffsetStateMachine(RedCubeToBoxStateMachine)
         assert self._floor_anchor is not None
         self._finalize_grasp_offset(env)
         assert self._dynamic_gripper_target_xy is not None
+        placement_gripper_target_xy = self._placement_gripper_target_xy(env, phase_name)
 
         pick_lift = self._cube_anchor.clone()
         pick_lift[:, 0] += _LEGACY_PICK_XY_OFFSET[0]
@@ -62,11 +63,11 @@ class RedCubeToBoxLegacyDynamicGraspOffsetStateMachine(RedCubeToBoxStateMachine)
         pick_lift[:, 2] += _LEGACY_PICK_LIFT_HEIGHT
 
         box_hover = self._floor_anchor.clone()
-        box_hover[:, :2] = self._dynamic_gripper_target_xy
+        box_hover[:, :2] = placement_gripper_target_xy
         box_hover[:, 2] += 0.25
 
         box_release = self._floor_anchor.clone()
-        box_release[:, :2] = self._dynamic_gripper_target_xy
+        box_release[:, :2] = placement_gripper_target_xy
         box_release[:, 2] += TARGET_BOX_FLOOR_THICKNESS / 2.0 + 0.13
 
         if phase_name == "transfer_to_box":
@@ -87,6 +88,12 @@ class RedCubeToBoxLegacyDynamicGraspOffsetStateMachine(RedCubeToBoxStateMachine)
 
         self._last_gripper_target_w = target_pos_w.detach().clone()
         return self._compose_legacy_pose_action(env, target_pos_w, gripper)
+
+    def _placement_gripper_target_xy(self, env, phase_name: str) -> torch.Tensor:
+        """Return the frozen placement target, with an override point for comparisons."""
+        del env, phase_name
+        assert self._dynamic_gripper_target_xy is not None
+        return self._dynamic_gripper_target_xy
 
     def reset(self) -> None:
         super().reset()

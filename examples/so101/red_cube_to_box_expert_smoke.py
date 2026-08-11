@@ -23,6 +23,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=(
             "legacy",
             "legacy_dynamic_grasp_offset",
+            "legacy_dynamic_grasp_offset_residual_corrected",
             "legacy_gripper_anchor",
             "legacy_gripper_anchor_align_then_lower",
             "legacy_gripper_anchor_position_align_then_lower",
@@ -305,6 +306,9 @@ def main() -> int:
     from red_cube_to_box_task.legacy_dynamic_grasp_offset_state_machine import (
         RedCubeToBoxLegacyDynamicGraspOffsetStateMachine,
     )
+    from red_cube_to_box_task.legacy_dynamic_grasp_offset_residual_corrected_state_machine import (
+        RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine,
+    )
     from red_cube_to_box_task.legacy_weighted_servo_state_machine import (
         RedCubeToBoxLegacyWeightedServoStateMachine,
     )
@@ -388,6 +392,9 @@ def main() -> int:
         orientation_policy = {
             "legacy": "fixed_world",
             "legacy_dynamic_grasp_offset": "legacy_fixed_world,dynamic_per-grasp_placement_xy",
+            "legacy_dynamic_grasp_offset_residual_corrected": (
+                "legacy_fixed_world,dynamic_per-grasp_placement_xy,single_post-transfer_residual_correction"
+            ),
             "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
             "legacy_gripper_anchor_align_then_lower": "legacy_fixed_world,align_high_then_descend",
             "legacy_gripper_anchor_position_align_then_lower": "position_only_high_align,legacy_pose_descent",
@@ -435,6 +442,9 @@ def main() -> int:
         state_machine_class = {
             "legacy": RedCubeToBoxStateMachine,
             "legacy_dynamic_grasp_offset": RedCubeToBoxLegacyDynamicGraspOffsetStateMachine,
+            "legacy_dynamic_grasp_offset_residual_corrected": (
+                RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine
+            ),
             "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
             "legacy_gripper_anchor_align_then_lower": RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine,
             "legacy_gripper_anchor_position_align_then_lower": (
@@ -554,7 +564,11 @@ def main() -> int:
                             flush=True,
                         )
                 if (
-                    args.expert == "legacy_dynamic_grasp_offset"
+                    args.expert
+                    in {
+                        "legacy_dynamic_grasp_offset",
+                        "legacy_dynamic_grasp_offset_residual_corrected",
+                    }
                     and phase in {"lift_cube", "transfer_to_box", "lower_into_box", "release_cube"}
                     and (phase_changed or state_machine.step_count % 25 == 0)
                 ):
@@ -570,6 +584,23 @@ def main() -> int:
                         f"{None if state_machine.dynamic_gripper_target_xy is None else _rounded_row(state_machine.dynamic_gripper_target_xy[0], digits=7)}:"
                         f"dynamic_place_offset_xy="
                         f"{None if state_machine.dynamic_place_offset_xy is None else _rounded_row(state_machine.dynamic_place_offset_xy[0], digits=7)}",
+                        flush=True,
+                    )
+                if (
+                    args.expert == "legacy_dynamic_grasp_offset_residual_corrected"
+                    and phase in {"lower_into_box", "release_cube", "retract_gripper", "settle"}
+                    and (phase_changed or state_machine.step_count % 25 == 0)
+                ):
+                    print(
+                        f"expert_transfer_residual_correction:{phase}:"
+                        f"raw_residual_xy="
+                        f"{None if state_machine.raw_transfer_residual_xy is None else _rounded_row(state_machine.raw_transfer_residual_xy[0], digits=7)}:"
+                        f"applied_residual_xy="
+                        f"{None if state_machine.applied_transfer_residual_xy is None else _rounded_row(state_machine.applied_transfer_residual_xy[0], digits=7)}:"
+                        f"corrected_gripper_target_xy="
+                        f"{None if state_machine.corrected_gripper_target_xy is None else _rounded_row(state_machine.corrected_gripper_target_xy[0], digits=7)}:"
+                        f"actual_cube_xy={_rounded_row(cube.data.root_pos_w[0, :2], digits=7)}:"
+                        f"desired_cube_xy={_rounded_row(state_machine.desired_cube_xy[0], digits=7)}",
                         flush=True,
                     )
                 ik_runtime_mode = getattr(state_machine, "ik_runtime_mode", "pose")
