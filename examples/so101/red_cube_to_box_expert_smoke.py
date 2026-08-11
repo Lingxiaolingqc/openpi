@@ -24,6 +24,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "legacy_gripper_anchor",
             "legacy_gripper_anchor_align_then_lower",
             "legacy_gripper_anchor_position_align_then_lower",
+            "legacy_gripper_anchor_weighted_position_align_then_lower",
             "legacy_gripper_anchor_relaxed_ik",
             "legacy_gripper_anchor_planar_ik",
             "adaptive",
@@ -270,6 +271,9 @@ def main() -> int:
     from red_cube_to_box_task.legacy_gripper_anchor_position_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorPositionAlignThenLowerStateMachine,
     )
+    from red_cube_to_box_task.legacy_gripper_anchor_weighted_position_align_then_lower_state_machine import (
+        RedCubeToBoxLegacyGripperAnchorWeightedPositionAlignThenLowerStateMachine,
+    )
     from red_cube_to_box_task.legacy_weighted_servo_state_machine import (
         RedCubeToBoxLegacyWeightedServoStateMachine,
     )
@@ -310,6 +314,7 @@ def main() -> int:
             "legacy_gripper_anchor_relaxed_ik",
             "legacy_gripper_anchor_planar_ik",
             "legacy_gripper_anchor_position_align_then_lower",
+            "legacy_gripper_anchor_weighted_position_align_then_lower",
             "servo",
             "weighted_servo",
             "legacy_weighted_servo",
@@ -328,6 +333,9 @@ def main() -> int:
             "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
             "legacy_gripper_anchor_align_then_lower": "legacy_fixed_world,align_high_then_descend",
             "legacy_gripper_anchor_position_align_then_lower": "position_only_high_align,legacy_pose_descent",
+            "legacy_gripper_anchor_weighted_position_align_then_lower": (
+                "shoulder_pan_priority_xyz_align,legacy_pose_descent"
+            ),
             "legacy_gripper_anchor_relaxed_ik": "legacy_fixed_world,jaw_anchor_then_staged_relaxation",
             "legacy_gripper_anchor_planar_ik": "legacy_fixed_world,collision_gated_xy_plus_orientation",
             "adaptive": "fixed_during_grasp,current_after_grasp",
@@ -350,6 +358,9 @@ def main() -> int:
             "legacy_gripper_anchor_align_then_lower": RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine,
             "legacy_gripper_anchor_position_align_then_lower": (
                 RedCubeToBoxLegacyGripperAnchorPositionAlignThenLowerStateMachine
+            ),
+            "legacy_gripper_anchor_weighted_position_align_then_lower": (
+                RedCubeToBoxLegacyGripperAnchorWeightedPositionAlignThenLowerStateMachine
             ),
             "legacy_gripper_anchor_relaxed_ik": RedCubeToBoxLegacyGripperAnchorRelaxedIkStateMachine,
             "legacy_gripper_anchor_planar_ik": RedCubeToBoxLegacyGripperAnchorPlanarIkStateMachine,
@@ -452,6 +463,7 @@ def main() -> int:
                         "legacy_gripper_anchor",
                         "legacy_gripper_anchor_align_then_lower",
                         "legacy_gripper_anchor_position_align_then_lower",
+                        "legacy_gripper_anchor_weighted_position_align_then_lower",
                         "legacy_gripper_anchor_relaxed_ik",
                         "legacy_gripper_anchor_planar_ik",
                     }
@@ -484,11 +496,31 @@ def main() -> int:
                         flush=True,
                     )
                 if (
+                    args.expert == "legacy_gripper_anchor_weighted_position_align_then_lower"
+                    and phase == "align_over_box"
+                    and (phase_changed or state_machine.step_count % 25 == 0)
+                ):
+                    weighted_delta = state_machine.last_weighted_delta_joint_pos
+                    if weighted_delta is not None:
+                        weighted_joint_names = state_machine.weighted_joint_names
+                        weighted_joint_ids = [
+                            robot.data.joint_names.index(joint_name) for joint_name in weighted_joint_names
+                        ]
+                        arm_joint_pos = robot.data.joint_pos[0, weighted_joint_ids]
+                        print(
+                            f"expert_weighted_ik:{phase}:"
+                            f"joint_names={weighted_joint_names}:"
+                            f"joint_pos={_rounded_row(arm_joint_pos)}:"
+                            f"delta_joint_pos={_rounded_row(weighted_delta[0], digits=7)}",
+                            flush=True,
+                        )
+                if (
                     args.expert
                     in {
                         "legacy_gripper_anchor",
                         "legacy_gripper_anchor_align_then_lower",
                         "legacy_gripper_anchor_position_align_then_lower",
+                        "legacy_gripper_anchor_weighted_position_align_then_lower",
                         "legacy_gripper_anchor_relaxed_ik",
                         "legacy_gripper_anchor_planar_ik",
                         "servo",

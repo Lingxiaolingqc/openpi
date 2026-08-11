@@ -270,6 +270,15 @@ that phase is the measured high jaw position captured on entry, so it serves as 
 descent command. `lower_into_box` restores the original legacy full-pose IK. Comparing these two variants with
 the same seed tests the effect of alignment orientation constraints without also changing the descent solver.
 
+The `legacy_gripper_anchor_weighted_position_align_then_lower` variant keeps those same phases and XYZ
+targets, but replaces ordinary minimum-norm position IK during high alignment with weighted damped least
+squares. Joint motion penalties are `0.25` for `shoulder_pan`, `1.0` for `shoulder_lift` and `elbow_flex`,
+`1.5` for `wrist_flex`, and `2.0` for `wrist_roll`, with damping `0.05`. Lower penalties make a joint cheaper
+in redundant XYZ solutions, so the solver prefers base rotation when it helps reduce Cartesian error without
+hard-coding a shoulder-pan angle. Descent restores unmodified legacy full-pose IK.
+The smoke log emits `expert_weighted_ik` with the current five arm-joint positions and the preceding weighted
+IK joint delta, making it possible to distinguish solver preference from actuator or joint-limit clipping.
+
 The separate `legacy_gripper_anchor_relaxed_ik` variant keeps that same jaw target and safety gate but uses the
 phase-aware IK action only for constraint weighting. All phases through lowering retain the exact pose solve.
 During the first 120 alignment steps it sets orientation weight to `0.1`; if alignment still has not converged,
@@ -297,6 +306,9 @@ zero-error pose instead of returning to an old fixed Z target.
 
 # Use position-only XYZ IK for high alignment, then restore legacy pose IK for descent.
 --expert legacy_gripper_anchor_position_align_then_lower
+
+# Prefer shoulder-pan motion among the redundant position-only high-alignment solutions.
+--expert legacy_gripper_anchor_weighted_position_align_then_lower
 
 # Add staged weak-orientation then position-only IK during final jaw alignment.
 --expert legacy_gripper_anchor_relaxed_ik
