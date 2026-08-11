@@ -48,11 +48,11 @@ reports every named joint coordinate in radians, every named robot-body origin i
 FrameTransformer gripper and offset jaw-detection positions. These fields distinguish joint coordinates from
 Cartesian positions and prevent the raw jaw body from being mistaken for the IK end-effector.
 
-The tray center is `(0.49394, -0.40428)` in environment coordinates. Relative to the original
-`(0.520, -0.36161)` center, the complete five-piece tray is translated `0.05 m` along the tray-to-robot-root XY
-direction; its distance to the robot root decreases from about `0.326 m` to `0.276 m`. The tray consists of one
-floor and four green kinematic walls. Its success predicate requires the cube to be inside the tray bounds, below
-the wall top, and moving no faster than `0.15 m/s`.
+The tray center is `(0.20606, -0.40428)` in environment coordinates. The robot root is `(0.35, -0.64)`, and the
+zero-joint arm points primarily along world `+Y`. Relative to the preceding `(0.49394, -0.40428)` position, the
+complete tray keeps the same forward Y reach and mirrors its lateral X offset across the robot's `x=0.35` sagittal
+line: `+0.14394 m` becomes `-0.14394 m`. The tray consists of one floor and four green kinematic walls. Its success
+predicate requires the cube to be inside the tray bounds, below the wall top, and moving no faster than `0.15 m/s`.
 
 Validate environment creation and the predicate before developing the expert:
 

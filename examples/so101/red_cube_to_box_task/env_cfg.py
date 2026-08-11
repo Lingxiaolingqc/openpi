@@ -12,9 +12,9 @@ from leisaac.tasks.lift_cube.lift_cube_env_cfg import TerminationsCfg as LiftCub
 
 from . import mdp
 
-# The original center was (0.520, -0.36161). This moves the complete
-# five-piece tray 0.05 m along the tray-to-robot-root XY direction.
-TARGET_BOX_CENTER_XY = (0.49394, -0.40428)
+# Keep the same forward (+Y) reach as (0.49394, -0.40428), while
+# mirroring the complete tray across the robot's x=0.35 sagittal line.
+TARGET_BOX_CENTER_XY = (0.20606, -0.40428)
 TABLE_SURFACE_Z = 0.04146
 TARGET_BOX_INNER_SIZE = 0.110
 TARGET_BOX_WALL_THICKNESS = 0.012
