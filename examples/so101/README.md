@@ -293,6 +293,14 @@ five task rows to the five arm joints, holds Z at the height measured on align e
 three-row position-only posture freedom and the six-row full-pose over-constraint. It uses the same physical
 clearance and contact gates as the no-Z control.
 
+The separate `legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower` control tests whether shoulder-pan
+motion stops because the remaining task leaves no base objective. At align entry it computes the signed
+world-XY bearing from the robot root through the live jaw and to the box center. In the audited SO-101 joint
+convention, that bearing correction is subtracted from the entry `shoulder_pan` angle, capped at `0.35 rad`,
+and clamped inside the soft joint limits. High align then solves exactly five rows: XYZ, base-frame pitch, and
+the persistent shoulder-pan joint error. Smoke logs report the target/actual pan angle, requested joint delta,
+five-element task error, and Jacobian singular values every 25 control steps.
+
 The separate `legacy_gripper_anchor_relaxed_ik` variant keeps that same jaw target and safety gate but uses the
 phase-aware IK action only for constraint weighting. All phases through lowering retain the exact pose solve.
 During the first 120 alignment steps it sets orientation weight to `0.1`; if alignment still has not converged,
@@ -329,6 +337,9 @@ zero-error pose instead of returning to an old fixed Z target.
 
 # Control XYZ plus world roll/pitch at high align; leave world yaw free.
 --expert legacy_gripper_anchor_safe_xyz_tilt_align_then_lower
+
+# Control XYZ and pitch while continuously driving shoulder_pan toward a bearing-derived target.
+--expert legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower
 
 # Add staged weak-orientation then position-only IK during final jaw alignment.
 --expert legacy_gripper_anchor_relaxed_ik
