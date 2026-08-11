@@ -564,8 +564,11 @@ distance, the cube's projection onto and shortest distance from that ray, the gr
 frames, wrist/gripper/jaw height above the cube, robot-base command, actual wrist world position, descent XY tracking
 error, gripper command, and retreat/transport targets so that a failure can be compared directly with the source
 state-machine assumptions. The jaw detection frame (`ee_frame.target[1]`) is diagnostic only: it is not used to
-construct/range-gate the open-gripper ray or to confirm a grasp. Lift/transport confirmation instead requires the
-closed gripper to have raised the cube at least 5 mm above its per-episode initial height.
+construct/range-gate the open-gripper ray or to confirm a grasp. Grasp settle is feedback-gated: after at least 21
+steps, the real gripper must either track its target within 0.03 rad or be at least halfway closed and remain below
+0.01 rad/s for eight consecutive steps. It times out after 180 steps instead of beginning lift with a still-moving
+gripper. Lift confirmation is first evaluated after 30 actual lift steps and then requires the cube to be at least
+5 mm above its per-episode initial height; it no longer uses the incompatible fixed `gripper < 0.26 rad` threshold.
 
 The diagnostic recording renders the selected ray and all six gripper-frame axes as USD sphere markers in headless RTX
 video. The long selected ray is yellow while missing and green while intersecting the cube OBB. The six short axes are
@@ -583,7 +586,7 @@ the commanded world Z and advances the previous XY reference with a proportional
 1 mm per control step. The reference increment is accumulated rather than rebased on the measured wrist; the latter
 produced only about 0.025 mm of physical motion per step with this damped IK and timed out while apparently stuck. Only after
 five consecutive aligned samples does it lower by 1 mm per step. The selected ray must intersect the cube OBB and its
-first forward hit must be within one cube half-width of the offset ray origin. No jaw-origin distance is used while the
+first forward hit must be within the configured finite reach of the offset ray origin. No jaw-origin distance is used while the
 jaw is open.
 The wrist-to-gripper length remains diagnostic only because `ee_frame.target[0]` is an internal gripper frame rather
 than the distal grasp point and underestimated the physical reach by about 69 mm in the seed-42 contact trace.

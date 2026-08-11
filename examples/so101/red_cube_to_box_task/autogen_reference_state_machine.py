@@ -47,6 +47,10 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     GRASP_CHECK_INTERVAL = 30
     GRASP_DURATION_STEPS = 80
     GRASP_SETTLE_STEPS = 21
+    GRASP_SETTLE_MAX_STEPS = 180
+    GRASP_SETTLE_STABLE_STEPS = 8
+    GRIPPER_TARGET_TOLERANCE = 0.03
+    GRIPPER_STALL_VELOCITY_TOLERANCE = 0.01
     RELEASE_DURATION_STEPS = 180
 
     GRIPPER_OPEN_POSITION = 1.74533
@@ -163,6 +167,10 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self._gripper_command = self.GRIPPER_OPEN_POSITION
         self._grasp_start_position = self.GRIPPER_OPEN_POSITION
         self._grasp_end_position = self.GRIPPER_CLOSED_POSITION
+        self._gripper_settle_streak = 0
+        self._gripper_settle_reason: str | None = None
+        self._gripper_target_error: torch.Tensor | None = None
+        self._gripper_joint_velocity: torch.Tensor | None = None
         self._initial_cube_z_w: torch.Tensor | None = None
         self._posture_target: torch.Tensor | None = None
         self._wrist_position_w: torch.Tensor | None = None
@@ -309,10 +317,30 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             if self._state_step > self.GRASP_DURATION_STEPS:
                 self._transition("grasp_settle")
         elif self._state == "grasp_settle":
-            if self._state_step > self.GRASP_SETTLE_STEPS:
+            robot = env.scene["robot"]
+            gripper_position = robot.data.joint_pos[:, -1]
+            gripper_velocity = torch.abs(robot.data.joint_vel[:, -1])
+            target_error = torch.abs(gripper_position - self._grasp_end_position)
+            halfway_closed = gripper_position <= (self.GRIPPER_OPEN_POSITION + self._grasp_end_position) / 2.0
+            target_reached = target_error <= self.GRIPPER_TARGET_TOLERANCE
+            contact_stalled = halfway_closed & (gripper_velocity <= self.GRIPPER_STALL_VELOCITY_TOLERANCE)
+            settled = target_reached | contact_stalled
+            self._gripper_target_error = target_error.detach()
+            self._gripper_joint_velocity = gripper_velocity.detach()
+            if self._state_step >= self.GRASP_SETTLE_STEPS and bool(settled.all().item()):
+                self._gripper_settle_streak += 1
+                self._gripper_settle_reason = (
+                    "target_reached" if bool(target_reached.all().item()) else "contact_stalled"
+                )
+            else:
+                self._gripper_settle_streak = 0
+                self._gripper_settle_reason = None
+            if self._gripper_settle_streak >= self.GRASP_SETTLE_STABLE_STEPS:
                 self._transition("lift")
+            elif self._state_step > self.GRASP_SETTLE_MAX_STEPS:
+                self._fail("gripper did not settle before the Autogen lift")
         elif self._state == "lift":
-            if self._state_step % self.GRASP_CHECK_INTERVAL == 0:
+            if self._state_step >= self.GRASP_CHECK_INTERVAL and self._state_step % self.GRASP_CHECK_INTERVAL == 0:
                 if not self._object_grasped(env):
                     self._fail("Autogen grasp check failed during lift")
                     return
@@ -588,15 +616,13 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self._green_ray_visualizer.visualize(translations=positions_w, marker_indices=marker_indices)
 
     def _object_grasped(self, env) -> bool:
-        """Confirm transport from cube lift, not the open-jaw frame origin."""
+        """Confirm transport from cube lift after feedback-gated closure."""
 
         if self._initial_cube_z_w is None:
             return False
-        robot = env.scene["robot"]
         cube_z_w = env.scene["cube"].data.root_pos_w[:, 2]
         lifted = cube_z_w >= self._initial_cube_z_w + self.MIN_CONFIRMED_LIFT
-        grasped = lifted & (robot.data.joint_pos[:, -1] < 0.26)
-        return bool(grasped.all().item())
+        return bool(lifted.all().item())
 
     @staticmethod
     def _world_position_to_base(robot, position_w: torch.Tensor) -> torch.Tensor:
@@ -677,6 +703,22 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         return self._gripper_command
 
     @property
+    def gripper_settle_streak(self) -> int:
+        return self._gripper_settle_streak
+
+    @property
+    def gripper_settle_reason(self) -> str | None:
+        return self._gripper_settle_reason
+
+    @property
+    def gripper_target_error(self) -> torch.Tensor | None:
+        return self._gripper_target_error
+
+    @property
+    def gripper_joint_velocity(self) -> torch.Tensor | None:
+        return self._gripper_joint_velocity
+
+    @property
     def servo_parameters(self) -> dict[str, object]:
         return {
             "source": "bundled_so101_autogen_simple_state_machine",
@@ -687,8 +729,13 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "green_ray_local_axis": self._green_ray_axis,
             "green_ray_local_origin_offset": self.GREEN_RAY_ORIGIN_OFFSET,
             "green_ray_max_hit_distance": self.GREEN_RAY_MAX_HIT_DISTANCE,
-            "grasp_confirmation": "cube_lift_above_episode_initial_z_and_closed_gripper",
+            "grasp_confirmation": "feedback_settled_gripper_then_cube_lift_above_episode_initial_z",
             "minimum_confirmed_lift": self.MIN_CONFIRMED_LIFT,
+            "gripper_settle_min_steps": self.GRASP_SETTLE_STEPS,
+            "gripper_settle_max_steps": self.GRASP_SETTLE_MAX_STEPS,
+            "gripper_settle_stable_steps": self.GRASP_SETTLE_STABLE_STEPS,
+            "gripper_target_tolerance": self.GRIPPER_TARGET_TOLERANCE,
+            "gripper_stall_velocity_tolerance": self.GRIPPER_STALL_VELOCITY_TOLERANCE,
             "approach_height": self.APPROACH_HEIGHT,
             "lift_height": self.LIFT_HEIGHT,
             "safe_height": self.SAFE_HEIGHT,
