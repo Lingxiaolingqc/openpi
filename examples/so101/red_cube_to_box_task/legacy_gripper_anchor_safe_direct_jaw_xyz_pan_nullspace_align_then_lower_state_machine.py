@@ -17,6 +17,7 @@ from .legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower_state_machin
 
 _CONTROLLED_POINT_RADIUS = 0.010
 _TABLE_PROJECTION_RADIUS = 0.008
+_MAXIMUM_JOINT_TARGET_STEP = 0.02
 
 
 class RedCubeToBoxLegacyGripperAnchorSafeDirectJawXyzPanNullspaceAlignThenLowerStateMachine(
@@ -34,6 +35,8 @@ class RedCubeToBoxLegacyGripperAnchorSafeDirectJawXyzPanNullspaceAlignThenLowerS
 
     def setup(self, env) -> None:
         super().setup(env)
+        assert self._arm_action_term is not None
+        self._arm_action_term.set_maximum_joint_target_step(maximum_step=_MAXIMUM_JOINT_TARGET_STEP)
         self._point_visualizer = VisualizationMarkers(
             VisualizationMarkersCfg(
                 prim_path="/Visuals/RedCubeToBox/DirectJawControlPoints",
@@ -125,6 +128,8 @@ class RedCubeToBoxLegacyGripperAnchorSafeDirectJawXyzPanNullspaceAlignThenLowerS
             {
                 "high_align_control_frame": "closed_gripper_jaw_detection_frame",
                 "high_align_target_conversion": "direct_jaw_target_no_gripper_position_compensation",
+                "maximum_joint_target_step": _MAXIMUM_JOINT_TARGET_STEP,
+                "joint_target_step_limit_scope": "direct_jaw_custom_high_align_solver_only",
                 "jaw_marker_color": "red",
                 "table_projection_marker_color": "cyan",
                 "table_projection_z": TABLE_SURFACE_Z,

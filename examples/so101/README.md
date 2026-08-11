@@ -318,6 +318,14 @@ in the translational Jacobian, instead of converting each jaw target into a comp
 The offset is reset to identity outside high align. This is intentionally a separate expert so results remain
 comparable with the gripper-frame nullspace variant.
 
+Direct-jaw seed-42 diagnostics showed a well-conditioned four-row Jacobian but unbounded primary IK increments of
+roughly `0.15-0.24 rad` per application. The arm crossed the target and entered a high-speed alignment oscillation;
+the existing `0.03 rad` cap applied only to the nullspace posture term. During the direct-jaw custom high-align
+solve, the variant therefore scales the combined primary-plus-nullspace increment uniformly whenever its largest
+joint component exceeds `0.02 rad`. Uniform scaling preserves the requested joint-space direction and applies only
+to this new expert; older experts retain their original behavior. Smoke logs expose both the unlimited delta and
+the actually applied limited delta.
+
 That direct-jaw expert also adds two scene-only markers. A red sphere marks the live jaw point controlled by IK;
 a cyan sphere marks the same world X/Y projected vertically onto `TABLE_SURFACE_Z`. The markers do not alter the
 observation, action, safety gates, or success predicate. Smoke logs emit the desired jaw, captured offset, live
