@@ -65,7 +65,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     RAY_ALIGNMENT_MAX_XY_STEP = 0.001
     RAY_ALIGNMENT_XY_TOLERANCE = 0.008
     RAY_ALIGNMENT_STABLE_STEPS = 5
-    GRASP_REACH_MARGIN_BEYOND_GRIPPER = 2.0 * CUBE_HALF_HEIGHT
+    GRASP_REACH_MARGIN_BEYOND_JAW = CUBE_HALF_HEIGHT
     GREEN_RAY_VISUAL_LENGTH = 0.35
     GREEN_RAY_VISUAL_POINT_COUNT = 36
 
@@ -141,6 +141,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self.green_ray_direction_w: torch.Tensor | None = None
         self.green_ray_hit_distance: torch.Tensor | None = None
         self.wrist_to_gripper_length: torch.Tensor | None = None
+        self.wrist_to_jaw_length: torch.Tensor | None = None
         self.cube_distance_to_green_ray: torch.Tensor | None = None
         self.cube_projection_on_green_ray: torch.Tensor | None = None
         self.cube_to_green_ray_error_w: torch.Tensor | None = None
@@ -418,6 +419,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         jaw_pos_w = ee_frame.data.target_pos_w[:, 1]
         wrist_to_gripper_w = gripper_pos_w - wrist_pos_w
         wrist_to_gripper_length = torch.linalg.vector_norm(wrist_to_gripper_w, dim=-1)
+        wrist_to_jaw_length = torch.linalg.vector_norm(jaw_pos_w - wrist_pos_w, dim=-1)
         direction_w = wrist_to_gripper_w / torch.clamp(wrist_to_gripper_length.unsqueeze(-1), min=1.0e-8)
         origin_w = wrist_pos_w
         self.gripper_frame_position_w = gripper_pos_w.detach().clone()
@@ -425,6 +427,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self.green_ray_origin_w = origin_w.detach().clone()
         self.green_ray_direction_w = direction_w.detach().clone()
         self.wrist_to_gripper_length = wrist_to_gripper_length.detach()
+        self.wrist_to_jaw_length = wrist_to_jaw_length.detach()
         cube_from_origin_w = cube.data.root_pos_w - origin_w
         cube_projection = torch.sum(cube_from_origin_w * direction_w, dim=-1)
         clamped_projection = torch.clamp(cube_projection, min=0.0)
@@ -458,7 +461,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         obb_hit = (~parallel_outside) & (t_far >= torch.clamp(t_near, min=0.0))
         nearest_forward_hit = torch.clamp(t_near, min=0.0)
         hit_within_grasp_reach = obb_hit & (
-            nearest_forward_hit <= wrist_to_gripper_length + self.GRASP_REACH_MARGIN_BEYOND_GRIPPER
+            nearest_forward_hit <= wrist_to_jaw_length + self.GRASP_REACH_MARGIN_BEYOND_JAW
         )
         hit = hit_within_grasp_reach
         self.green_ray_obb_hit = bool(obb_hit.all().item())
@@ -622,7 +625,8 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "ray_alignment_max_xy_step": self.RAY_ALIGNMENT_MAX_XY_STEP,
             "ray_alignment_xy_tolerance": self.RAY_ALIGNMENT_XY_TOLERANCE,
             "ray_alignment_stable_steps": self.RAY_ALIGNMENT_STABLE_STEPS,
-            "grasp_reach_margin_beyond_gripper": self.GRASP_REACH_MARGIN_BEYOND_GRIPPER,
+            "grasp_reach_reference": "live_wrist_to_jaw_length",
+            "grasp_reach_margin_beyond_jaw": self.GRASP_REACH_MARGIN_BEYOND_JAW,
             "green_ray_visual_length": self.GREEN_RAY_VISUAL_LENGTH,
             "green_ray_visual_colors": "yellow=miss,green=hit,blue=wrist,purple=gripper",
         }

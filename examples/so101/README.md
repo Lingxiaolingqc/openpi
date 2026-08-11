@@ -558,7 +558,7 @@ tail -n 520
 ```
 
 The authoritative result is `autogen_reference_semantic_exit`, not only the transport exit. The
-`expert_autogen_reference` records expose the live wrist-origin ray, wrist-to-gripper reference length and nearest hit
+`expert_autogen_reference` records expose the live wrist-origin ray, wrist-to-gripper and wrist-to-jaw lengths, and nearest hit
 distance, the cube's projection onto and shortest distance from that ray, the gripper and jaw detection
 frames, wrist/gripper/jaw height above the cube, robot-base command, actual wrist world position, descent XY tracking
 error, gripper command, and retreat/transport targets so that a failure can be compared directly with the source
@@ -577,7 +577,9 @@ the commanded world Z and advances the previous XY reference with a proportional
 1 mm per control step. The reference increment is accumulated rather than rebased on the measured wrist; the latter
 produced only about 0.025 mm of physical motion per step with this damped IK and timed out while apparently stuck. Only after
 five consecutive aligned samples does it lower by 1 mm per step. A raw OBB intersection is not enough to close the
-gripper: the first forward hit must also be no farther than the measured wrist-to-gripper length plus one cube width.
+gripper: the first forward hit must also be no farther than the measured wrist-to-jaw length plus half the cube height.
+The wrist-to-gripper length remains diagnostic only because `ee_frame.target[0]` is an internal gripper frame rather
+than the distal grasp point and underestimated the physical reach by about 69 mm in the seed-42 contact trace.
 The log separates `green_ray_obb_hit` from `green_ray_within_grasp_reach` and reports the approach error, ray XY error,
 applied XY correction, and alignment streak. This distinguishes "the infinite ray points through the cube" from "the
 cube is centered and physically close enough to the gripper to start closing."

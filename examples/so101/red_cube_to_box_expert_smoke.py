@@ -175,6 +175,13 @@ class _DiagnosticRecorder:
                     "green_ray_within_grasp_reach": getattr(
                         state_machine, "green_ray_within_grasp_reach", None
                     ),
+                    "green_ray_hit_distance": _finite_or_none(
+                        getattr(state_machine, "green_ray_hit_distance", None)
+                    ),
+                    "wrist_to_gripper_length": _finite_or_none(
+                        getattr(state_machine, "wrist_to_gripper_length", None)
+                    ),
+                    "wrist_to_jaw_length": _finite_or_none(getattr(state_machine, "wrist_to_jaw_length", None)),
                     "approach_tracking_error": _finite_or_none(
                         getattr(state_machine, "approach_tracking_error", None)
                     ),
@@ -664,6 +671,8 @@ def main() -> int:
                         f"{None if state_machine.green_ray_hit_distance is None else _rounded_row(state_machine.green_ray_hit_distance, digits=7)}:"
                         f"wrist_to_gripper_length="
                         f"{None if state_machine.wrist_to_gripper_length is None else _rounded_row(state_machine.wrist_to_gripper_length, digits=7)}:"
+                        f"wrist_to_jaw_length="
+                        f"{None if state_machine.wrist_to_jaw_length is None else _rounded_row(state_machine.wrist_to_jaw_length, digits=7)}:"
                         f"cube_projection_on_green_ray="
                         f"{None if state_machine.cube_projection_on_green_ray is None else _rounded_row(state_machine.cube_projection_on_green_ray, digits=7)}:"
                         f"cube_distance_to_green_ray="
