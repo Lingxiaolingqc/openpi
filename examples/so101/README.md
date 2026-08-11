@@ -233,6 +233,52 @@ closed-gripper alignment phase requires the cube to remain
 within `0.012 m` of the release target for 20 consecutive control steps before release. Select one without
 changing either implementation:
 
+The `legacy_dynamic_grasp_offset` expert is a single-variable comparison built directly on the original
+`legacy`, not on a jaw-anchor expert. Approach, grasp, lift, fixed-world pose IK, timings, gripper commands and
+release Z are unchanged. During the final 40 lift steps it samples `cube_xy - gripper_xy` only after the cube
+has risen at least `0.05 m`, then freezes the per-environment median. Its desired cube XY is the audited box
+center plus a `0.005 m` bias toward the robot root. Transfer and release gripper XY are calculated as
+`desired_cube_xy - measured_gripper_to_cube_xy`; the historical fixed `_PLACE_XY_OFFSET` is therefore unused
+only by this expert. Smoke logs expose the samples, measured grasp offset, desired cube point, dynamic gripper
+target and resulting box-relative place offset.
+
+```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_ROOT=/home/data/xiaoqinchuan/projects/leisaac
+export LEISAAC_ENV=/home/data/xiaoqinchuan/envs/leisaac-so101
+export LEISAAC_ASSETS_ROOT=/home/data/xiaoqinchuan/assets/leisaac-v0.4.0
+export ISAACSIM_PORTABLE_ROOT=/home/data/xiaoqinchuan/cache/isaacsim-portable
+export OMNI_KIT_ACCEPT_EULA=YES
+export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
+export DYNAMIC_GRASP_LOG="$LEISAAC_BASE/results/leisaac/legacy-dynamic-grasp-offset-seed42.log"
+export DYNAMIC_GRASP_RECORD_DIR="$LEISAAC_BASE/results/leisaac/legacy-dynamic-grasp-offset-recordings"
+
+cd "$OPENPI_ROOT"
+mkdir -p "$LEISAAC_BASE/results/leisaac"
+timeout --signal=KILL 240s \
+  "$LEISAAC_ENV/bin/python" \
+  examples/so101/red_cube_to_box_expert_smoke.py \
+  --headless \
+  --enable_cameras \
+  --device cuda:6 \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --expert legacy_dynamic_grasp_offset \
+  --seed 42 \
+  --record_dir "$DYNAMIC_GRASP_RECORD_DIR" \
+  --record_every 4 \
+  --record_fps 15 \
+  2>&1 | tee "$DYNAMIC_GRASP_LOG"
+
+dynamic_grasp_status=${PIPESTATUS[0]}
+echo "legacy_dynamic_grasp_offset_exit=$dynamic_grasp_status"
+
+grep -nE \
+  'expert_phase|expert_state|expert_dynamic_grasp_offset|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
+  "$DYNAMIC_GRASP_LOG" |
+tail -n 280
+```
+
 The third implementation, `red_cube_to_box_task/servo_state_machine.py`, inherits the adaptive grasp, retry,
 and gradual lift logic but does not replace either comparison expert. Its companion
 `red_cube_to_box_task/phase_aware_ik_action.py` preserves the 7D pose command shape while dropping the three

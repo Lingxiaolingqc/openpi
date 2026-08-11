@@ -22,6 +22,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--expert",
         choices=(
             "legacy",
+            "legacy_dynamic_grasp_offset",
             "legacy_gripper_anchor",
             "legacy_gripper_anchor_align_then_lower",
             "legacy_gripper_anchor_position_align_then_lower",
@@ -301,6 +302,9 @@ def main() -> int:
         RedCubeToBoxLegacyGripperAnchorSafeXyzTiltAlignThenLowerStateMachine,
     )
     from red_cube_to_box_task.jaw_frame_xyz_tilt_state_machine import RedCubeToBoxJawFrameXyzTiltStateMachine
+    from red_cube_to_box_task.legacy_dynamic_grasp_offset_state_machine import (
+        RedCubeToBoxLegacyDynamicGraspOffsetStateMachine,
+    )
     from red_cube_to_box_task.legacy_weighted_servo_state_machine import (
         RedCubeToBoxLegacyWeightedServoStateMachine,
     )
@@ -383,6 +387,7 @@ def main() -> int:
         print(f"expert_ik_command_type: {env_cfg.actions.arm_action.controller.command_type}", flush=True)
         orientation_policy = {
             "legacy": "fixed_world",
+            "legacy_dynamic_grasp_offset": "legacy_fixed_world,dynamic_per-grasp_placement_xy",
             "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
             "legacy_gripper_anchor_align_then_lower": "legacy_fixed_world,align_high_then_descend",
             "legacy_gripper_anchor_position_align_then_lower": "position_only_high_align,legacy_pose_descent",
@@ -429,6 +434,7 @@ def main() -> int:
 
         state_machine_class = {
             "legacy": RedCubeToBoxStateMachine,
+            "legacy_dynamic_grasp_offset": RedCubeToBoxLegacyDynamicGraspOffsetStateMachine,
             "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
             "legacy_gripper_anchor_align_then_lower": RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine,
             "legacy_gripper_anchor_position_align_then_lower": (
@@ -547,6 +553,25 @@ def main() -> int:
                             f"gripper_target_w={_rounded_row(gripper_target[0])}",
                             flush=True,
                         )
+                if (
+                    args.expert == "legacy_dynamic_grasp_offset"
+                    and phase in {"lift_cube", "transfer_to_box", "lower_into_box", "release_cube"}
+                    and (phase_changed or state_machine.step_count % 25 == 0)
+                ):
+                    print(
+                        f"expert_dynamic_grasp_offset:{phase}:"
+                        f"sample_count={state_machine.grasp_offset_sample_count}:"
+                        f"gripper_to_cube_xy="
+                        f"{None if state_machine.gripper_to_cube_xy is None else _rounded_row(state_machine.gripper_to_cube_xy[0], digits=7)}:"
+                        f"floor_center_xy={_rounded_row(floor.data.root_pos_w[0, :2], digits=7)}:"
+                        f"desired_cube_xy="
+                        f"{None if state_machine.desired_cube_xy is None else _rounded_row(state_machine.desired_cube_xy[0], digits=7)}:"
+                        f"gripper_target_xy="
+                        f"{None if state_machine.dynamic_gripper_target_xy is None else _rounded_row(state_machine.dynamic_gripper_target_xy[0], digits=7)}:"
+                        f"dynamic_place_offset_xy="
+                        f"{None if state_machine.dynamic_place_offset_xy is None else _rounded_row(state_machine.dynamic_place_offset_xy[0], digits=7)}",
+                        flush=True,
+                    )
                 ik_runtime_mode = getattr(state_machine, "ik_runtime_mode", "pose")
                 if phase_changed or ik_runtime_mode != previous_ik_runtime_mode:
                     print(f"expert_ik_runtime_mode:{phase}:{ik_runtime_mode}", flush=True)

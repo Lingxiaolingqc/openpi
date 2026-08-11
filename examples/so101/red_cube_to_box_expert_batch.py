@@ -18,6 +18,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--expert",
         choices=(
             "legacy",
+            "legacy_dynamic_grasp_offset",
             "legacy_gripper_anchor",
             "legacy_gripper_anchor_align_then_lower",
             "legacy_gripper_anchor_position_align_then_lower",
@@ -125,6 +126,9 @@ def main() -> int:
         RedCubeToBoxLegacyGripperAnchorSafeXyzTiltAlignThenLowerStateMachine,
     )
     from red_cube_to_box_task.jaw_frame_xyz_tilt_state_machine import RedCubeToBoxJawFrameXyzTiltStateMachine
+    from red_cube_to_box_task.legacy_dynamic_grasp_offset_state_machine import (
+        RedCubeToBoxLegacyDynamicGraspOffsetStateMachine,
+    )
     from red_cube_to_box_task.phase_aware_ik_action import (
         configure_dynamic_control_frame_offset,
         configure_servo_ik_action,
@@ -192,6 +196,7 @@ def main() -> int:
         env = gym.make(task_id, cfg=env_cfg).unwrapped
         state_machine_class = {
             "legacy": RedCubeToBoxStateMachine,
+            "legacy_dynamic_grasp_offset": RedCubeToBoxLegacyDynamicGraspOffsetStateMachine,
             "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
             "legacy_gripper_anchor_align_then_lower": RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine,
             "legacy_gripper_anchor_position_align_then_lower": (
@@ -252,6 +257,7 @@ def main() -> int:
         print(f"expert_ik_action_class: {type(arm_action_term).__name__}", flush=True)
         orientation_policy = {
             "legacy": "fixed_world",
+            "legacy_dynamic_grasp_offset": "legacy_fixed_world,dynamic_per-grasp_placement_xy",
             "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
             "legacy_gripper_anchor_align_then_lower": "legacy_fixed_world,align_high_then_descend",
             "legacy_gripper_anchor_position_align_then_lower": "position_only_high_align,legacy_pose_descent",
