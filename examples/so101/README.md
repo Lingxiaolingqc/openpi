@@ -48,10 +48,11 @@ reports every named joint coordinate in radians, every named robot-body origin i
 FrameTransformer gripper and offset jaw-detection positions. These fields distinguish joint coordinates from
 Cartesian positions and prevent the raw jaw body from being mistaken for the IK end-effector.
 
-The initial tray center is `(0.520, -0.36161)` in environment coordinates: it is laterally separated from the
-cube along `+X` while keeping approximately the same reach along `Y`. The tray consists of one floor and four
-green kinematic walls. Its success predicate requires the cube to be inside the tray bounds, below the wall
-top, and moving no faster than `0.15 m/s`.
+The tray center is `(0.49394, -0.40428)` in environment coordinates. Relative to the original
+`(0.520, -0.36161)` center, the complete five-piece tray is translated `0.05 m` along the tray-to-robot-root XY
+direction; its distance to the robot root decreases from about `0.326 m` to `0.276 m`. The tray consists of one
+floor and four green kinematic walls. Its success predicate requires the cube to be inside the tray bounds, below
+the wall top, and moving no faster than `0.15 m/s`.
 
 Validate environment creation and the predicate before developing the expert:
 
@@ -473,8 +474,8 @@ to this new expert; older experts retain their original behavior. Smoke logs exp
 the actually applied limited delta.
 
 The separate `legacy_gripper_anchor_safe_jaw_trajectory_direct_xyz_pan_nullspace_align_then_lower` experiment also
-removes the legacy transfer calibration from the control path. `target_box_floor` is verified to be centered at
-`(0.52, -0.36161)`; the apparent corner target came from adding the historical gripper-frame
+removes the legacy transfer calibration from the control path. At the time of that audit, `target_box_floor` was
+centered at the former `(0.52, -0.36161)` location; the apparent corner target came from adding the historical gripper-frame
 `_PLACE_XY_OFFSET=(-0.084, 0.003)`. Because the gripper-to-jaw world offset changes with arm posture, that fixed
 single-trial compensation placed the live jaw near `(0.568, -0.407)` at align entry. The new transfer captures its
 actual starting jaw, follows a cubic smoothstep trajectory to the floor-center XY at a safe height, and holds the
