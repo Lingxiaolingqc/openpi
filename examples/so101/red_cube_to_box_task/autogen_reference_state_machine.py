@@ -63,7 +63,6 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self._arm_action_term = None
         self._rng: random.Random | None = None
         self._wrist_body_index: int | None = None
-        self._gripper_body_index: int | None = None
         self.reset()
 
     def setup(self, env) -> None:
@@ -80,7 +79,6 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
 
         body_names = list(env.scene["robot"].data.body_names)
         self._wrist_body_index = body_names.index("wrist")
-        self._gripper_body_index = body_names.index("gripper")
         if self._rng is None:
             self._rng = random.Random(int(env.cfg.seed))
 
@@ -104,6 +102,12 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self.green_ray_hit = False
         self.green_ray_origin_w: torch.Tensor | None = None
         self.green_ray_direction_w: torch.Tensor | None = None
+        self.green_ray_hit_distance: torch.Tensor | None = None
+        self.gripper_frame_position_w: torch.Tensor | None = None
+        self.jaw_detection_position_w: torch.Tensor | None = None
+        self.wrist_height_above_cube: torch.Tensor | None = None
+        self.gripper_frame_height_above_cube: torch.Tensor | None = None
+        self.jaw_height_above_cube: torch.Tensor | None = None
         self.retreat_target_b: torch.Tensor | None = None
         self.transport_target_b: torch.Tensor | None = None
         self.grasp_confirmed = False
@@ -304,16 +308,28 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     def _green_ray_intersects_cube(self, env) -> bool:
         """Evaluate the original infinite green-ray versus cube OBB test."""
 
-        robot = env.scene["robot"]
+        ee_frame = env.scene["ee_frame"]
         cube = env.scene["cube"]
-        gripper_pos_w = robot.data.body_pos_w[:, self._gripper_body_index]
-        gripper_quat_w = robot.data.body_quat_w[:, self._gripper_body_index]
+        # The source Autogen implementation constructs this ray from
+        # ``gripper_frame_link``.  In this LeIsaac scene that frame is the
+        # first FrameTransformer target; the articulation body named
+        # ``gripper`` is a different frame and changes the ray geometry.
+        gripper_pos_w = ee_frame.data.target_pos_w[:, 0]
+        gripper_quat_w = ee_frame.data.target_quat_w[:, 0]
+        jaw_pos_w = ee_frame.data.target_pos_w[:, 1]
         offset = torch.tensor(self.GREEN_RAY_ORIGIN_OFFSET, device=env.device).repeat(env.num_envs, 1)
         direction = torch.tensor(self.GREEN_RAY_DIRECTION, device=env.device).repeat(env.num_envs, 1)
         origin_w = gripper_pos_w + quat_apply(gripper_quat_w, offset)
         direction_w = quat_apply(gripper_quat_w, direction)
+        self.gripper_frame_position_w = gripper_pos_w.detach().clone()
+        self.jaw_detection_position_w = jaw_pos_w.detach().clone()
         self.green_ray_origin_w = origin_w.detach().clone()
         self.green_ray_direction_w = direction_w.detach().clone()
+        cube_z_w = cube.data.root_pos_w[:, 2]
+        wrist_z_w = env.scene["robot"].data.body_pos_w[:, self._wrist_body_index, 2]
+        self.wrist_height_above_cube = (wrist_z_w - cube_z_w).detach()
+        self.gripper_frame_height_above_cube = (gripper_pos_w[:, 2] - cube_z_w).detach()
+        self.jaw_height_above_cube = (jaw_pos_w[:, 2] - cube_z_w).detach()
 
         cube_quat_inv = quat_inv(cube.data.root_quat_w)
         origin_cube = quat_apply(cube_quat_inv, origin_w - cube.data.root_pos_w)
@@ -332,6 +348,12 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         t_near = torch.max(near, dim=-1).values
         t_far = torch.min(far, dim=-1).values
         hit = (~parallel_outside) & (t_far >= torch.clamp(t_near, min=0.0))
+        nearest_forward_hit = torch.clamp(t_near, min=0.0)
+        self.green_ray_hit_distance = torch.where(
+            hit,
+            nearest_forward_hit,
+            torch.full_like(nearest_forward_hit, torch.nan),
+        ).detach()
         return bool(hit.all().item())
 
     @staticmethod
@@ -392,6 +414,12 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         return self._descent_wrist_xy_error
 
     @property
+    def ik_runtime_mode(self) -> str:
+        if self._arm_action_term is None:
+            return "uninitialized"
+        return self._arm_action_term.runtime_mode
+
+    @property
     def command_position_b(self) -> torch.Tensor | None:
         return self._command_pos_b
 
@@ -406,6 +434,8 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "control_frame": "wrist",
             "ik_adapter": "position_only_wrist_xyz,source_posture_correction_disabled",
             "grasp_trigger": "original_green_ray_cube_obb",
+            "green_ray_frame": "ee_frame.target[0]:gripper_frame_link_equivalent",
+            "grasp_confirmation_frame": "ee_frame.target[1]:jaw_detection_frame",
             "approach_height": self.APPROACH_HEIGHT,
             "lift_height": self.LIFT_HEIGHT,
             "safe_height": self.SAFE_HEIGHT,
