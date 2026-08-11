@@ -293,6 +293,54 @@ five task rows to the five arm joints, holds Z at the height measured on align e
 three-row position-only posture freedom and the six-row full-pose over-constraint. It uses the same physical
 clearance and contact gates as the no-Z control.
 
+The independent `jaw_frame_xyz_tilt` expert applies that five-row idea to the entire episode rather than only
+high alignment. Every control step recomputes the live gripper-to-jaw transform, makes the jaw detection frame
+the IK body offset, and solves jaw XYZ plus world roll/pitch while leaving world yaw free. Its Cartesian
+keyframes are expressed directly in jaw coordinates: the grasp point is the cube center and transfer/alignment
+use the audited `target_box_floor` center, so neither historical gripper XY compensation is used. The initial
+jaw tilt is retained as the two orientation targets. A persistent `0.01 rad` per-application joint-target slew
+limit bounds command changes. During `align_over_box`, all five errors must remain below the configured
+position (`0.006 m`) and tilt (`0.05 rad`) thresholds for ten steps before descent begins.
+
+Run the new expert from a fresh server terminal with the complete environment contract:
+
+```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_ROOT=/home/data/xiaoqinchuan/projects/leisaac
+export LEISAAC_ENV=/home/data/xiaoqinchuan/envs/leisaac-so101
+export LEISAAC_ASSETS_ROOT=/home/data/xiaoqinchuan/assets/leisaac-v0.4.0
+export ISAACSIM_PORTABLE_ROOT=/home/data/xiaoqinchuan/cache/isaacsim-portable
+export OMNI_KIT_ACCEPT_EULA=YES
+export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
+export JAW_XYZ_TILT_LOG="$LEISAAC_BASE/results/leisaac/jaw-frame-xyz-tilt-seed42.log"
+export JAW_XYZ_TILT_RECORD_DIR="$LEISAAC_BASE/results/leisaac/jaw-frame-xyz-tilt-recordings"
+
+cd "$OPENPI_ROOT"
+mkdir -p "$LEISAAC_BASE/results/leisaac"
+timeout --signal=KILL 240s \
+  "$LEISAAC_ENV/bin/python" \
+  examples/so101/red_cube_to_box_expert_smoke.py \
+  --headless \
+  --enable_cameras \
+  --device cuda:6 \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --expert jaw_frame_xyz_tilt \
+  --seed 42 \
+  --record_dir "$JAW_XYZ_TILT_RECORD_DIR" \
+  --record_every 4 \
+  --record_fps 15 \
+  2>&1 | tee "$JAW_XYZ_TILT_LOG"
+
+jaw_xyz_tilt_status=${PIPESTATUS[0]}
+echo "jaw_frame_xyz_tilt_exit=$jaw_xyz_tilt_status"
+
+grep -nE \
+  'expert_phase|expert_state|expert_ik_runtime_mode|expert_direct_jaw_control|expert_jaw_five_dimensional_task|completed_steps|cube_final|cube_offset|box_aligned_before_release|servo_timeout_phase|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
+  "$JAW_XYZ_TILT_LOG" |
+tail -n 360
+```
+
 The separate `legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower` control tests whether shoulder-pan
 motion stops because the remaining task leaves no base objective. At align entry it computes the signed
 world-XY bearing from the robot root through the live jaw and to the box center. In the audited SO-101 joint
