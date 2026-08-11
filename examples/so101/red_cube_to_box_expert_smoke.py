@@ -24,6 +24,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "legacy",
             "legacy_dynamic_grasp_offset",
             "legacy_dynamic_grasp_offset_residual_corrected",
+            "autogen_retreat_transport",
             "legacy_gripper_anchor",
             "legacy_gripper_anchor_align_then_lower",
             "legacy_gripper_anchor_position_align_then_lower",
@@ -290,6 +291,9 @@ def main() -> int:
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
     import red_cube_to_box_task
     from red_cube_to_box_task.adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
+    from red_cube_to_box_task.autogen_retreat_transport_state_machine import (
+        RedCubeToBoxAutogenRetreatTransportStateMachine,
+    )
     from red_cube_to_box_task.env_cfg import configure_planar_safety_sensors
     from red_cube_to_box_task.legacy_gripper_anchor_state_machine import (
         RedCubeToBoxLegacyGripperAnchorStateMachine,
@@ -401,6 +405,7 @@ def main() -> int:
             "legacy_position_servo",
             "legacy_pd_position_servo",
             "legacy_trajectory_pd_servo",
+            "autogen_retreat_transport",
         }:
             configure_servo_ik_action(env_cfg)
         if args.expert in {
@@ -419,6 +424,10 @@ def main() -> int:
             "legacy_dynamic_grasp_offset": "legacy_fixed_world,dynamic_per-grasp_placement_xy",
             "legacy_dynamic_grasp_offset_residual_corrected": (
                 "legacy_fixed_world,dynamic_per-grasp_placement_xy,single_post-transfer_residual_correction"
+            ),
+            "autogen_retreat_transport": (
+                "legacy_pickup,live_gripper_retreat,live_gripper_transport,xyz_tilt_free_yaw,"
+                "dynamic_per-grasp_placement_xy,single_post-transfer_residual_correction"
             ),
             "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
             "legacy_gripper_anchor_align_then_lower": "legacy_fixed_world,align_high_then_descend",
@@ -470,6 +479,7 @@ def main() -> int:
             "legacy_dynamic_grasp_offset_residual_corrected": (
                 RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine
             ),
+            "autogen_retreat_transport": RedCubeToBoxAutogenRetreatTransportStateMachine,
             "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
             "legacy_gripper_anchor_align_then_lower": RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine,
             "legacy_gripper_anchor_position_align_then_lower": (
@@ -593,8 +603,9 @@ def main() -> int:
                     in {
                         "legacy_dynamic_grasp_offset",
                         "legacy_dynamic_grasp_offset_residual_corrected",
+                        "autogen_retreat_transport",
                     }
-                    and phase in {"lift_cube", "transfer_to_box", "lower_into_box", "release_cube"}
+                    and phase in {"lift_cube", "retreat_to_safe", "transfer_to_box", "lower_into_box", "release_cube"}
                     and (phase_changed or completed_steps % 25 == 0)
                 ):
                     print(
@@ -612,7 +623,11 @@ def main() -> int:
                         flush=True,
                     )
                 if (
-                    args.expert == "legacy_dynamic_grasp_offset_residual_corrected"
+                    args.expert
+                    in {
+                        "legacy_dynamic_grasp_offset_residual_corrected",
+                        "autogen_retreat_transport",
+                    }
                     and phase in {"lower_into_box", "release_cube", "retract_gripper", "settle"}
                     and (phase_changed or completed_steps % 25 == 0)
                 ):
@@ -647,6 +662,23 @@ def main() -> int:
                             f"release_authorized={state_machine.release_authorized}",
                             flush=True,
                         )
+                if (
+                    args.expert == "autogen_retreat_transport"
+                    and phase in {"retreat_to_safe", "transfer_to_box"}
+                    and (phase_changed or completed_steps % 25 == 0)
+                ):
+                    print(
+                        f"expert_autogen_path:{phase}:"
+                        f"retreat_start_gripper_w="
+                        f"{None if state_machine.retreat_start_gripper_w is None else _rounded_row(state_machine.retreat_start_gripper_w[0], digits=7)}:"
+                        f"retreat_safe_target_w="
+                        f"{None if state_machine.retreat_safe_target_w is None else _rounded_row(state_machine.retreat_safe_target_w[0], digits=7)}:"
+                        f"transport_start_gripper_w="
+                        f"{None if state_machine.transport_start_gripper_w is None else _rounded_row(state_machine.transport_start_gripper_w[0], digits=7)}:"
+                        f"transport_target_w="
+                        f"{None if state_machine.transport_target_w is None else _rounded_row(state_machine.transport_target_w[0], digits=7)}",
+                        flush=True,
+                    )
                 ik_runtime_mode = getattr(state_machine, "ik_runtime_mode", "pose")
                 if phase_changed or ik_runtime_mode != previous_ik_runtime_mode:
                     print(f"expert_ik_runtime_mode:{phase}:{ik_runtime_mode}", flush=True)

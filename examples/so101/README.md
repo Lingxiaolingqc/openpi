@@ -332,6 +332,52 @@ grep -nE \
 tail -n 320
 ```
 
+The independent `autogen_retreat_transport` expert adapts the movement pattern from
+[`haoran1062/so101-autogen`](https://github.com/haoran1062/so101-autogen/) without replacing any existing expert.
+It preserves the validated legacy pickup and the dynamic per-grasp placement/release safeguards above. After lift it
+captures the live gripper pose, moves to a high safe point whose XY radius about the robot root is `5/7` of the entry
+radius, then captures the live pose again and transports to the compensated box hover target. Both segments move their
+Cartesian reference by at most `0.0025 m` per control step. From retreat through settle it uses the five-row `xyz_tilt`
+IK mode: XYZ and world roll/pitch remain constrained while yaw is free, avoiding a discontinuous yaw re-lock when lower
+begins. This is not a pre-rotation phase and it does not command `shoulder_pan` directly.
+
+```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_ROOT=/home/data/xiaoqinchuan/projects/leisaac
+export LEISAAC_ENV=/home/data/xiaoqinchuan/envs/leisaac-so101
+export LEISAAC_ASSETS_ROOT=/home/data/xiaoqinchuan/assets/leisaac-v0.4.0
+export ISAACSIM_PORTABLE_ROOT=/home/data/xiaoqinchuan/cache/isaacsim-portable
+export OMNI_KIT_ACCEPT_EULA=YES
+export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
+export AUTOGEN_RETREAT_LOG="$LEISAAC_BASE/results/leisaac/autogen-retreat-transport-seed42.log"
+export AUTOGEN_RETREAT_RECORD_DIR="$LEISAAC_BASE/results/leisaac/autogen-retreat-transport-recordings"
+
+cd "$OPENPI_ROOT"
+mkdir -p "$LEISAAC_BASE/results/leisaac"
+timeout --signal=KILL 300s \
+  "$LEISAAC_ENV/bin/python" \
+  examples/so101/red_cube_to_box_expert_smoke.py \
+  --headless \
+  --enable_cameras \
+  --device cuda:6 \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --expert autogen_retreat_transport \
+  --seed 42 \
+  --record_dir "$AUTOGEN_RETREAT_RECORD_DIR" \
+  --record_every 4 \
+  --record_fps 15 \
+  2>&1 | tee "$AUTOGEN_RETREAT_LOG"
+
+autogen_retreat_status=${PIPESTATUS[0]}
+echo "autogen_retreat_transport_exit=$autogen_retreat_status"
+
+grep -nE \
+  'expert_phase|expert_state|expert_autogen_path|expert_ik_runtime_mode|expert_dynamic_grasp_offset|expert_transfer_residual_correction|expert_lower_release_gate|release_block_reason|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
+  "$AUTOGEN_RETREAT_LOG" |
+tail -n 360
+```
+
 The third implementation, `red_cube_to_box_task/servo_state_machine.py`, inherits the adaptive grasp, retry,
 and gradual lift logic but does not replace either comparison expert. Its companion
 `red_cube_to_box_task/phase_aware_ik_action.py` preserves the 7D pose command shape while dropping the three
