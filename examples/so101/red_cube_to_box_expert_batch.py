@@ -20,6 +20,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "legacy",
             "legacy_dynamic_grasp_offset",
             "legacy_dynamic_grasp_offset_residual_corrected",
+            "autogen_reference",
             "legacy_gripper_anchor",
             "legacy_gripper_anchor_align_then_lower",
             "legacy_gripper_anchor_position_align_then_lower",
@@ -89,6 +90,10 @@ def main() -> int:
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
     import red_cube_to_box_task
     from red_cube_to_box_task.adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
+    from red_cube_to_box_task.autogen_reference_state_machine import (
+        RedCubeToBoxAutogenReferenceStateMachine,
+        configure_autogen_reference_action,
+    )
     from red_cube_to_box_task.env_cfg import configure_planar_safety_sensors
     from red_cube_to_box_task.legacy_gripper_anchor_state_machine import (
         RedCubeToBoxLegacyGripperAnchorStateMachine,
@@ -184,6 +189,8 @@ def main() -> int:
             "weighted_servo",
         }:
             configure_servo_ik_action(env_cfg)
+        if args.expert == "autogen_reference":
+            configure_autogen_reference_action(env_cfg)
         if args.expert in {
             "legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower",
             "legacy_gripper_anchor_safe_jaw_trajectory_direct_xyz_pan_nullspace_align_then_lower",
@@ -204,6 +211,7 @@ def main() -> int:
             "legacy_dynamic_grasp_offset_residual_corrected": (
                 RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine
             ),
+            "autogen_reference": RedCubeToBoxAutogenReferenceStateMachine,
             "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
             "legacy_gripper_anchor_align_then_lower": RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine,
             "legacy_gripper_anchor_position_align_then_lower": (
@@ -267,6 +275,10 @@ def main() -> int:
             "legacy_dynamic_grasp_offset": "legacy_fixed_world,dynamic_per-grasp_placement_xy",
             "legacy_dynamic_grasp_offset_residual_corrected": (
                 "legacy_fixed_world,dynamic_per-grasp_placement_xy,single_post-transfer_residual_correction"
+            ),
+            "autogen_reference": (
+                "bundled_autogen_state_flow,robot-base_coordinates,original_green_ray_obb,"
+                "wrist_xyz_ik_plus_wrist_flex_posture_correction,continuous_gripper"
             ),
             "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
             "legacy_gripper_anchor_align_then_lower": "legacy_fixed_world,align_high_then_descend",

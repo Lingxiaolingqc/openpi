@@ -27,6 +27,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "autogen_retreat_transport",
             "autogen_independent_retreat_transport",
             "autogen_polar_retreat_transport",
+            "autogen_reference",
             "legacy_gripper_anchor",
             "legacy_gripper_anchor_align_then_lower",
             "legacy_gripper_anchor_position_align_then_lower",
@@ -302,6 +303,10 @@ def main() -> int:
     from red_cube_to_box_task.autogen_polar_retreat_transport_state_machine import (
         RedCubeToBoxAutogenPolarRetreatTransportStateMachine,
     )
+    from red_cube_to_box_task.autogen_reference_state_machine import (
+        RedCubeToBoxAutogenReferenceStateMachine,
+        configure_autogen_reference_action,
+    )
     from red_cube_to_box_task.env_cfg import configure_planar_safety_sensors
     from red_cube_to_box_task.legacy_gripper_anchor_state_machine import (
         RedCubeToBoxLegacyGripperAnchorStateMachine,
@@ -418,6 +423,8 @@ def main() -> int:
             "autogen_polar_retreat_transport",
         }:
             configure_servo_ik_action(env_cfg)
+        if args.expert == "autogen_reference":
+            configure_autogen_reference_action(env_cfg)
         if args.expert in {
             "legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower",
             "legacy_gripper_anchor_safe_jaw_trajectory_direct_xyz_pan_nullspace_align_then_lower",
@@ -425,7 +432,8 @@ def main() -> int:
         }:
             configure_dynamic_control_frame_offset(env_cfg)
         print(
-            f"state_machine_gripper_close_expr: {env_cfg.actions.gripper_action.close_command_expr}",
+            "state_machine_gripper_close_expr: "
+            f"{getattr(env_cfg.actions.gripper_action, 'close_command_expr', 'continuous_joint_position')}",
             flush=True,
         )
         print(f"expert_ik_command_type: {env_cfg.actions.arm_action.controller.command_type}", flush=True)
@@ -446,6 +454,10 @@ def main() -> int:
             "autogen_polar_retreat_transport": (
                 "independent_pickup,30mm_constant-bearing_retreat,root-centered_arc_with_yaw,"
                 "radial_box_approach,full_6d_pose,actual_xyz_and_bearing_completion"
+            ),
+            "autogen_reference": (
+                "bundled_autogen_state_flow,robot-base_coordinates,original_green_ray_obb,"
+                "wrist_xyz_ik_plus_wrist_flex_posture_correction,continuous_gripper"
             ),
             "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
             "legacy_gripper_anchor_align_then_lower": "legacy_fixed_world,align_high_then_descend",
@@ -500,6 +512,7 @@ def main() -> int:
             "autogen_retreat_transport": RedCubeToBoxAutogenRetreatTransportStateMachine,
             "autogen_independent_retreat_transport": (RedCubeToBoxAutogenIndependentRetreatTransportStateMachine),
             "autogen_polar_retreat_transport": RedCubeToBoxAutogenPolarRetreatTransportStateMachine,
+            "autogen_reference": RedCubeToBoxAutogenReferenceStateMachine,
             "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
             "legacy_gripper_anchor_align_then_lower": RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine,
             "legacy_gripper_anchor_position_align_then_lower": (
@@ -618,6 +631,25 @@ def main() -> int:
                             f"gripper_target_w={_rounded_row(gripper_target[0])}",
                             flush=True,
                         )
+                if args.expert == "autogen_reference" and (phase_changed or completed_steps % 30 == 0):
+                    print(
+                        f"expert_autogen_reference:{phase}:"
+                        f"phase_step={state_machine.phase_step}:"
+                        f"command_position_b={_rounded_row(state_machine.command_position_b[0], digits=7)}:"
+                        f"gripper_command={state_machine.gripper_command:.7f}:"
+                        f"green_ray_hit={state_machine.green_ray_hit}:"
+                        f"green_ray_origin_w="
+                        f"{None if state_machine.green_ray_origin_w is None else _rounded_row(state_machine.green_ray_origin_w[0], digits=7)}:"
+                        f"green_ray_direction_w="
+                        f"{None if state_machine.green_ray_direction_w is None else _rounded_row(state_machine.green_ray_direction_w[0], digits=7)}:"
+                        f"posture_target_rad="
+                        f"{None if state_machine.posture_target is None else _rounded_row(state_machine.posture_target, digits=7)}:"
+                        f"retreat_target_b="
+                        f"{None if state_machine.retreat_target_b is None else _rounded_row(state_machine.retreat_target_b[0], digits=7)}:"
+                        f"transport_target_b="
+                        f"{None if state_machine.transport_target_b is None else _rounded_row(state_machine.transport_target_b[0], digits=7)}",
+                        flush=True,
+                    )
                 if (
                     args.expert
                     in {

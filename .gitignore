@@ -165,6 +165,7 @@ cython_debug/
 /tmp/leisaac-remote-env/
 /tmp/leisaac-remote-*.json
 
+/examples/so101/autogen/
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

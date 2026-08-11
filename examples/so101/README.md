@@ -489,6 +489,76 @@ grep -nE \
 tail -n 520
 ```
 
+The independent `autogen_reference` expert ports the bundled
+`autogen/so101-autogen-main/src/state_machine` implementation as a reference baseline. It does not inherit the
+legacy, adaptive, servo, or earlier Autogen-derived experts. The original state order and numerical constants are
+kept: approach, descend, grasp, grasp settle, lift, radial retreat, transport, release, and return home; the original
+Cartesian step sizes, phase limits, green-ray geometry, gripper timing/range, and effective release height are also
+preserved.
+
+Only framework adapters are changed. World targets are expressed in the robot-root frame expected by the source
+implementation; the original wrist-position IK plus wrist-flex posture correction is implemented through the existing
+phase-aware Isaac Lab action term; the original green ray is evaluated against the live cube OBB; and the binary
+gripper action is replaced by a continuous gripper-joint target so the source openness range is meaningful. The
+single-object task uses the live target-box floor center instead of Autogen's multi-object placement manager. A failed
+grasp stops safely instead of issuing the source project's direct joint-space return-home recovery. Thus this is a
+behavioral port with explicit adapters, not a byte-for-byte runtime transplant.
+
+Run the first dynamic comparison with seed 42. The recorder retains both successful and failed visual evidence. Do
+not add `--renderer_device`; this installation uses the selected simulation device.
+
+```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_ROOT=/home/data/xiaoqinchuan/projects/leisaac
+export LEISAAC_ENV=/home/data/xiaoqinchuan/envs/leisaac-so101
+export LEISAAC_ASSETS_ROOT=/home/data/xiaoqinchuan/assets/leisaac-v0.4.0
+export ISAACSIM_PORTABLE_ROOT=/home/data/xiaoqinchuan/cache/isaacsim-portable
+export OMNI_KIT_ACCEPT_EULA=YES
+export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
+
+export AUTOGEN_REFERENCE_LOG="$LEISAAC_BASE/results/leisaac/autogen-reference-seed42.log"
+export AUTOGEN_REFERENCE_RECORD_DIR="$LEISAAC_BASE/results/leisaac/autogen-reference-recordings"
+
+cd "$OPENPI_ROOT"
+mkdir -p "$LEISAAC_BASE/results/leisaac" "$AUTOGEN_REFERENCE_RECORD_DIR"
+
+timeout --signal=KILL 480s \
+  "$LEISAAC_ENV/bin/python" \
+  examples/so101/red_cube_to_box_expert_smoke.py \
+  --headless \
+  --enable_cameras \
+  --device cuda:6 \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --expert autogen_reference \
+  --seed 42 \
+  --record_dir "$AUTOGEN_REFERENCE_RECORD_DIR" \
+  --record_every 4 \
+  --record_fps 15 \
+  2>&1 | tee "$AUTOGEN_REFERENCE_LOG"
+
+autogen_reference_status=${PIPESTATUS[0]}
+echo "autogen_reference_transport_exit=$autogen_reference_status"
+
+if grep -q '^RED_CUBE_TO_BOX_EXPERT_SMOKE_OK$' "$AUTOGEN_REFERENCE_LOG" &&
+   ! grep -q '^RED_CUBE_TO_BOX_EXPERT_SMOKE_FAILED$' "$AUTOGEN_REFERENCE_LOG"; then
+  autogen_reference_semantic_status=0
+else
+  autogen_reference_semantic_status=1
+fi
+echo "autogen_reference_semantic_exit=$autogen_reference_semantic_status"
+
+grep -nE \
+  'expert_variant|servo_parameters|expert_phase|expert_state|expert_autogen_reference|expert_ik_runtime_mode|expert_grasp_event|expert_abort|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
+  "$AUTOGEN_REFERENCE_LOG" |
+tail -n 520
+```
+
+The authoritative result is `autogen_reference_semantic_exit`, not only the transport exit. The
+`expert_autogen_reference` records expose the live green ray, robot-base command, wrist posture target, gripper
+command, and retreat/transport targets so that a failure can be compared directly with the source state-machine
+assumptions.
+
 The third implementation, `red_cube_to_box_task/servo_state_machine.py`, inherits the adaptive grasp, retry,
 and gradual lift logic but does not replace either comparison expert. Its companion
 `red_cube_to_box_task/phase_aware_ik_action.py` preserves the 7D pose command shape while dropping the three
