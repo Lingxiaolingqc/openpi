@@ -381,11 +381,12 @@ tail -n 360
 
 The separate `autogen_independent_retreat_transport` expert is a clean-room state-machine comparison. It does not
 inherit `RedCubeToBoxStateMachine` or either dynamic-offset expert. The pickup keyframes are repeated locally and the
-standalone `lift_cube` phase is removed. The externally visible `retreat_to_safe` phase now has two internal
-subphases: it first lifts vertically at at most `0.0008 m` per control step, then retracts horizontally toward the
-robot root at at most `0.0010 m` per control step. The lift target is `0.25 m` above the target-box floor center. The
-second subphase finishes when the measured gripper has both reached the safe-height band and reduced its root-relative
-XY radius sufficiently; it does not require an unreachable exact XYZ endpoint. A confirmed grasp whose measured
+standalone `lift_cube` phase is removed. `retreat_to_safe` is one combined XYZ Cartesian segment: it raises the
+gripper toward `0.25 m` above the target-box floor center while reducing its root-relative XY radius to `5/7` of the
+phase-entry radius. Unlike the original `0.0025 m` reference step that dropped the cube, this isolated variant limits
+the combined path to `0.0008 m` per control step. The phase finishes when the measured gripper has both reached the
+safe-height band and reduced its root-relative XY radius sufficiently; it does not require an unreachable exact XYZ
+endpoint. A confirmed grasp whose measured
 jaw-to-cube distance exceeds `0.025 m` aborts immediately instead of carrying an already dropped cube through later
 phases. Retreat, transport, lower, and retract otherwise advance only after their measured completion conditions stay
 true for a configured number of consecutive steps. Placement XY is the live target-box floor center, offsets are

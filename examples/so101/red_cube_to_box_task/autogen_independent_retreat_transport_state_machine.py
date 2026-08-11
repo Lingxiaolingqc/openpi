@@ -27,10 +27,7 @@ _RETREAT_HEIGHT_ABOVE_FLOOR_CENTER = 0.25
 _BOX_HOVER_HEIGHT_ABOVE_FLOOR_CENTER = 0.25
 _MINIMUM_JAW_CLEARANCE_ABOVE_WALL = 0.03
 _CARTESIAN_REFERENCE_STEP = 0.0025
-_RETREAT_VERTICAL_REFERENCE_STEP = 0.0008
-_RETREAT_INWARD_REFERENCE_STEP = 0.0010
-_RETREAT_VERTICAL_TOLERANCE = 0.015
-_RETREAT_VERTICAL_STABLE_STEPS = 10
+_RETREAT_REFERENCE_STEP = 0.0008
 _RETREAT_RADIAL_ALLOWANCE = 0.035
 _GRASP_CONFIRM_DISTANCE = 0.015
 _GRASP_LOSS_DISTANCE = 0.025
@@ -40,11 +37,11 @@ class RedCubeToBoxAutogenIndependentRetreatTransportStateMachine(StateMachineBas
     """Pick, retreat-and-lift, transport, lower, and release.
 
     This class deliberately does not inherit any legacy RedCubeToBox expert.
-    The known-good pickup keyframes are repeated locally, then a single public
-    ``retreat_to_safe`` phase first raises the grasped cube vertically and only
-    then moves the arm inward. Motion phases transition only after measured
-    physical completion conditions remain true for several consecutive
-    control steps. All arm commands retain the complete legacy 6D pose target.
+    The known-good pickup keyframes are repeated locally, then one slow
+    ``retreat_to_safe`` Cartesian segment raises the grasped cube while moving
+    the arm inward. Motion phases transition only after measured physical
+    completion conditions remain true for several consecutive control steps.
+    All arm commands retain the complete legacy 6D pose target.
     """
 
     _FIXED_PHASE_STEPS: ClassVar[dict[str, int]] = {
@@ -91,10 +88,8 @@ class RedCubeToBoxAutogenIndependentRetreatTransportStateMachine(StateMachineBas
         self._target_stable_streak = 0
         self._motion_ready = False
         self._retreat_subphase: str | None = None
-        self._retreat_subphase_start_step = 0
         self._retreat_safe_z: torch.Tensor | None = None
         self._retreat_target_radius: torch.Tensor | None = None
-        self._retreat_vertical_stable_streak = 0
         self._jaw_cube_distance: float | None = None
         self._grasp_confirmed = False
         self._grasp_lost_before_release = False
@@ -242,7 +237,10 @@ class RedCubeToBoxAutogenIndependentRetreatTransportStateMachine(StateMachineBas
             return
         assert self._floor_anchor_w is not None
         start_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :].detach().clone()
+        robot_root_w = env.scene["robot"].data.root_pos_w
         target_w = start_w.clone()
+        start_radius = torch.linalg.vector_norm(start_w[:, :2] - robot_root_w[:, :2], dim=-1)
+        target_w[:, :2] = robot_root_w[:, :2] + _RETREAT_RADIAL_SCALE * (start_w[:, :2] - robot_root_w[:, :2])
         target_w[:, 2] = torch.maximum(
             start_w[:, 2],
             self._floor_anchor_w[:, 2] + _RETREAT_HEIGHT_ABOVE_FLOOR_CENTER,
@@ -252,26 +250,19 @@ class RedCubeToBoxAutogenIndependentRetreatTransportStateMachine(StateMachineBas
         jaw_cube_distance = torch.linalg.vector_norm(jaw_w - cube_w, dim=-1)
         self._jaw_cube_distance = float(jaw_cube_distance.max().item())
         self._grasp_confirmed = self._jaw_cube_distance <= _GRASP_CONFIRM_DISTANCE
-        self._retreat_subphase = "vertical_lift"
-        self._retreat_subphase_start_step = self._phase_step
+        self._retreat_subphase = "combined_slow_retreat"
         self._retreat_safe_z = target_w[:, 2].detach().clone()
+        self._retreat_target_radius = (_RETREAT_RADIAL_SCALE * start_radius).detach().clone()
         self._set_motion(start_w, target_w)
 
     def _retreat_reference(self) -> torch.Tensor:
-        assert self._retreat_subphase is not None
         assert self._motion_start_w is not None
         assert self._motion_target_w is not None
-        elapsed_steps = self._phase_step - self._retreat_subphase_start_step
-        maximum_step = (
-            _RETREAT_VERTICAL_REFERENCE_STEP
-            if self._retreat_subphase == "vertical_lift"
-            else _RETREAT_INWARD_REFERENCE_STEP
-        )
         return self._bounded_reference(
             self._motion_start_w,
             self._motion_target_w,
-            elapsed_steps,
-            maximum_step,
+            self._phase_step,
+            _RETREAT_REFERENCE_STEP,
         )
 
     def _detect_retreat_grasp_loss(self, env) -> bool:
@@ -300,35 +291,13 @@ class RedCubeToBoxAutogenIndependentRetreatTransportStateMachine(StateMachineBas
         return False
 
     def _update_retreat_progress(self, env) -> None:
-        assert self._retreat_subphase is not None
         assert self._retreat_safe_z is not None
+        assert self._retreat_target_radius is not None
         assert self._motion_target_w is not None
-        assert self._current_target_w is not None
         actual_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :]
         height_deficit = torch.clamp(self._retreat_safe_z - actual_w[:, 2], min=0.0)
-
-        if self._retreat_subphase == "vertical_lift":
-            self._target_error = float(height_deficit.max().item())
-            reference_at_target = bool(
-                torch.allclose(
-                    self._current_target_w[:, 2],
-                    self._retreat_safe_z,
-                    atol=1e-6,
-                    rtol=0.0,
-                )
-            )
-            if reference_at_target and self._target_error <= _RETREAT_VERTICAL_TOLERANCE:
-                self._retreat_vertical_stable_streak += 1
-            else:
-                self._retreat_vertical_stable_streak = 0
-            self._target_stable_streak = self._retreat_vertical_stable_streak
-            if self._retreat_vertical_stable_streak >= _RETREAT_VERTICAL_STABLE_STEPS:
-                self._start_inward_retreat(env, actual_w)
-            return
-
         robot_root_xy = env.scene["robot"].data.root_pos_w[:, :2]
         actual_radius = torch.linalg.vector_norm(actual_w[:, :2] - robot_root_xy, dim=-1)
-        assert self._retreat_target_radius is not None
         radial_excess = torch.clamp(
             actual_radius - (self._retreat_target_radius + _RETREAT_RADIAL_ALLOWANCE),
             min=0.0,
@@ -341,20 +310,6 @@ class RedCubeToBoxAutogenIndependentRetreatTransportStateMachine(StateMachineBas
         else:
             self._target_stable_streak = 0
         self._motion_ready = self._target_stable_streak >= stable_steps
-
-    def _start_inward_retreat(self, env, actual_w: torch.Tensor) -> None:
-        assert self._retreat_safe_z is not None
-        robot_root_w = env.scene["robot"].data.root_pos_w
-        target_w = actual_w.detach().clone()
-        start_radius = torch.linalg.vector_norm(actual_w[:, :2] - robot_root_w[:, :2], dim=-1)
-        target_w[:, :2] = robot_root_w[:, :2] + _RETREAT_RADIAL_SCALE * (actual_w[:, :2] - robot_root_w[:, :2])
-        target_w[:, 2] = torch.maximum(target_w[:, 2], self._retreat_safe_z)
-        self._retreat_target_radius = (_RETREAT_RADIAL_SCALE * start_radius).detach().clone()
-        self._retreat_subphase = "inward_retreat"
-        self._retreat_subphase_start_step = self._phase_step + 1
-        self._target_stable_streak = 0
-        self._motion_ready = False
-        self._set_motion(actual_w.detach().clone(), target_w)
 
     def _initialize_transport(self, env) -> None:
         if self._motion_start_w is not None:
@@ -487,9 +442,9 @@ class RedCubeToBoxAutogenIndependentRetreatTransportStateMachine(StateMachineBas
             "transition_policy": "actual_gripper_position_stable_before_phase_advance",
             "cartesian_reference_step": _CARTESIAN_REFERENCE_STEP,
             "retreat_radial_scale": _RETREAT_RADIAL_SCALE,
-            "retreat_vertical_reference_step": _RETREAT_VERTICAL_REFERENCE_STEP,
-            "retreat_inward_reference_step": _RETREAT_INWARD_REFERENCE_STEP,
+            "retreat_reference_step": _RETREAT_REFERENCE_STEP,
             "retreat_height_above_floor_center": _RETREAT_HEIGHT_ABOVE_FLOOR_CENTER,
+            "retreat_path": "single_combined_xyz_segment",
             "retreat_completion": "safe_height_and_reduced_root_radius",
             "grasp_loss_distance": _GRASP_LOSS_DISTANCE,
         }
