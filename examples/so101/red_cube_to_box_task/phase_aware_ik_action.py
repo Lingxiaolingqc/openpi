@@ -26,7 +26,15 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._xyz_pitch_joint_name: str | None = None
         self._xyz_pitch_joint_index: int | None = None
         self._xyz_pitch_joint_target: torch.Tensor | None = None
+        self._xyz_joint_nullspace_name: str | None = None
+        self._xyz_joint_nullspace_index: int | None = None
+        self._xyz_joint_nullspace_target: torch.Tensor | None = None
+        self._xyz_joint_nullspace_damping = 0.05
+        self._xyz_joint_nullspace_posture_gain = 0.08
+        self._xyz_joint_nullspace_max_step = 0.03
         self._last_delta_joint_pos: torch.Tensor | None = None
+        self._last_primary_delta_joint_pos: torch.Tensor | None = None
+        self._last_nullspace_delta_joint_pos: torch.Tensor | None = None
         self._last_task_error: torch.Tensor | None = None
         self._last_task_singular_values: torch.Tensor | None = None
         self._weighted_position_penalties: torch.Tensor | None = None
@@ -40,6 +48,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._planar_pose = False
         self._xyz_tilt = False
         self._clear_xyz_pitch_joint_target()
+        self._clear_xyz_joint_nullspace_target()
         self._clear_solver_diagnostics()
         self._weighted_position_penalties = None
         self._weighted_position_damping = None
@@ -52,6 +61,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._planar_pose = False
         self._xyz_tilt = False
         self._clear_xyz_pitch_joint_target()
+        self._clear_xyz_joint_nullspace_target()
         self._orientation_weight = 0.0 if enabled else 1.0
         self._weighted_position_penalties = None
         self._weighted_position_damping = None
@@ -66,6 +76,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._planar_pose = False
         self._xyz_tilt = False
         self._clear_xyz_pitch_joint_target()
+        self._clear_xyz_joint_nullspace_target()
         self._orientation_weight = float(weight)
         self._weighted_position_penalties = None
         self._weighted_position_damping = None
@@ -78,6 +89,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._planar_pose = enabled
         self._xyz_tilt = False
         self._clear_xyz_pitch_joint_target()
+        self._clear_xyz_joint_nullspace_target()
         self._weighted_position_penalties = None
         self._weighted_position_damping = None
         self._weighted_joint_names = ()
@@ -91,6 +103,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._xyz_tilt = enabled
         self._planar_pose = False
         self._clear_xyz_pitch_joint_target()
+        self._clear_xyz_joint_nullspace_target()
         self._weighted_position_penalties = None
         self._weighted_position_damping = None
         self._weighted_joint_names = ()
@@ -125,9 +138,55 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._weighted_position_damping = None
         self._weighted_joint_names = ()
         self._last_weighted_delta_joint_pos = None
+        self._clear_xyz_joint_nullspace_target()
         self._xyz_pitch_joint_name = joint_name
         self._xyz_pitch_joint_index = selected_joint_names.index(joint_name)
         self._xyz_pitch_joint_target = joint_target.detach().clone()
+
+    def set_xyz_joint_nullspace_target(
+        self,
+        *,
+        joint_name: str,
+        joint_target: torch.Tensor,
+        damping: float,
+        posture_gain: float,
+        max_posture_step: float,
+    ) -> None:
+        """Solve XYZ plus one joint row and use the remaining nullspace to avoid joint limits."""
+
+        if joint_target.ndim != 1 or joint_target.shape[0] != self._asset.data.joint_pos.shape[0]:
+            raise ValueError(
+                f"joint_target must have one value per environment; received shape {tuple(joint_target.shape)}"
+            )
+        if damping <= 0.0:
+            raise ValueError(f"Nullspace DLS damping must be positive, received {damping}")
+        if posture_gain < 0.0:
+            raise ValueError(f"Nullspace posture gain must be non-negative, received {posture_gain}")
+        if max_posture_step <= 0.0:
+            raise ValueError(f"Maximum nullspace posture step must be positive, received {max_posture_step}")
+
+        all_joint_names = self._asset.data.joint_names
+        if isinstance(self._joint_ids, slice):
+            selected_joint_names = list(all_joint_names[self._joint_ids])
+        else:
+            selected_joint_names = [all_joint_names[joint_id] for joint_id in self._joint_ids]
+        if joint_name not in selected_joint_names:
+            raise ValueError(f"Joint {joint_name!r} is not controlled by this IK action: {selected_joint_names}")
+
+        self._planar_pose = False
+        self._xyz_tilt = False
+        self._orientation_weight = 1.0
+        self._clear_xyz_pitch_joint_target()
+        self._weighted_position_penalties = None
+        self._weighted_position_damping = None
+        self._weighted_joint_names = ()
+        self._last_weighted_delta_joint_pos = None
+        self._xyz_joint_nullspace_name = joint_name
+        self._xyz_joint_nullspace_index = selected_joint_names.index(joint_name)
+        self._xyz_joint_nullspace_target = joint_target.detach().clone()
+        self._xyz_joint_nullspace_damping = float(damping)
+        self._xyz_joint_nullspace_posture_gain = float(posture_gain)
+        self._xyz_joint_nullspace_max_step = float(max_posture_step)
 
     def set_weighted_position_only(
         self,
@@ -154,6 +213,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._planar_pose = False
         self._xyz_tilt = False
         self._clear_xyz_pitch_joint_target()
+        self._clear_xyz_joint_nullspace_target()
         self._orientation_weight = 0.0
         self._weighted_position_penalties = torch.tensor(
             penalties,
@@ -187,6 +247,8 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
             return "xyz_tilt(xyz+orientation_xy)"
         if self._xyz_pitch_joint_target is not None:
             return f"xyz_pitch_joint(xyz+orientation_y+{self._xyz_pitch_joint_name})"
+        if self._xyz_joint_nullspace_target is not None:
+            return f"xyz_joint_nullspace(xyz+{self._xyz_joint_nullspace_name},joint_limit_avoidance)"
         if self._weighted_position_penalties is not None:
             return f"weighted_position_only(damping={self._weighted_position_damping:g})"
         if self._orientation_weight == 1.0:
@@ -200,6 +262,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
             not self._planar_pose
             and not self._xyz_tilt
             and self._xyz_pitch_joint_target is None
+            and self._xyz_joint_nullspace_target is None
             and self._orientation_weight == 1.0
         ):
             self._clear_solver_diagnostics()
@@ -256,6 +319,20 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
             joint_row[:, 0, self._xyz_pitch_joint_index] = 1.0
             task_error = torch.cat((position_error, orientation_error[:, 1:2], joint_error), dim=1)
             task_jacobian = torch.cat((jacobian[:, :3, :], jacobian[:, 4:5, :], joint_row), dim=1)
+        elif self._xyz_joint_nullspace_target is not None:
+            assert self._xyz_joint_nullspace_index is not None
+            position_error = desired_pos - ee_pos_curr
+            joint_error = (
+                self._xyz_joint_nullspace_target - joint_pos[:, self._xyz_joint_nullspace_index]
+            ).unsqueeze(-1)
+            joint_row = torch.zeros(
+                (jacobian.shape[0], 1, jacobian.shape[2]),
+                device=jacobian.device,
+                dtype=jacobian.dtype,
+            )
+            joint_row[:, 0, self._xyz_joint_nullspace_index] = 1.0
+            task_error = torch.cat((position_error, joint_error), dim=1)
+            task_jacobian = torch.cat((jacobian[:, :3, :], joint_row), dim=1)
         elif self.position_only:
             task_error = desired_pos - ee_pos_curr
             task_jacobian = jacobian[:, :3, :]
@@ -271,7 +348,42 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
             task_jacobian = jacobian.clone()
             task_jacobian[:, 3:, :] *= self._orientation_weight
 
-        if self._weighted_position_penalties is not None:
+        if self._xyz_joint_nullspace_target is not None:
+            task_jacobian_transpose = task_jacobian.transpose(1, 2)
+            task_identity = torch.eye(
+                task_jacobian.shape[1], device=task_jacobian.device, dtype=task_jacobian.dtype
+            ).unsqueeze(0)
+            damped_system = (
+                task_jacobian @ task_jacobian_transpose
+                + self._xyz_joint_nullspace_damping**2 * task_identity
+            )
+            damped_pseudoinverse = task_jacobian_transpose @ torch.linalg.solve(
+                damped_system, task_identity.expand(task_jacobian.shape[0], -1, -1)
+            )
+            primary_delta = (damped_pseudoinverse @ task_error.unsqueeze(-1)).squeeze(-1)
+
+            soft_limits = self._asset.data.soft_joint_pos_limits[:, self._joint_ids]
+            joint_midpoints = soft_limits.mean(dim=-1)
+            joint_half_ranges = 0.5 * (soft_limits[..., 1] - soft_limits[..., 0])
+            normalized_offset = (joint_pos - joint_midpoints) / torch.clamp(joint_half_ranges, min=1.0e-6)
+            distance_to_limit = torch.clamp(1.0 - torch.abs(normalized_offset), min=0.1)
+            posture_delta = -self._xyz_joint_nullspace_posture_gain * normalized_offset / distance_to_limit
+            posture_delta[:, self._xyz_joint_nullspace_index] = 0.0
+            posture_delta = torch.clamp(
+                posture_delta,
+                min=-self._xyz_joint_nullspace_max_step,
+                max=self._xyz_joint_nullspace_max_step,
+            )
+
+            joint_identity = torch.eye(
+                task_jacobian.shape[2], device=task_jacobian.device, dtype=task_jacobian.dtype
+            ).unsqueeze(0)
+            nullspace_projector = joint_identity - damped_pseudoinverse @ task_jacobian
+            nullspace_delta = (nullspace_projector @ posture_delta.unsqueeze(-1)).squeeze(-1)
+            delta_joint_pos = primary_delta + nullspace_delta
+            self._last_primary_delta_joint_pos = primary_delta.detach().clone()
+            self._last_nullspace_delta_joint_pos = nullspace_delta.detach().clone()
+        elif self._weighted_position_penalties is not None:
             assert self._weighted_position_damping is not None
             inverse_penalties = torch.diag_embed(
                 (1.0 / self._weighted_position_penalties).expand(task_jacobian.shape[0], -1)
@@ -294,7 +406,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
             delta_joint_pos = self._ik_controller._compute_delta_joint_pos(  # noqa: SLF001
                 task_error, task_jacobian
             )
-        if self._xyz_pitch_joint_target is not None:
+        if self._xyz_pitch_joint_target is not None or self._xyz_joint_nullspace_target is not None:
             self._last_delta_joint_pos = delta_joint_pos.detach().clone()
             self._last_task_error = task_error.detach().clone()
             self._last_task_singular_values = torch.linalg.svdvals(task_jacobian).detach().clone()
@@ -319,6 +431,14 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         return self._last_delta_joint_pos
 
     @property
+    def last_primary_delta_joint_pos(self) -> torch.Tensor | None:
+        return self._last_primary_delta_joint_pos
+
+    @property
+    def last_nullspace_delta_joint_pos(self) -> torch.Tensor | None:
+        return self._last_nullspace_delta_joint_pos
+
+    @property
     def last_task_error(self) -> torch.Tensor | None:
         return self._last_task_error
 
@@ -338,8 +458,15 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._xyz_pitch_joint_index = None
         self._xyz_pitch_joint_target = None
 
+    def _clear_xyz_joint_nullspace_target(self) -> None:
+        self._xyz_joint_nullspace_name = None
+        self._xyz_joint_nullspace_index = None
+        self._xyz_joint_nullspace_target = None
+
     def _clear_solver_diagnostics(self) -> None:
         self._last_delta_joint_pos = None
+        self._last_primary_delta_joint_pos = None
+        self._last_nullspace_delta_joint_pos = None
         self._last_task_error = None
         self._last_task_singular_values = None
 

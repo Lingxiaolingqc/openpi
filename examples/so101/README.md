@@ -301,6 +301,14 @@ and clamped inside the soft joint limits. High align then solves exactly five ro
 the persistent shoulder-pan joint error. Smoke logs report the target/actual pan angle, requested joint delta,
 five-element task error, and Jacobian singular values every 25 control steps.
 
+The independent `legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower` variant keeps the same pickup,
+explicit shoulder-pan target, physical safety gates, and legacy descent. It removes hard pitch from high align,
+leaving four primary rows: XYZ plus shoulder pan. A damped pseudoinverse solves those rows, while the remaining
+one-dimensional nullspace moves the arm away from its normalized soft joint limits. The secondary posture term
+uses gain `0.08`, is capped at `0.03 rad` per application, and does not directly modify the primary shoulder-pan
+joint. Smoke diagnostics separately report the primary and projected nullspace joint deltas so the effect can be
+distinguished from the earlier five-row controller.
+
 The separate `legacy_gripper_anchor_relaxed_ik` variant keeps that same jaw target and safety gate but uses the
 phase-aware IK action only for constraint weighting. All phases through lowering retain the exact pose solve.
 During the first 120 alignment steps it sets orientation weight to `0.1`; if alignment still has not converged,
@@ -340,6 +348,9 @@ zero-error pose instead of returning to an old fixed Z target.
 
 # Control XYZ and pitch while continuously driving shoulder_pan toward a bearing-derived target.
 --expert legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower
+
+# Control XYZ and shoulder_pan while using the remaining nullspace to avoid joint limits.
+--expert legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower
 
 # Add staged weak-orientation then position-only IK during final jaw alignment.
 --expert legacy_gripper_anchor_relaxed_ik

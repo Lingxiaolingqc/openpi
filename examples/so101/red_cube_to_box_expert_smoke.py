@@ -29,6 +29,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "legacy_gripper_anchor_safe_planar_align_then_lower",
             "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
             "legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower",
+            "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower",
             "legacy_gripper_anchor_relaxed_ik",
             "legacy_gripper_anchor_planar_ik",
             "adaptive",
@@ -281,11 +282,14 @@ def main() -> int:
     from red_cube_to_box_task.legacy_gripper_anchor_safe_planar_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorSafePlanarAlignThenLowerStateMachine,
     )
-    from red_cube_to_box_task.legacy_gripper_anchor_safe_xyz_tilt_align_then_lower_state_machine import (
-        RedCubeToBoxLegacyGripperAnchorSafeXyzTiltAlignThenLowerStateMachine,
+    from red_cube_to_box_task.legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower_state_machine import (
+        RedCubeToBoxLegacyGripperAnchorSafeXyzPanNullspaceAlignThenLowerStateMachine,
     )
     from red_cube_to_box_task.legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorSafeXyzPitchPanAlignThenLowerStateMachine,
+    )
+    from red_cube_to_box_task.legacy_gripper_anchor_safe_xyz_tilt_align_then_lower_state_machine import (
+        RedCubeToBoxLegacyGripperAnchorSafeXyzTiltAlignThenLowerStateMachine,
     )
     from red_cube_to_box_task.legacy_weighted_servo_state_machine import (
         RedCubeToBoxLegacyWeightedServoStateMachine,
@@ -326,6 +330,7 @@ def main() -> int:
             "legacy_gripper_anchor_safe_planar_align_then_lower",
             "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
             "legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower",
+            "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower",
         }:
             configure_planar_safety_sensors(env_cfg)
         if args.expert in {
@@ -336,6 +341,7 @@ def main() -> int:
             "legacy_gripper_anchor_safe_planar_align_then_lower",
             "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
             "legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower",
+            "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower",
             "servo",
             "weighted_servo",
             "legacy_weighted_servo",
@@ -365,6 +371,10 @@ def main() -> int:
             ),
             "legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower": (
                 "xyz_plus_pitch_plus_explicit_shoulder_pan_target,physical_safety_gates,legacy_pose_descent"
+            ),
+            "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower": (
+                "xyz_plus_explicit_shoulder_pan_target,nullspace_joint_limit_avoidance,"
+                "physical_safety_gates,legacy_pose_descent"
             ),
             "legacy_gripper_anchor_relaxed_ik": "legacy_fixed_world,jaw_anchor_then_staged_relaxation",
             "legacy_gripper_anchor_planar_ik": "legacy_fixed_world,collision_gated_xy_plus_orientation",
@@ -400,6 +410,9 @@ def main() -> int:
             ),
             "legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower": (
                 RedCubeToBoxLegacyGripperAnchorSafeXyzPitchPanAlignThenLowerStateMachine
+            ),
+            "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower": (
+                RedCubeToBoxLegacyGripperAnchorSafeXyzPanNullspaceAlignThenLowerStateMachine
             ),
             "legacy_gripper_anchor_relaxed_ik": RedCubeToBoxLegacyGripperAnchorRelaxedIkStateMachine,
             "legacy_gripper_anchor_planar_ik": RedCubeToBoxLegacyGripperAnchorPlanarIkStateMachine,
@@ -506,6 +519,7 @@ def main() -> int:
                         "legacy_gripper_anchor_safe_planar_align_then_lower",
                         "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
                         "legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower",
+                        "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower",
                         "legacy_gripper_anchor_relaxed_ik",
                         "legacy_gripper_anchor_planar_ik",
                     }
@@ -531,6 +545,7 @@ def main() -> int:
                         "legacy_gripper_anchor_safe_planar_align_then_lower",
                         "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
                         "legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower",
+                        "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower",
                     }
                     and phase in {"lower_into_box", "align_over_box", "release_cube"}
                     and (phase_changed or state_machine.step_count % 25 == 0)
@@ -565,7 +580,11 @@ def main() -> int:
                             flush=True,
                         )
                 if (
-                    args.expert == "legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower"
+                    args.expert
+                    in {
+                        "legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower",
+                        "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower",
+                    }
                     and phase == "align_over_box"
                     and (phase_changed or state_machine.step_count % 25 == 0)
                 ):
@@ -576,6 +595,8 @@ def main() -> int:
                     delta_joint_pos = arm_action_term.last_delta_joint_pos
                     task_error = arm_action_term.last_task_error
                     singular_values = arm_action_term.last_task_singular_values
+                    primary_delta = arm_action_term.last_primary_delta_joint_pos
+                    nullspace_delta = arm_action_term.last_nullspace_delta_joint_pos
                     pan_entry_value = None if pan_entry is None else round(pan_entry[0].item(), 7)
                     pan_target_value = None if pan_target is None else round(pan_target[0].item(), 7)
                     bearing_error_value = None if bearing_error is None else round(bearing_error[0].item(), 7)
@@ -587,6 +608,8 @@ def main() -> int:
                         f"bearing_error={bearing_error_value}:"
                         f"joint_names={arm_action_term.controlled_joint_names}:"
                         f"delta_joint_pos={None if delta_joint_pos is None else _rounded_row(delta_joint_pos[0], digits=7)}:"
+                        f"primary_delta={None if primary_delta is None else _rounded_row(primary_delta[0], digits=7)}:"
+                        f"nullspace_delta={None if nullspace_delta is None else _rounded_row(nullspace_delta[0], digits=7)}:"
                         f"task_error={None if task_error is None else _rounded_row(task_error[0], digits=7)}:"
                         f"singular_values={None if singular_values is None else _rounded_row(singular_values[0], digits=7)}",
                         flush=True,
@@ -601,6 +624,7 @@ def main() -> int:
                         "legacy_gripper_anchor_safe_planar_align_then_lower",
                         "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
                         "legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower",
+                        "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower",
                         "legacy_gripper_anchor_relaxed_ik",
                         "legacy_gripper_anchor_planar_ik",
                         "servo",
