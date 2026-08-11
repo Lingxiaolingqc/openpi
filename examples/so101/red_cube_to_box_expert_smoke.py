@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime
+from datetime import UTC
+from datetime import datetime
 import json
 import math
 import os
@@ -25,6 +26,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "legacy_gripper_anchor_align_then_lower",
             "legacy_gripper_anchor_position_align_then_lower",
             "legacy_gripper_anchor_weighted_position_align_then_lower",
+            "legacy_gripper_anchor_safe_planar_align_then_lower",
             "legacy_gripper_anchor_relaxed_ik",
             "legacy_gripper_anchor_planar_ik",
             "adaptive",
@@ -139,12 +141,12 @@ class _DiagnosticRecorder:
                     "ik_runtime_mode": getattr(state_machine, "ik_runtime_mode", "pose"),
                     "safety_mode": getattr(state_machine, "safety_mode", None),
                     "cube_clearance": _finite_or_none(getattr(state_machine, "cube_clearance", None)),
-                    "minimum_robot_clearance": _finite_or_none(
-                        getattr(state_machine, "minimum_robot_clearance", None)
-                    ),
+                    "minimum_robot_clearance": _finite_or_none(getattr(state_machine, "minimum_robot_clearance", None)),
                     "maximum_box_contact_force": _finite_or_none(
                         getattr(state_machine, "maximum_box_contact_force", None)
                     ),
+                    "align_cube_z_reference": _finite_or_none(getattr(state_machine, "align_cube_z_reference", None)),
+                    "align_cube_z_error": _finite_or_none(getattr(state_machine, "align_cube_z_error", None)),
                 }
             )
         with self.trace_path.open("a", encoding="utf-8") as trace_file:
@@ -274,6 +276,9 @@ def main() -> int:
     from red_cube_to_box_task.legacy_gripper_anchor_weighted_position_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorWeightedPositionAlignThenLowerStateMachine,
     )
+    from red_cube_to_box_task.legacy_gripper_anchor_safe_planar_align_then_lower_state_machine import (
+        RedCubeToBoxLegacyGripperAnchorSafePlanarAlignThenLowerStateMachine,
+    )
     from red_cube_to_box_task.legacy_weighted_servo_state_machine import (
         RedCubeToBoxLegacyWeightedServoStateMachine,
     )
@@ -308,13 +313,17 @@ def main() -> int:
         env_cfg.recorders = None
         env_cfg.terminations.success = None
         env_cfg.terminations.time_out = None
-        if args.expert == "legacy_gripper_anchor_planar_ik":
+        if args.expert in {
+            "legacy_gripper_anchor_planar_ik",
+            "legacy_gripper_anchor_safe_planar_align_then_lower",
+        }:
             configure_planar_safety_sensors(env_cfg)
         if args.expert in {
             "legacy_gripper_anchor_relaxed_ik",
             "legacy_gripper_anchor_planar_ik",
             "legacy_gripper_anchor_position_align_then_lower",
             "legacy_gripper_anchor_weighted_position_align_then_lower",
+            "legacy_gripper_anchor_safe_planar_align_then_lower",
             "servo",
             "weighted_servo",
             "legacy_weighted_servo",
@@ -335,6 +344,9 @@ def main() -> int:
             "legacy_gripper_anchor_position_align_then_lower": "position_only_high_align,legacy_pose_descent",
             "legacy_gripper_anchor_weighted_position_align_then_lower": (
                 "shoulder_pan_priority_xyz_align,legacy_pose_descent"
+            ),
+            "legacy_gripper_anchor_safe_planar_align_then_lower": (
+                "xy_plus_orientation_high_align,z_safety_band,legacy_pose_descent"
             ),
             "legacy_gripper_anchor_relaxed_ik": "legacy_fixed_world,jaw_anchor_then_staged_relaxation",
             "legacy_gripper_anchor_planar_ik": "legacy_fixed_world,collision_gated_xy_plus_orientation",
@@ -361,6 +373,9 @@ def main() -> int:
             ),
             "legacy_gripper_anchor_weighted_position_align_then_lower": (
                 RedCubeToBoxLegacyGripperAnchorWeightedPositionAlignThenLowerStateMachine
+            ),
+            "legacy_gripper_anchor_safe_planar_align_then_lower": (
+                RedCubeToBoxLegacyGripperAnchorSafePlanarAlignThenLowerStateMachine
             ),
             "legacy_gripper_anchor_relaxed_ik": RedCubeToBoxLegacyGripperAnchorRelaxedIkStateMachine,
             "legacy_gripper_anchor_planar_ik": RedCubeToBoxLegacyGripperAnchorPlanarIkStateMachine,
@@ -464,6 +479,7 @@ def main() -> int:
                         "legacy_gripper_anchor_align_then_lower",
                         "legacy_gripper_anchor_position_align_then_lower",
                         "legacy_gripper_anchor_weighted_position_align_then_lower",
+                        "legacy_gripper_anchor_safe_planar_align_then_lower",
                         "legacy_gripper_anchor_relaxed_ik",
                         "legacy_gripper_anchor_planar_ik",
                     }
@@ -483,7 +499,11 @@ def main() -> int:
                             flush=True,
                         )
                 if (
-                    args.expert == "legacy_gripper_anchor_planar_ik"
+                    args.expert
+                    in {
+                        "legacy_gripper_anchor_planar_ik",
+                        "legacy_gripper_anchor_safe_planar_align_then_lower",
+                    }
                     and phase in {"lower_into_box", "align_over_box", "release_cube"}
                     and (phase_changed or state_machine.step_count % 25 == 0)
                 ):
@@ -492,7 +512,9 @@ def main() -> int:
                         f"mode={state_machine.safety_mode}:"
                         f"cube_clearance={state_machine.cube_clearance:.6f}:"
                         f"minimum_robot_clearance={state_machine.minimum_robot_clearance:.6f}:"
-                        f"maximum_box_contact_force={state_machine.maximum_box_contact_force:.6f}",
+                        f"maximum_box_contact_force={state_machine.maximum_box_contact_force:.6f}:"
+                        f"align_cube_z_reference={getattr(state_machine, 'align_cube_z_reference', None)}:"
+                        f"align_cube_z_error={getattr(state_machine, 'align_cube_z_error', None)}",
                         flush=True,
                     )
                 if (
@@ -521,6 +543,7 @@ def main() -> int:
                         "legacy_gripper_anchor_align_then_lower",
                         "legacy_gripper_anchor_position_align_then_lower",
                         "legacy_gripper_anchor_weighted_position_align_then_lower",
+                        "legacy_gripper_anchor_safe_planar_align_then_lower",
                         "legacy_gripper_anchor_relaxed_ik",
                         "legacy_gripper_anchor_planar_ik",
                         "servo",
@@ -676,9 +699,7 @@ def main() -> int:
                     "jaw_final_pos_w": _rounded_row(ee_frame.data.target_pos_w[0, 1]),
                     "safety_mode": getattr(state_machine, "safety_mode", None),
                     "cube_clearance": _finite_or_none(getattr(state_machine, "cube_clearance", None)),
-                    "minimum_robot_clearance": _finite_or_none(
-                        getattr(state_machine, "minimum_robot_clearance", None)
-                    ),
+                    "minimum_robot_clearance": _finite_or_none(getattr(state_machine, "minimum_robot_clearance", None)),
                     "maximum_box_contact_force": _finite_or_none(
                         getattr(state_machine, "maximum_box_contact_force", None)
                     ),

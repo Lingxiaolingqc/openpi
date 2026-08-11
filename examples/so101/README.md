@@ -279,6 +279,14 @@ hard-coding a shoulder-pan angle. Descent restores unmodified legacy full-pose I
 The smoke log emits `expert_weighted_ik` with the current five arm-joint positions and the preceding weighted
 IK joint delta, making it possible to distinguish solver preference from actuator or joint-limit clipping.
 
+The `legacy_gripper_anchor_safe_planar_align_then_lower` variant replaces the visually contorted
+position-only high align without overwriting that comparison expert. Pickup, transfer, align-first ordering,
+and full-pose descent remain identical to the legacy control. High alignment solves jaw X/Y plus all three
+orientation rows; Z is absent from the IK error and Jacobian. Z is instead safety-gated: cube height must stay
+within `0.020 m` of its value on align entry, cube-bottom clearance above the box wall must remain at least
+`0.015 m`, robot geometry clearance at least `0.010 m`, and filtered box contact below `0.25 N`. A violation
+aborts before another action is applied instead of invoking a position-only recovery motion.
+
 The separate `legacy_gripper_anchor_relaxed_ik` variant keeps that same jaw target and safety gate but uses the
 phase-aware IK action only for constraint weighting. All phases through lowering retain the exact pose solve.
 During the first 120 alignment steps it sets orientation weight to `0.1`; if alignment still has not converged,
@@ -309,6 +317,9 @@ zero-error pose instead of returning to an old fixed Z target.
 
 # Prefer shoulder-pan motion among the redundant position-only high-alignment solutions.
 --expert legacy_gripper_anchor_weighted_position_align_then_lower
+
+# Solve jaw XY plus orientation at high align; observe Z only through safety gates.
+--expert legacy_gripper_anchor_safe_planar_align_then_lower
 
 # Add staged weak-orientation then position-only IK during final jaw alignment.
 --expert legacy_gripper_anchor_relaxed_ik
