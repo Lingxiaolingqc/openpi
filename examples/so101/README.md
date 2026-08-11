@@ -380,12 +380,16 @@ tail -n 360
 ```
 
 The separate `autogen_independent_retreat_transport` expert is a clean-room state-machine comparison. It does not
-inherit `RedCubeToBoxStateMachine` or either dynamic-offset expert. The pickup keyframes are repeated locally, the
-standalone `lift_cube` phase is removed, and `retreat_to_safe` raises and retracts the grasped cube in one motion.
-Retreat, transport, lower, and retract advance only after the actual gripper position remains within tolerance for a
-configured number of consecutive steps. A phase that cannot converge reports its own timeout instead of continuing
-with a large tracking error. Placement XY is the live target-box floor center, offsets are disabled, and the complete
-6D pose target remains active.
+inherit `RedCubeToBoxStateMachine` or either dynamic-offset expert. The pickup keyframes are repeated locally and the
+standalone `lift_cube` phase is removed. The externally visible `retreat_to_safe` phase now has two internal
+subphases: it first lifts vertically at at most `0.0008 m` per control step, then retracts horizontally toward the
+robot root at at most `0.0010 m` per control step. The lift target is `0.25 m` above the target-box floor center. The
+second subphase finishes when the measured gripper has both reached the safe-height band and reduced its root-relative
+XY radius sufficiently; it does not require an unreachable exact XYZ endpoint. A confirmed grasp whose measured
+jaw-to-cube distance exceeds `0.025 m` aborts immediately instead of carrying an already dropped cube through later
+phases. Retreat, transport, lower, and retract otherwise advance only after their measured completion conditions stay
+true for a configured number of consecutive steps. Placement XY is the live target-box floor center, offsets are
+disabled, and the complete 6D pose target remains active for this controlled comparison.
 
 ```bash
 export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
@@ -421,7 +425,7 @@ autogen_independent_status=${PIPESTATUS[0]}
 echo "autogen_independent_retreat_transport_exit=$autogen_independent_status"
 
 grep -nE \
-  'expert_phase|expert_state|expert_independent_path|expert_tracking|expert_grasp_event|expert_ik_runtime_mode|servo_timeout_phase|release_block_reason|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
+  'expert_phase|expert_state|expert_independent_path|retreat_subphase|jaw_cube_distance|expert_tracking|expert_grasp_event|expert_abort|expert_ik_runtime_mode|servo_timeout_phase|servo_abort_reason|release_block_reason|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
   "$AUTOGEN_INDEPENDENT_LOG" |
 tail -n 420
 ```

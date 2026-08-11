@@ -696,6 +696,7 @@ def main() -> int:
                     print(
                         f"expert_independent_path:{phase}:"
                         f"phase_step={state_machine.phase_step}:"
+                        f"retreat_subphase={state_machine.retreat_subphase}:"
                         f"motion_start_w="
                         f"{None if state_machine.motion_start_w is None else _rounded_row(state_machine.motion_start_w[0], digits=7)}:"
                         f"motion_target_w="
@@ -703,7 +704,9 @@ def main() -> int:
                         f"current_target_w="
                         f"{None if state_machine.current_target_w is None else _rounded_row(state_machine.current_target_w[0], digits=7)}:"
                         f"target_error={state_machine.target_error}:"
-                        f"stable_streak={state_machine.target_stable_streak}",
+                        f"stable_streak={state_machine.target_stable_streak}:"
+                        f"jaw_cube_distance={state_machine.jaw_cube_distance}:"
+                        f"grasp_confirmed={state_machine.grasp_confirmed}",
                         flush=True,
                     )
                 ik_runtime_mode = getattr(state_machine, "ik_runtime_mode", "pose")
