@@ -433,19 +433,19 @@ tail -n 420
 ```
 
 The additional `autogen_polar_retreat_transport` expert preserves the independent expert as a comparison and changes
-only the grasped-object route. After closing, it shortens the measured root-relative radius by exactly `0.030 m`
-while preserving the entry bearing and raising the gripper toward `floor + 0.22 m`. The measured safe height at the
-arc entry is then frozen. It follows a root-centered arc at constant radius and that frozen height to the live box
+only the grasped-object route. After closing, it first holds measured X/Y and raises the gripper toward
+`floor + 0.22 m`. It then holds Z and the entry bearing while shortening the measured root-relative radius by exactly
+`0.030 m`. The measured safe height at the arc entry is then frozen. It follows a root-centered arc at constant radius and that frozen height to the live box
 bearing; the commanded yaw rotates by the same angle as the arc. A final radial segment moves at fixed box bearing and
 the same frozen height to the live box-floor center before the existing safe lower,
 release, and retract phases. Retreat, arc, and radial phases require the bounded reference to finish and the measured
 gripper XYZ and root bearing to remain within tolerance. This prevents the old false completion where radius and
 height matched even though the arm had rotated to the wrong Cartesian point.
 
-The retreat phase deliberately uses the five-dimensional `xyz_tilt` solve: measured XYZ plus world roll/pitch are
-constrained, while yaw is left free. This matches the SO-101 arm's five non-gripper joints and avoids asking five joints
-to satisfy a generally unreachable six-dimensional pose during the large vertical rise. Arc and later phases remain
-unchanged for a controlled comparison. Retreat aborts before another physics step if measured Z exceeds its target by
+Both internal retreat segments use the five-dimensional `xyz_pitch_joint` solve: measured XYZ, base-frame pitch, and
+the shoulder-pan coordinate captured at retreat entry are constrained. Roll and yaw remain free. This directly prevents
+the base rotation observed under both full-pose and `xyz_tilt` retreat while keeping the principal gripper pitch. Arc
+and later phases remain unchanged for a controlled comparison. Retreat aborts before another physics step if measured Z exceeds its target by
 more than `0.020 m`, root bearing error exceeds `20 degrees`, or the final-target error remains more than `0.010 m`
 above its best observed value for 20 consecutive steps after the reference finishes. The corresponding cause appears
 in `retreat_safety_reason`, `servo_abort_reason`, and `release_block_reason`.

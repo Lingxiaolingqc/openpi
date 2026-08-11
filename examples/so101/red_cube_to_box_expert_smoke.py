@@ -749,6 +749,8 @@ def main() -> int:
                         f"stable_streak={state_machine.target_stable_streak}:"
                         f"retreat_worsening_streak={state_machine.retreat_worsening_streak}:"
                         f"retreat_safety_reason={state_machine.retreat_safety_reason}:"
+                        f"shoulder_pan_target="
+                        f"{None if state_machine.retreat_shoulder_pan_target is None else _rounded_row(state_machine.retreat_shoulder_pan_target, digits=7)}:"
                         f"jaw_cube_distance={state_machine.jaw_cube_distance}:"
                         f"grasp_confirmed={state_machine.grasp_confirmed}",
                         flush=True,
