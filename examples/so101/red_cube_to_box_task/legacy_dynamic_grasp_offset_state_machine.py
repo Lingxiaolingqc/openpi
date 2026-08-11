@@ -68,7 +68,7 @@ class RedCubeToBoxLegacyDynamicGraspOffsetStateMachine(RedCubeToBoxStateMachine)
 
         box_release = self._floor_anchor.clone()
         box_release[:, :2] = placement_gripper_target_xy
-        box_release[:, 2] += TARGET_BOX_FLOOR_THICKNESS / 2.0 + 0.13
+        box_release[:, 2] = self._placement_release_z(env, box_release[:, 2], phase_name)
 
         if phase_name == "transfer_to_box":
             target_pos_w = self._interpolate(pick_lift, box_hover, phase_step, phase_duration)
@@ -94,6 +94,11 @@ class RedCubeToBoxLegacyDynamicGraspOffsetStateMachine(RedCubeToBoxStateMachine)
         del env, phase_name
         assert self._dynamic_gripper_target_xy is not None
         return self._dynamic_gripper_target_xy
+
+    def _placement_release_z(self, env, floor_center_z: torch.Tensor, phase_name: str) -> torch.Tensor:
+        """Return the original legacy release height, with an override point for comparisons."""
+        del env, phase_name
+        return floor_center_z + TARGET_BOX_FLOOR_THICKNESS / 2.0 + 0.13
 
     def reset(self) -> None:
         super().reset()

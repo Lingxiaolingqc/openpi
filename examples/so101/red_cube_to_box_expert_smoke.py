@@ -144,6 +144,8 @@ class _DiagnosticRecorder:
             "pick_cube": bool(observations["subtask_terms"]["pick_cube"][0].item()),
         }
         if state_machine is not None:
+            ee_point_w = getattr(state_machine, "ee_point_w", None)
+            ee_table_projection_w = getattr(state_machine, "ee_table_projection_w", None)
             record.update(
                 {
                     "ik_runtime_mode": getattr(state_machine, "ik_runtime_mode", "pose"),
@@ -155,6 +157,29 @@ class _DiagnosticRecorder:
                     ),
                     "align_cube_z_reference": _finite_or_none(getattr(state_machine, "align_cube_z_reference", None)),
                     "align_cube_z_error": _finite_or_none(getattr(state_machine, "align_cube_z_error", None)),
+                    "ee_marker_pos_w": None if ee_point_w is None else _rounded_row(ee_point_w[0]),
+                    "ee_table_projection_marker_pos_w": (
+                        None if ee_table_projection_w is None else _rounded_row(ee_table_projection_w[0])
+                    ),
+                    "lower_target_error": _finite_or_none(getattr(state_machine, "lower_target_error", None)),
+                    "lower_target_stable_streak": getattr(state_machine, "lower_target_stable_streak", None),
+                    "lower_hold_steps": getattr(state_machine, "lower_hold_steps", None),
+                    "release_authorized": getattr(state_machine, "release_authorized", None),
+                    "measured_gripper_above_jaw_z": (
+                        None
+                        if getattr(state_machine, "measured_gripper_above_jaw_z", None) is None
+                        else _rounded_row(state_machine.measured_gripper_above_jaw_z[0:1])
+                    ),
+                    "safe_jaw_target_z": (
+                        None
+                        if getattr(state_machine, "safe_jaw_target_z", None) is None
+                        else _rounded_row(state_machine.safe_jaw_target_z[0:1])
+                    ),
+                    "safe_release_gripper_target_z": (
+                        None
+                        if getattr(state_machine, "safe_release_gripper_target_z", None) is None
+                        else _rounded_row(state_machine.safe_release_gripper_target_z[0:1])
+                    ),
                 }
             )
         with self.trace_path.open("a", encoding="utf-8") as trace_file:
@@ -600,9 +625,25 @@ def main() -> int:
                         f"corrected_gripper_target_xy="
                         f"{None if state_machine.corrected_gripper_target_xy is None else _rounded_row(state_machine.corrected_gripper_target_xy[0], digits=7)}:"
                         f"actual_cube_xy={_rounded_row(cube.data.root_pos_w[0, :2], digits=7)}:"
-                        f"desired_cube_xy={_rounded_row(state_machine.desired_cube_xy[0], digits=7)}",
+                        f"desired_cube_xy={_rounded_row(state_machine.desired_cube_xy[0], digits=7)}:"
+                        f"measured_gripper_above_jaw_z="
+                        f"{None if state_machine.measured_gripper_above_jaw_z is None else _rounded_row(state_machine.measured_gripper_above_jaw_z[0:1], digits=7)}:"
+                        f"safe_jaw_target_z="
+                        f"{None if state_machine.safe_jaw_target_z is None else _rounded_row(state_machine.safe_jaw_target_z[0:1], digits=7)}:"
+                        f"safe_release_gripper_target_z="
+                        f"{None if state_machine.safe_release_gripper_target_z is None else _rounded_row(state_machine.safe_release_gripper_target_z[0:1], digits=7)}",
                         flush=True,
                     )
+                    if phase == "lower_into_box":
+                        print(
+                            f"expert_lower_release_gate:{phase}:"
+                            f"target_error={state_machine.lower_target_error}:"
+                            f"tolerance={state_machine.servo_parameters['lower_target_tolerance']}:"
+                            f"stable_streak={state_machine.lower_target_stable_streak}:"
+                            f"hold_steps={state_machine.lower_hold_steps}:"
+                            f"release_authorized={state_machine.release_authorized}",
+                            flush=True,
+                        )
                 ik_runtime_mode = getattr(state_machine, "ik_runtime_mode", "pose")
                 if phase_changed or ik_runtime_mode != previous_ik_runtime_mode:
                     print(f"expert_ik_runtime_mode:{phase}:{ik_runtime_mode}", flush=True)
@@ -881,8 +922,10 @@ def main() -> int:
         )
         servo_timeout_phase = getattr(state_machine, "servo_timeout_phase", None)
         servo_abort_reason = getattr(state_machine, "servo_abort_reason", None)
+        release_block_reason = getattr(state_machine, "release_block_reason", None)
         print(f"servo_timeout_phase: {servo_timeout_phase}", flush=True)
         print(f"servo_abort_reason: {servo_abort_reason}", flush=True)
+        print(f"release_block_reason: {release_block_reason}", flush=True)
         print(f"expert_success: {success}", flush=True)
 
         failure_message = None
@@ -894,6 +937,8 @@ def main() -> int:
             failure_message = f"The expert aborted: {servo_abort_reason}"
         elif servo_timeout_phase is not None:
             failure_message = f"The expert timed out in phase: {servo_timeout_phase}"
+        elif release_block_reason is not None:
+            failure_message = f"Release was safely blocked: {release_block_reason}"
         elif not success:
             failure_message = "The scripted expert did not place a settled cube inside the target box"
 

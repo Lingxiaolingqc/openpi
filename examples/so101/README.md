@@ -283,7 +283,14 @@ The separate `legacy_dynamic_grasp_offset_residual_corrected` expert tests the t
 without overwriting that baseline. It follows `legacy_dynamic_grasp_offset` unchanged through transfer. On
 the first `lower_into_box` step it measures `desired_cube_xy - actual_cube_xy`, caps that XY vector at
 `0.10 m`, adds it once to the dynamic gripper target, then freezes the result through lowering and release.
-It is intentionally not a per-step servo, so the correction cannot accumulate or chase collision motion.
+It is intentionally not a per-step servo, so the correction cannot accumulate or chase collision motion. At the same
+transition it measures the current vertical gripper-to-jaw separation and raises the frozen lower target as needed so
+that the jaw target remains at least `0.030 m` above the audited box-wall top. At the final lower target, the actual
+gripper EE must remain within `0.015 m` of the corrected 3D target for 10 consecutive control steps before release.
+Otherwise the gripper remains closed; after 300 additional hold steps the run fails without releasing the cube.
+
+When recording is enabled, a magenta sphere marks the live gripper EE and a green sphere marks its vertical
+projection onto the audited table surface. Both points and the release-gate state are also written to `trace.jsonl`.
 
 ```bash
 export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
@@ -317,7 +324,7 @@ residual_corrected_status=${PIPESTATUS[0]}
 echo "legacy_dynamic_grasp_offset_residual_corrected_exit=$residual_corrected_status"
 
 grep -nE \
-  'expert_phase|expert_state|expert_dynamic_grasp_offset|expert_transfer_residual_correction|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
+  'expert_phase|expert_state|expert_dynamic_grasp_offset|expert_transfer_residual_correction|expert_lower_release_gate|release_block_reason|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
   "$RESIDUAL_CORRECTED_LOG" |
 tail -n 320
 ```
