@@ -281,16 +281,18 @@ tail -n 280
 
 The separate `legacy_dynamic_grasp_offset_residual_corrected` expert tests the tracking-error hypothesis
 without overwriting that baseline. It follows `legacy_dynamic_grasp_offset` unchanged through transfer. On
-the first `lower_into_box` step it measures `desired_cube_xy - actual_cube_xy`, caps that XY vector at
-`0.10 m`, adds it once to the dynamic gripper target, then freezes the result through lowering and release.
-It is intentionally not a per-step servo, so the correction cannot accumulate or chase collision motion. At the same
-transition it measures the current vertical gripper-to-jaw separation and raises the frozen lower target as needed so
+the last 40 transfer steps it re-samples `cube_xy - gripper_xy`; the first `lower_into_box` step freezes the median and
+recomputes `desired_cube_xy - transfer_gripper_to_cube_xy`. The change from the lift-derived target is capped at
+`0.10 m`. Thus lift samples guide transfer while transfer samples determine lower/release, without a per-step servo or
+an accumulated correction. At the same transition it measures the current vertical gripper-to-jaw separation and
+raises the frozen lower target as needed so
 that the jaw target remains at least `0.030 m` above the audited box-wall top. At the final lower target, the actual
 gripper EE must remain within `0.015 m` of the corrected 3D target for 10 consecutive control steps before release.
 Otherwise the gripper remains closed; after 300 additional hold steps the run fails without releasing the cube.
 
-When recording is enabled, a magenta sphere marks the live gripper EE and a green sphere marks its vertical
+When recording is enabled, a red sphere marks the live gripper EE and a green sphere marks its vertical
 projection onto the audited table surface. Both points and the release-gate state are also written to `trace.jsonl`.
+Both sphere radii are `0.05 m` for visibility in the headless front-camera recording.
 
 ```bash
 export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi

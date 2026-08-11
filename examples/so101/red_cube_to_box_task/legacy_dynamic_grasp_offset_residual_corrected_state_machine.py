@@ -15,9 +15,11 @@ _MAXIMUM_RESIDUAL_CORRECTION = 0.10
 _LOWER_TARGET_TOLERANCE = 0.015
 _LOWER_TARGET_STABLE_STEPS = 10
 _MAXIMUM_LOWER_HOLD_STEPS = 300
-_EE_POINT_RADIUS = 0.010
-_TABLE_PROJECTION_RADIUS = 0.008
+_EE_POINT_RADIUS = 0.050
+_TABLE_PROJECTION_RADIUS = 0.050
 _MINIMUM_JAW_CLEARANCE_ABOVE_WALL = 0.030
+_TRANSFER_GRASP_OFFSET_SAMPLE_START_STEP = 120
+_MINIMUM_TRANSFER_CUBE_HEIGHT = 0.05
 
 
 class RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine(
@@ -25,18 +27,20 @@ class RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine(
 ):
     """Correct the placement target once from the measured post-transfer cube error.
 
-    The parent expert is unchanged through transfer. On the first lower-into-box
-    control step, this comparison measures ``desired_cube_xy - actual_cube_xy``,
-    caps that vector at 10 cm, adds it once to the parent gripper target, and
-    freezes the corrected target through release and retraction. It deliberately
-    does not accumulate feedback on every step.
+    The parent expert's late-lift offset guides transfer. During late transfer,
+    this comparison re-samples ``cube_xy - gripper_xy``. On the first
+    lower-into-box step it derives a new gripper target from that median, caps
+    the change at 10 cm, and freezes it through release and retraction. It
+    deliberately does not accumulate feedback on every step.
     """
 
     def __init__(self) -> None:
         super().__init__()
-        self._raw_transfer_residual_xy: torch.Tensor | None = None
-        self._applied_transfer_residual_xy: torch.Tensor | None = None
+        self._raw_target_correction_xy: torch.Tensor | None = None
+        self._applied_target_correction_xy: torch.Tensor | None = None
         self._corrected_gripper_target_xy: torch.Tensor | None = None
+        self._transfer_gripper_to_cube_xy_samples: list[torch.Tensor] = []
+        self._transfer_gripper_to_cube_xy: torch.Tensor | None = None
         self._measured_gripper_above_jaw_z: torch.Tensor | None = None
         self._safe_jaw_target_z: torch.Tensor | None = None
         self._safe_release_gripper_target_z: torch.Tensor | None = None
@@ -57,7 +61,7 @@ class RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine(
                 markers={
                     "ee_point": sim_utils.SphereCfg(
                         radius=_EE_POINT_RADIUS,
-                        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.05, 0.8)),
+                        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.02, 0.02)),
                     ),
                     "table_projection": sim_utils.SphereCfg(
                         radius=_TABLE_PROJECTION_RADIUS,
@@ -70,6 +74,8 @@ class RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine(
 
     def get_action(self, env) -> torch.Tensor:
         phase_name, phase_step, phase_duration = self._phase_state()
+        if phase_name == "transfer_to_box":
+            self._sample_transfer_grasp_offset(env, phase_step)
         action = super().get_action(env)
         self._update_point_visualization(env)
 
@@ -102,9 +108,11 @@ class RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine(
 
     def reset(self) -> None:
         super().reset()
-        self._raw_transfer_residual_xy = None
-        self._applied_transfer_residual_xy = None
+        self._raw_target_correction_xy = None
+        self._applied_target_correction_xy = None
         self._corrected_gripper_target_xy = None
+        self._transfer_gripper_to_cube_xy_samples = []
+        self._transfer_gripper_to_cube_xy = None
         self._measured_gripper_above_jaw_z = None
         self._safe_jaw_target_z = None
         self._safe_release_gripper_target_z = None
@@ -123,20 +131,43 @@ class RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine(
 
         if self._corrected_gripper_target_xy is None:
             assert self._desired_cube_xy is not None
-            actual_cube_xy = env.scene["cube"].data.root_pos_w[:, :2]
-            raw_residual_xy = self._desired_cube_xy - actual_cube_xy
-            residual_norm = torch.linalg.vector_norm(raw_residual_xy, dim=-1, keepdim=True)
+            self._finalize_transfer_grasp_offset()
+            assert self._transfer_gripper_to_cube_xy is not None
+            uncapped_target_xy = self._desired_cube_xy - self._transfer_gripper_to_cube_xy
+            raw_target_correction_xy = uncapped_target_xy - base_target_xy
+            correction_norm = torch.linalg.vector_norm(raw_target_correction_xy, dim=-1, keepdim=True)
             correction_scale = torch.clamp(
-                _MAXIMUM_RESIDUAL_CORRECTION / torch.clamp(residual_norm, min=1e-8),
+                _MAXIMUM_RESIDUAL_CORRECTION / torch.clamp(correction_norm, min=1e-8),
                 max=1.0,
             )
-            applied_residual_xy = raw_residual_xy * correction_scale
+            applied_target_correction_xy = raw_target_correction_xy * correction_scale
 
-            self._raw_transfer_residual_xy = raw_residual_xy.detach().clone()
-            self._applied_transfer_residual_xy = applied_residual_xy.detach().clone()
-            self._corrected_gripper_target_xy = (base_target_xy + applied_residual_xy).detach().clone()
+            self._raw_target_correction_xy = raw_target_correction_xy.detach().clone()
+            self._applied_target_correction_xy = applied_target_correction_xy.detach().clone()
+            self._corrected_gripper_target_xy = (base_target_xy + applied_target_correction_xy).detach().clone()
 
         return self._corrected_gripper_target_xy
+
+    def _sample_transfer_grasp_offset(self, env, phase_step: int) -> None:
+        if phase_step < _TRANSFER_GRASP_OFFSET_SAMPLE_START_STEP:
+            return
+        assert self._floor_anchor is not None
+        cube_pos_w = env.scene["cube"].data.root_pos_w
+        cube_above_floor = cube_pos_w[:, 2] - self._floor_anchor[:, 2] > _MINIMUM_TRANSFER_CUBE_HEIGHT
+        if not bool(cube_above_floor.all().item()):
+            return
+        gripper_pos_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :]
+        self._transfer_gripper_to_cube_xy_samples.append((cube_pos_w[:, :2] - gripper_pos_w[:, :2]).detach().clone())
+
+    def _finalize_transfer_grasp_offset(self) -> None:
+        if self._transfer_gripper_to_cube_xy is not None:
+            return
+        if not self._transfer_gripper_to_cube_xy_samples:
+            raise RuntimeError("No lifted-cube samples were available during late transfer")
+        self._transfer_gripper_to_cube_xy = torch.median(
+            torch.stack(self._transfer_gripper_to_cube_xy_samples, dim=0),
+            dim=0,
+        ).values
 
     def _placement_release_z(self, env, floor_center_z: torch.Tensor, phase_name: str) -> torch.Tensor:
         legacy_release_z = super()._placement_release_z(env, floor_center_z, phase_name)
@@ -187,8 +218,11 @@ class RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine(
         parameters.update(
             {
                 "residual_correction_phase": "lower_into_box_entry",
-                "residual_correction_policy": "single_frozen_xy_update",
+                "residual_correction_policy": "late_transfer_grasp_offset_rebase",
                 "maximum_residual_correction": _MAXIMUM_RESIDUAL_CORRECTION,
+                "transfer_grasp_offset_measurement": "median_cube_xy_minus_gripper_xy_during_late_transfer",
+                "transfer_grasp_offset_sample_start_step": _TRANSFER_GRASP_OFFSET_SAMPLE_START_STEP,
+                "minimum_transfer_cube_height": _MINIMUM_TRANSFER_CUBE_HEIGHT,
                 "lower_release_gate": "actual_gripper_ee_to_corrected_release_target_3d",
                 "lower_target_tolerance": _LOWER_TARGET_TOLERANCE,
                 "lower_target_stable_steps": _LOWER_TARGET_STABLE_STEPS,
@@ -196,7 +230,7 @@ class RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine(
                 "safe_release_height_policy": "measured_gripper_above_jaw_plus_wall_top_clearance",
                 "minimum_jaw_clearance_above_wall": _MINIMUM_JAW_CLEARANCE_ABOVE_WALL,
                 "target_box_wall_top_z": TARGET_BOX_WALL_TOP_Z,
-                "ee_marker_color": "magenta",
+                "ee_marker_color": "red",
                 "ee_table_projection_marker_color": "green",
                 "ee_table_projection_z": TABLE_SURFACE_Z,
             }
@@ -204,16 +238,24 @@ class RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine(
         return parameters
 
     @property
-    def raw_transfer_residual_xy(self) -> torch.Tensor | None:
-        return self._raw_transfer_residual_xy
+    def raw_target_correction_xy(self) -> torch.Tensor | None:
+        return self._raw_target_correction_xy
 
     @property
-    def applied_transfer_residual_xy(self) -> torch.Tensor | None:
-        return self._applied_transfer_residual_xy
+    def applied_target_correction_xy(self) -> torch.Tensor | None:
+        return self._applied_target_correction_xy
 
     @property
     def corrected_gripper_target_xy(self) -> torch.Tensor | None:
         return self._corrected_gripper_target_xy
+
+    @property
+    def transfer_gripper_to_cube_xy(self) -> torch.Tensor | None:
+        return self._transfer_gripper_to_cube_xy
+
+    @property
+    def transfer_grasp_offset_sample_count(self) -> int:
+        return len(self._transfer_gripper_to_cube_xy_samples)
 
     @property
     def lower_target_error(self) -> float | None:

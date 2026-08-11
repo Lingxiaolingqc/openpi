@@ -618,10 +618,13 @@ def main() -> int:
                 ):
                     print(
                         f"expert_transfer_residual_correction:{phase}:"
-                        f"raw_residual_xy="
-                        f"{None if state_machine.raw_transfer_residual_xy is None else _rounded_row(state_machine.raw_transfer_residual_xy[0], digits=7)}:"
-                        f"applied_residual_xy="
-                        f"{None if state_machine.applied_transfer_residual_xy is None else _rounded_row(state_machine.applied_transfer_residual_xy[0], digits=7)}:"
+                        f"transfer_sample_count={state_machine.transfer_grasp_offset_sample_count}:"
+                        f"transfer_gripper_to_cube_xy="
+                        f"{None if state_machine.transfer_gripper_to_cube_xy is None else _rounded_row(state_machine.transfer_gripper_to_cube_xy[0], digits=7)}:"
+                        f"raw_target_correction_xy="
+                        f"{None if state_machine.raw_target_correction_xy is None else _rounded_row(state_machine.raw_target_correction_xy[0], digits=7)}:"
+                        f"applied_target_correction_xy="
+                        f"{None if state_machine.applied_target_correction_xy is None else _rounded_row(state_machine.applied_target_correction_xy[0], digits=7)}:"
                         f"corrected_gripper_target_xy="
                         f"{None if state_machine.corrected_gripper_target_xy is None else _rounded_row(state_machine.corrected_gripper_target_xy[0], digits=7)}:"
                         f"actual_cube_xy={_rounded_row(cube.data.root_pos_w[0, :2], digits=7)}:"
