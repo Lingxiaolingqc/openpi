@@ -30,6 +30,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
             "legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower",
             "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower",
+            "legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower",
             "legacy_gripper_anchor_relaxed_ik",
             "legacy_gripper_anchor_planar_ik",
             "adaptive",
@@ -282,6 +283,9 @@ def main() -> int:
     from red_cube_to_box_task.legacy_gripper_anchor_safe_planar_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorSafePlanarAlignThenLowerStateMachine,
     )
+    from red_cube_to_box_task.legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower_state_machine import (
+        RedCubeToBoxLegacyGripperAnchorSafeDirectJawXyzPanNullspaceAlignThenLowerStateMachine,
+    )
     from red_cube_to_box_task.legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorSafeXyzPanNullspaceAlignThenLowerStateMachine,
     )
@@ -303,7 +307,11 @@ def main() -> int:
     from red_cube_to_box_task.legacy_trajectory_pd_servo_state_machine import (
         RedCubeToBoxLegacyTrajectoryPdServoStateMachine,
     )
-    from red_cube_to_box_task.phase_aware_ik_action import configure_servo_ik_action, resolve_action_term
+    from red_cube_to_box_task.phase_aware_ik_action import (
+        configure_dynamic_control_frame_offset,
+        configure_servo_ik_action,
+        resolve_action_term,
+    )
     from red_cube_to_box_task.servo_state_machine import RedCubeToBoxServoStateMachine
     from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
     from red_cube_to_box_task.weighted_servo_state_machine import RedCubeToBoxWeightedServoStateMachine
@@ -331,6 +339,7 @@ def main() -> int:
             "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
             "legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower",
             "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower",
+            "legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower",
         }:
             configure_planar_safety_sensors(env_cfg)
         if args.expert in {
@@ -342,6 +351,7 @@ def main() -> int:
             "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
             "legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower",
             "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower",
+            "legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower",
             "servo",
             "weighted_servo",
             "legacy_weighted_servo",
@@ -350,6 +360,8 @@ def main() -> int:
             "legacy_trajectory_pd_servo",
         }:
             configure_servo_ik_action(env_cfg)
+        if args.expert == "legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower":
+            configure_dynamic_control_frame_offset(env_cfg)
         print(
             f"state_machine_gripper_close_expr: {env_cfg.actions.gripper_action.close_command_expr}",
             flush=True,
@@ -374,6 +386,10 @@ def main() -> int:
             ),
             "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower": (
                 "xyz_plus_explicit_shoulder_pan_target,nullspace_joint_limit_avoidance,"
+                "physical_safety_gates,legacy_pose_descent"
+            ),
+            "legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower": (
+                "direct_closed_jaw_xyz_plus_explicit_shoulder_pan_target,nullspace_joint_limit_avoidance,"
                 "physical_safety_gates,legacy_pose_descent"
             ),
             "legacy_gripper_anchor_relaxed_ik": "legacy_fixed_world,jaw_anchor_then_staged_relaxation",
@@ -413,6 +429,9 @@ def main() -> int:
             ),
             "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower": (
                 RedCubeToBoxLegacyGripperAnchorSafeXyzPanNullspaceAlignThenLowerStateMachine
+            ),
+            "legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower": (
+                RedCubeToBoxLegacyGripperAnchorSafeDirectJawXyzPanNullspaceAlignThenLowerStateMachine
             ),
             "legacy_gripper_anchor_relaxed_ik": RedCubeToBoxLegacyGripperAnchorRelaxedIkStateMachine,
             "legacy_gripper_anchor_planar_ik": RedCubeToBoxLegacyGripperAnchorPlanarIkStateMachine,
@@ -546,6 +565,7 @@ def main() -> int:
                         "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
                         "legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower",
                         "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower",
+                        "legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower",
                     }
                     and phase in {"lower_into_box", "align_over_box", "release_cube"}
                     and (phase_changed or state_machine.step_count % 25 == 0)
@@ -584,6 +604,7 @@ def main() -> int:
                     in {
                         "legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower",
                         "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower",
+                        "legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower",
                     }
                     and phase == "align_over_box"
                     and (phase_changed or state_machine.step_count % 25 == 0)
@@ -615,6 +636,19 @@ def main() -> int:
                         flush=True,
                     )
                 if (
+                    args.expert == "legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower"
+                    and (phase_changed or state_machine.step_count % 25 == 0)
+                ):
+                    print(
+                        f"expert_direct_jaw_control:{phase}:"
+                        f"desired_jaw_w={None if state_machine.last_desired_jaw_w is None else _rounded_row(state_machine.last_desired_jaw_w[0], digits=7)}:"
+                        f"offset_pos={None if state_machine.direct_jaw_offset_pos is None else _rounded_row(state_machine.direct_jaw_offset_pos[0], digits=7)}:"
+                        f"offset_quat={None if state_machine.direct_jaw_offset_quat is None else _rounded_row(state_machine.direct_jaw_offset_quat[0], digits=7)}:"
+                        f"controlled_point_w={None if state_machine.controlled_jaw_point_w is None else _rounded_row(state_machine.controlled_jaw_point_w[0], digits=7)}:"
+                        f"table_projection_w={None if state_machine.table_projection_point_w is None else _rounded_row(state_machine.table_projection_point_w[0], digits=7)}",
+                        flush=True,
+                    )
+                if (
                     args.expert
                     in {
                         "legacy_gripper_anchor",
@@ -625,6 +659,7 @@ def main() -> int:
                         "legacy_gripper_anchor_safe_xyz_tilt_align_then_lower",
                         "legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower",
                         "legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower",
+                        "legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower",
                         "legacy_gripper_anchor_relaxed_ik",
                         "legacy_gripper_anchor_planar_ik",
                         "servo",

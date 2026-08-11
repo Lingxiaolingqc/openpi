@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from isaaclab.envs.mdp.actions.actions_cfg import DifferentialInverseKinematicsActionCfg
 from isaaclab.envs.mdp.actions.task_space_actions import DifferentialInverseKinematicsAction
 from isaaclab.utils.math import compute_pose_error
 import torch
@@ -187,6 +188,31 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._xyz_joint_nullspace_damping = float(damping)
         self._xyz_joint_nullspace_posture_gain = float(posture_gain)
         self._xyz_joint_nullspace_max_step = float(max_posture_step)
+
+    def set_control_frame_offset(self, *, position: torch.Tensor, orientation: torch.Tensor) -> None:
+        """Update the configured gripper-relative virtual control frame."""
+
+        if self.cfg.body_offset is None or self._offset_pos is None or self._offset_rot is None:
+            raise RuntimeError("Dynamic control-frame offsets require a non-None body_offset configuration")
+        if position.shape != self._offset_pos.shape:
+            raise ValueError(
+                f"Control-frame offset position shape must be {self._offset_pos.shape}, got {position.shape}"
+            )
+        if orientation.shape != self._offset_rot.shape:
+            raise ValueError(
+                f"Control-frame offset orientation shape must be {self._offset_rot.shape}, got {orientation.shape}"
+            )
+        self._offset_pos.copy_(position)
+        self._offset_rot.copy_(orientation)
+
+    def set_identity_control_frame_offset(self) -> None:
+        """Restore the underlying gripper body as the virtual control frame."""
+
+        if self.cfg.body_offset is None or self._offset_pos is None or self._offset_rot is None:
+            return
+        self._offset_pos.zero_()
+        self._offset_rot.zero_()
+        self._offset_rot[:, 0] = 1.0
 
     def set_weighted_position_only(
         self,
@@ -475,6 +501,12 @@ def configure_servo_ik_action(env_cfg) -> None:
     """Use the phase-aware action term for one servo-expert environment config."""
 
     env_cfg.actions.arm_action.class_type = PhaseAwareDifferentialInverseKinematicsAction
+
+
+def configure_dynamic_control_frame_offset(env_cfg) -> None:
+    """Allocate an identity body offset that a phase-aware action may update at runtime."""
+
+    env_cfg.actions.arm_action.body_offset = DifferentialInverseKinematicsActionCfg.OffsetCfg()
 
 
 def resolve_action_term(action_manager, term_name: str):

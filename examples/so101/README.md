@@ -309,6 +309,20 @@ uses gain `0.08`, is capped at `0.03 rad` per application, and does not directly
 joint. Smoke diagnostics separately report the primary and projected nullspace joint deltas so the effect can be
 distinguished from the earlier five-row controller.
 
+The independent `legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower` variant keeps that
+controller and all earlier pickup, transport, safety, and descent behavior, but changes the high-align control
+frame. When the closed grasp first reaches `align_over_box`, it captures the rigid transform from the configured
+gripper body to the live jaw detection frame and installs that transform as the IK action's body offset. The four
+primary rows therefore solve the desired jaw XYZ and shoulder-pan objective directly, including the jaw lever arm
+in the translational Jacobian, instead of converting each jaw target into a compensated gripper-position target.
+The offset is reset to identity outside high align. This is intentionally a separate expert so results remain
+comparable with the gripper-frame nullspace variant.
+
+That direct-jaw expert also adds two scene-only markers. A red sphere marks the live jaw point controlled by IK;
+a cyan sphere marks the same world X/Y projected vertically onto `TABLE_SURFACE_Z`. The markers do not alter the
+observation, action, safety gates, or success predicate. Smoke logs emit the desired jaw, captured offset, live
+controlled point, and table projection every 25 steps for numerical comparison with the rendered view.
+
 The separate `legacy_gripper_anchor_relaxed_ik` variant keeps that same jaw target and safety gate but uses the
 phase-aware IK action only for constraint weighting. All phases through lowering retain the exact pose solve.
 During the first 120 alignment steps it sets orientation weight to `0.1`; if alignment still has not converged,
@@ -351,6 +365,9 @@ zero-error pose instead of returning to an old fixed Z target.
 
 # Control XYZ and shoulder_pan while using the remaining nullspace to avoid joint limits.
 --expert legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower
+
+# Directly control the closed-jaw frame during high align and draw jaw/table-projection markers.
+--expert legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower
 
 # Add staged weak-orientation then position-only IK during final jaw alignment.
 --expert legacy_gripper_anchor_relaxed_ik
