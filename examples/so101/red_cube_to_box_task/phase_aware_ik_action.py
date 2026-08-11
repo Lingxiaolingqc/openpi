@@ -42,6 +42,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._last_unlimited_delta_joint_pos: torch.Tensor | None = None
         self._joint_target_slew_max_step: float | None = None
         self._joint_target_slew_reference: torch.Tensor | None = None
+        self._last_joint_target_slew_step: torch.Tensor | None = None
         self._last_joint_position_target: torch.Tensor | None = None
         self._weighted_position_penalties: torch.Tensor | None = None
         self._weighted_position_damping: float | None = None
@@ -234,11 +235,13 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
             raise ValueError(f"Joint target slew step must be positive, received {maximum_step}")
         self._joint_target_slew_max_step = maximum_step
         self._joint_target_slew_reference = None
+        self._last_joint_target_slew_step = None
 
     def reset_joint_target_slew_reference(self) -> None:
         """Start the next limited target trajectory from the then-current joint state."""
 
         self._joint_target_slew_reference = None
+        self._last_joint_target_slew_step = None
 
     def set_weighted_position_only(
         self,
@@ -482,9 +485,11 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
                 self._joint_target_slew_max_step / torch.clamp(maximum_component, min=1.0e-8),
                 max=1.0,
             )
-            joint_pos_des = self._joint_target_slew_reference + target_step * scale
+            limited_target_step = target_step * scale
+            joint_pos_des = self._joint_target_slew_reference + limited_target_step
             soft_limits = self._asset.data.soft_joint_pos_limits[:, self._joint_ids]
             joint_pos_des = torch.clamp(joint_pos_des, min=soft_limits[..., 0], max=soft_limits[..., 1])
+            self._last_joint_target_slew_step = joint_pos_des - self._joint_target_slew_reference
             self._joint_target_slew_reference = joint_pos_des.detach().clone()
             delta_joint_pos = joint_pos_des - joint_pos
 
@@ -541,6 +546,10 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         return self._last_joint_position_target
 
     @property
+    def last_joint_target_slew_step(self) -> torch.Tensor | None:
+        return self._last_joint_target_slew_step
+
+    @property
     def controlled_joint_names(self) -> tuple[str, ...]:
         all_joint_names = self._asset.data.joint_names
         if isinstance(self._joint_ids, slice):
@@ -565,6 +574,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._last_task_singular_values = None
         self._last_unlimited_delta_joint_pos = None
         self._last_joint_position_target = None
+        self._last_joint_target_slew_step = None
 
 
 def configure_servo_ik_action(env_cfg) -> None:

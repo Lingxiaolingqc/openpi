@@ -638,6 +638,7 @@ def main() -> int:
                     nullspace_delta = arm_action_term.last_nullspace_delta_joint_pos
                     unlimited_delta = arm_action_term.last_unlimited_delta_joint_pos
                     joint_position_target = arm_action_term.last_joint_position_target
+                    joint_target_slew_step = arm_action_term.last_joint_target_slew_step
                     pan_entry_value = None if pan_entry is None else round(pan_entry[0].item(), 7)
                     pan_target_value = None if pan_target is None else round(pan_target[0].item(), 7)
                     bearing_error_value = None if bearing_error is None else round(bearing_error[0].item(), 7)
@@ -653,6 +654,7 @@ def main() -> int:
                         f"nullspace_delta={None if nullspace_delta is None else _rounded_row(nullspace_delta[0], digits=7)}:"
                         f"unlimited_delta={None if unlimited_delta is None else _rounded_row(unlimited_delta[0], digits=7)}:"
                         f"joint_position_target={None if joint_position_target is None else _rounded_row(joint_position_target[0], digits=7)}:"
+                        f"joint_target_slew_step={None if joint_target_slew_step is None else _rounded_row(joint_target_slew_step[0], digits=7)}:"
                         f"task_error={None if task_error is None else _rounded_row(task_error[0], digits=7)}:"
                         f"singular_values={None if singular_values is None else _rounded_row(singular_values[0], digits=7)}",
                         flush=True,

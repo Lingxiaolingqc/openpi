@@ -335,6 +335,8 @@ actual starting jaw, follows a cubic smoothstep trajectory to the floor-center X
 last 40 of 160 steps to reduce entry velocity. It then uses direct-jaw alignment with a persistent joint-target
 slew limit of `0.01 rad/application`. Unlike limiting the target to remain close to the moving actual joint, the
 persistent command can remain behind an overshooting joint and therefore provide braking effort.
+Diagnostics report both that persistent `joint_position_target` and the command-to-command
+`joint_target_slew_step`; the latter, rather than target-to-actual error, is bounded to `0.01 rad`.
 
 That direct-jaw expert also adds two scene-only markers. A red sphere marks the live jaw point controlled by IK;
 a cyan sphere marks the same world X/Y projected vertically onto `TABLE_SURFACE_Z`. The markers do not alter the
