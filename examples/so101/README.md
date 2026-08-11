@@ -379,6 +379,53 @@ grep -nE \
 tail -n 360
 ```
 
+The separate `autogen_independent_retreat_transport` expert is a clean-room state-machine comparison. It does not
+inherit `RedCubeToBoxStateMachine` or either dynamic-offset expert. The pickup keyframes are repeated locally, the
+standalone `lift_cube` phase is removed, and `retreat_to_safe` raises and retracts the grasped cube in one motion.
+Retreat, transport, lower, and retract advance only after the actual gripper position remains within tolerance for a
+configured number of consecutive steps. A phase that cannot converge reports its own timeout instead of continuing
+with a large tracking error. Placement XY is the live target-box floor center, offsets are disabled, and the complete
+6D pose target remains active.
+
+```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_ROOT=/home/data/xiaoqinchuan/projects/leisaac
+export LEISAAC_ENV=/home/data/xiaoqinchuan/envs/leisaac-so101
+export LEISAAC_ASSETS_ROOT=/home/data/xiaoqinchuan/assets/leisaac-v0.4.0
+export ISAACSIM_PORTABLE_ROOT=/home/data/xiaoqinchuan/cache/isaacsim-portable
+export OMNI_KIT_ACCEPT_EULA=YES
+export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
+
+export AUTOGEN_INDEPENDENT_LOG="$LEISAAC_BASE/results/leisaac/autogen-independent-retreat-transport-seed42.log"
+export AUTOGEN_INDEPENDENT_RECORD_DIR="$LEISAAC_BASE/results/leisaac/autogen-independent-retreat-transport-recordings"
+
+cd "$OPENPI_ROOT"
+mkdir -p "$LEISAAC_BASE/results/leisaac"
+
+timeout --signal=KILL 420s \
+  "$LEISAAC_ENV/bin/python" \
+  examples/so101/red_cube_to_box_expert_smoke.py \
+  --headless \
+  --enable_cameras \
+  --device cuda:6 \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --expert autogen_independent_retreat_transport \
+  --seed 42 \
+  --record_dir "$AUTOGEN_INDEPENDENT_RECORD_DIR" \
+  --record_every 4 \
+  --record_fps 15 \
+  2>&1 | tee "$AUTOGEN_INDEPENDENT_LOG"
+
+autogen_independent_status=${PIPESTATUS[0]}
+echo "autogen_independent_retreat_transport_exit=$autogen_independent_status"
+
+grep -nE \
+  'expert_phase|expert_state|expert_independent_path|expert_tracking|expert_grasp_event|expert_ik_runtime_mode|servo_timeout_phase|release_block_reason|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
+  "$AUTOGEN_INDEPENDENT_LOG" |
+tail -n 420
+```
+
 The third implementation, `red_cube_to_box_task/servo_state_machine.py`, inherits the adaptive grasp, retry,
 and gradual lift logic but does not replace either comparison expert. Its companion
 `red_cube_to_box_task/phase_aware_ik_action.py` preserves the 7D pose command shape while dropping the three
