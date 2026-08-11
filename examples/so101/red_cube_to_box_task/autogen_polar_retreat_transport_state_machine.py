@@ -23,6 +23,10 @@ _RETREAT_REFERENCE_STEP = 0.0008
 _ARC_REFERENCE_STEP = 0.0010
 _RADIAL_REFERENCE_STEP = 0.0010
 _BEARING_TOLERANCE = math.radians(3.0)
+_RETREAT_BEARING_ABORT_THRESHOLD = math.radians(20.0)
+_RETREAT_Z_OVERSHOOT_LIMIT = 0.020
+_RETREAT_ERROR_WORSENING_MARGIN = 0.010
+_RETREAT_ERROR_WORSENING_STEPS = 20
 _GRASP_CONFIRM_DISTANCE = 0.015
 _GRASP_LOSS_DISTANCE = 0.025
 _SMOOTHERSTEP_MAX_DERIVATIVE = 1.875
@@ -78,6 +82,9 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         self._current_target_quat_w: torch.Tensor | None = None
         self._bearing_error: float | None = None
         self._reference_finished = False
+        self._retreat_min_target_error = math.inf
+        self._retreat_worsening_streak = 0
+        self._retreat_safety_reason: str | None = None
 
     def get_action(self, env) -> torch.Tensor:
         phase = self.phase_name
@@ -86,7 +93,10 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
 
         if self._arm_action_term is None:
             raise RuntimeError("Call setup(env) before requesting a polar AutoGen expert action")
-        self._arm_action_term.set_orientation_weight(weight=1.0)
+        if phase == "retreat_to_safe":
+            self._arm_action_term.set_xyz_tilt(enabled=True)
+        else:
+            self._arm_action_term.set_orientation_weight(weight=1.0)
         self._initialize_anchors(env)
 
         if phase == "retreat_to_safe":
@@ -145,6 +155,8 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         self._current_target_quat_w = target_quat_w.detach().clone()
         if phase in {"retreat_to_safe", "arc_transfer", "radial_transfer"} and not self._episode_done:
             self._update_polar_convergence(env, phase)
+            if phase == "retreat_to_safe":
+                self._apply_retreat_safety_guards(env)
         elif phase in self._MOTION_PHASE_LIMITS and not self._episode_done:
             self._update_motion_convergence(env, phase)
         return self._compose_pose_action_with_quaternion(env, target_w, target_quat_w, gripper)
@@ -315,6 +327,39 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             return True
         return False
 
+    def _apply_retreat_safety_guards(self, env) -> None:
+        assert self._motion_target_w is not None
+        assert self._target_error is not None
+        assert self._bearing_error is not None
+        actual_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :]
+        maximum_z_overshoot = float(torch.max(actual_w[:, 2] - self._motion_target_w[:, 2]).item())
+        self._retreat_min_target_error = min(self._retreat_min_target_error, self._target_error)
+        if (
+            self._reference_finished
+            and self._target_error > self._retreat_min_target_error + _RETREAT_ERROR_WORSENING_MARGIN
+        ):
+            self._retreat_worsening_streak += 1
+        else:
+            self._retreat_worsening_streak = 0
+
+        if maximum_z_overshoot > _RETREAT_Z_OVERSHOOT_LIMIT:
+            reason = f"retreat_z_overshoot:overshoot={maximum_z_overshoot}:limit={_RETREAT_Z_OVERSHOOT_LIMIT}"
+        elif self._bearing_error > _RETREAT_BEARING_ABORT_THRESHOLD:
+            reason = f"retreat_bearing_diverged:error={self._bearing_error}:limit={_RETREAT_BEARING_ABORT_THRESHOLD}"
+        elif self._retreat_worsening_streak >= _RETREAT_ERROR_WORSENING_STEPS:
+            reason = (
+                "retreat_target_error_worsening:"
+                f"error={self._target_error}:minimum={self._retreat_min_target_error}:"
+                f"streak={self._retreat_worsening_streak}"
+            )
+        else:
+            return
+
+        self._retreat_safety_reason = reason
+        self._servo_abort_reason = reason
+        self._release_block_reason = reason
+        self._episode_done = True
+
     def _placement_orientation(self, env) -> torch.Tensor:
         if self._placement_quat_w is None:
             self._placement_quat_w = env.scene["ee_frame"].data.target_quat_w[:, 0, :].detach().clone()
@@ -358,6 +403,11 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             "hover_height_above_floor_center": _HOVER_HEIGHT_ABOVE_FLOOR_CENTER,
             "transport_height_policy": "freeze_actual_safe_height_at_arc_entry",
             "bearing_tolerance_rad": _BEARING_TOLERANCE,
+            "retreat_ik_mode": "xyz_tilt(xyz+orientation_xy)",
+            "retreat_bearing_abort_threshold_rad": _RETREAT_BEARING_ABORT_THRESHOLD,
+            "retreat_z_overshoot_limit": _RETREAT_Z_OVERSHOOT_LIMIT,
+            "retreat_error_worsening_margin": _RETREAT_ERROR_WORSENING_MARGIN,
+            "retreat_error_worsening_steps": _RETREAT_ERROR_WORSENING_STEPS,
             "orientation_policy": "entry_pose_then_yaw_co_rotates_with_root_centered_arc",
             "completion_policy": "actual_xyz_and_root_bearing_stable",
             "grasp_loss_distance": _GRASP_LOSS_DISTANCE,
@@ -370,3 +420,11 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
     @property
     def current_target_quat_w(self) -> torch.Tensor | None:
         return self._current_target_quat_w
+
+    @property
+    def retreat_worsening_streak(self) -> int:
+        return self._retreat_worsening_streak
+
+    @property
+    def retreat_safety_reason(self) -> str | None:
+        return self._retreat_safety_reason

@@ -747,6 +747,8 @@ def main() -> int:
                         f"target_error={state_machine.target_error}:"
                         f"bearing_error={state_machine.bearing_error}:"
                         f"stable_streak={state_machine.target_stable_streak}:"
+                        f"retreat_worsening_streak={state_machine.retreat_worsening_streak}:"
+                        f"retreat_safety_reason={state_machine.retreat_safety_reason}:"
                         f"jaw_cube_distance={state_machine.jaw_cube_distance}:"
                         f"grasp_confirmed={state_machine.grasp_confirmed}",
                         flush=True,

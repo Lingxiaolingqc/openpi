@@ -442,6 +442,14 @@ release, and retract phases. Retreat, arc, and radial phases require the bounded
 gripper XYZ and root bearing to remain within tolerance. This prevents the old false completion where radius and
 height matched even though the arm had rotated to the wrong Cartesian point.
 
+The retreat phase deliberately uses the five-dimensional `xyz_tilt` solve: measured XYZ plus world roll/pitch are
+constrained, while yaw is left free. This matches the SO-101 arm's five non-gripper joints and avoids asking five joints
+to satisfy a generally unreachable six-dimensional pose during the large vertical rise. Arc and later phases remain
+unchanged for a controlled comparison. Retreat aborts before another physics step if measured Z exceeds its target by
+more than `0.020 m`, root bearing error exceeds `20 degrees`, or the final-target error remains more than `0.010 m`
+above its best observed value for 20 consecutive steps after the reference finishes. The corresponding cause appears
+in `retreat_safety_reason`, `servo_abort_reason`, and `release_block_reason`.
+
 ```bash
 export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
 export LEISAAC_BASE=/home/data/xiaoqinchuan
@@ -476,7 +484,7 @@ autogen_polar_status=${PIPESTATUS[0]}
 echo "autogen_polar_retreat_transport_exit=$autogen_polar_status"
 
 grep -nE \
-  'expert_variant|servo_parameters|expert_phase|expert_state|expert_polar_path|bearing_error|expert_tracking|expert_grasp_event|expert_abort|expert_ik_runtime_mode|servo_timeout_phase|servo_abort_reason|release_block_reason|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
+  'expert_variant|servo_parameters|expert_phase|expert_state|expert_polar_path|bearing_error|retreat_worsening|retreat_safety_reason|expert_tracking|expert_grasp_event|expert_abort|expert_ik_runtime_mode|servo_timeout_phase|servo_abort_reason|release_block_reason|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
   "$AUTOGEN_POLAR_LOG" |
 tail -n 520
 ```
