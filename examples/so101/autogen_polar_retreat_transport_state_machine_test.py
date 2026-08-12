@@ -34,10 +34,11 @@ def _call_names(node: ast.AST) -> set[str]:
     }
 
 
-def test_retreat_controls_wrist_xyz_with_one_joint_posture_row() -> None:
+def test_retreat_controls_wrist_with_position_only_xyz() -> None:
     calls = _call_names(_method("get_action"))
     assert "set_control_body" in calls
-    assert "set_xyz_joint_nullspace_target" in calls
+    assert "set_position_only" in calls
+    assert "set_xyz_joint_nullspace_target" not in calls
     assert "set_xz_joint_nullspace_target" not in calls
     assert "set_xyz_tilt" not in calls
     assert "set_xyz_pitch_joint_target" not in calls
@@ -50,6 +51,7 @@ def test_wrist_retreat_rebases_radial_target_after_actual_lift() -> None:
     convergence_source = ast.unparse(_method("_update_retreat_convergence"))
 
     assert "_retreat_control_position_w" in initialize_source
+    assert "wrist_flex" not in initialize_source
     assert "_retreat_radial_target_w = None" in initialize_source
     assert "start_w = self._retreat_control_position_w(env)" in advance_source
     assert "target_radius = _RETREAT_RADIAL_SCALE * start_radius" in advance_source
