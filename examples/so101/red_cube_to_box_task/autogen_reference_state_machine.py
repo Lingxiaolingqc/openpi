@@ -238,7 +238,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         picked = bool(pick_cube.all().item()) if isinstance(pick_cube, torch.Tensor) else bool(pick_cube)
         if not picked or self._held_gripper_angle is not None:
             return False
-        if self._state not in {"grasp", "grasp_settle", "lift", "retreat", "transport"}:
+        if self._state not in {"grasp", "grasp_settle", "ik_handoff", "lift", "retreat", "transport"}:
             return False
 
         robot = env.scene["robot"]
