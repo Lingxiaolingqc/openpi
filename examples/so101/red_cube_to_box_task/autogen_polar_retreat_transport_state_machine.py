@@ -34,7 +34,6 @@ _GRASP_LOSS_DISTANCE = 0.025
 _GRIPPER_CLOSE_MINIMUM_STEPS = 80
 _GRIPPER_CLOSE_MAXIMUM_STEPS = 200
 _GRIPPER_SETTLE_STABLE_STEPS = 8
-_GRIPPER_SETTLE_VELOCITY_TOLERANCE = 0.01
 _SMOOTHERSTEP_MAX_DERIVATIVE = 1.875
 
 
@@ -233,15 +232,14 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             self._gripper_open_position + STATE_MACHINE_GRIPPER_CLOSE_POSITION
         )
         close_enough_to_cube = jaw_cube_distance <= _GRASP_CONFIRM_DISTANCE
-        low_velocity = gripper_velocity <= _GRIPPER_SETTLE_VELOCITY_TOLERANCE
-        settled = halfway_closed & close_enough_to_cube & low_velocity
+        settled = halfway_closed & close_enough_to_cube
 
         self._jaw_cube_distance = float(jaw_cube_distance.max().item())
         self._gripper_target_error = float(target_error.max().item())
         self._gripper_joint_velocity = float(gripper_velocity.max().item())
         if self._phase_step >= _GRIPPER_CLOSE_MINIMUM_STEPS and bool(settled.all().item()):
             self._gripper_settle_streak += 1
-            self._gripper_settle_reason = "contact_stalled_near_cube"
+            self._gripper_settle_reason = "half_closed_near_cube"
         else:
             self._gripper_settle_streak = 0
             self._gripper_settle_reason = None
@@ -542,11 +540,10 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             "bearing_tolerance_rad": _BEARING_TOLERANCE,
             "retreat_ik_mode": "xyz_tilt(xyz+orientation_xy,yaw_free)",
             "retreat_path": "vertical_lift_then_30mm_constant_bearing_radial_retreat",
-            "pre_retreat_gripper_gate": "half_closed_and_near_cube_and_low_velocity_stable",
+            "pre_retreat_gripper_gate": "half_closed_and_near_cube_stable",
             "gripper_close_minimum_steps": _GRIPPER_CLOSE_MINIMUM_STEPS,
             "gripper_close_maximum_steps": _GRIPPER_CLOSE_MAXIMUM_STEPS,
             "gripper_settle_stable_steps": _GRIPPER_SETTLE_STABLE_STEPS,
-            "gripper_settle_velocity_tolerance": _GRIPPER_SETTLE_VELOCITY_TOLERANCE,
             "retreat_bearing_abort_threshold_rad": _RETREAT_BEARING_ABORT_THRESHOLD,
             "retreat_z_overshoot_limit": _RETREAT_Z_OVERSHOOT_LIMIT,
             "retreat_error_worsening_margin": _RETREAT_ERROR_WORSENING_MARGIN,

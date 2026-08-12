@@ -56,6 +56,6 @@ def test_close_phase_has_feedback_settle_gate() -> None:
     assert "_GRIPPER_SETTLE_STABLE_STEPS" in advance_source
 
     settle_source = ast.unparse(_method("_update_gripper_settle"))
-    assert "joint_vel" in settle_source
     assert "_GRASP_CONFIRM_DISTANCE" in settle_source
-    assert "_GRIPPER_SETTLE_VELOCITY_TOLERANCE" in settle_source
+    assert "halfway_closed & close_enough_to_cube" in settle_source
+    assert "_GRIPPER_SETTLE_VELOCITY_TOLERANCE" not in settle_source
