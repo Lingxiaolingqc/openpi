@@ -5,9 +5,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-
-SOURCE_PATH = Path(__file__).resolve().parent / "red_cube_to_box_task" / (
-    "autogen_polar_retreat_transport_state_machine.py"
+SOURCE_PATH = (
+    Path(__file__).resolve().parent / "red_cube_to_box_task" / ("autogen_polar_retreat_transport_state_machine.py")
 )
 IK_ACTION_PATH = Path(__file__).resolve().parent / "red_cube_to_box_task" / "phase_aware_ik_action.py"
 CLASS_NAME = "RedCubeToBoxAutogenPolarRetreatTransportStateMachine"
@@ -19,25 +18,21 @@ def _class_node() -> ast.ClassDef:
 
 
 def _method(name: str) -> ast.FunctionDef:
-    return next(
-        node
-        for node in _class_node().body
-        if isinstance(node, ast.FunctionDef) and node.name == name
-    )
+    return next(node for node in _class_node().body if isinstance(node, ast.FunctionDef) and node.name == name)
 
 
 def _call_names(node: ast.AST) -> set[str]:
     return {
-        call.func.attr
-        for call in ast.walk(node)
-        if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+        call.func.attr for call in ast.walk(node) if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
     }
 
 
 def test_retreat_controls_wrist_with_position_only_xyz() -> None:
     calls = _call_names(_method("get_action"))
-    assert "set_control_body" in calls
-    assert "set_position_only" in calls
+    mode_calls = _call_names(_method("_configure_wrist_position_posture_mode"))
+    assert "_configure_wrist_position_posture_mode" in calls
+    assert "set_control_body" in mode_calls
+    assert "set_position_only_nullspace_posture_target" in mode_calls
     assert "set_xyz_joint_nullspace_target" not in calls
     assert "set_xz_joint_nullspace_target" not in calls
     assert "set_xyz_tilt" not in calls
@@ -51,8 +46,7 @@ def test_arc_controls_wrist_with_position_only_xyz_and_wrist_feedback() -> None:
     convergence_source = ast.unparse(_method("_update_polar_convergence"))
 
     assert "wrist_position_only_phases = {'retreat_to_safe', 'arc_transfer'}" in get_action_source
-    assert "self._arm_action_term.set_control_body(body_name='wrist')" in get_action_source
-    assert "self._arm_action_term.set_position_only(enabled=True)" in get_action_source
+    assert "self._configure_wrist_position_posture_mode()" in get_action_source
     assert "start_w = self._retreat_control_position_w(env)" in initialize_source
     assert "self._transport_height = None" in initialize_source
     assert "target_quat_w = self._retreat_control_quaternion_w(env)" in reference_source
@@ -82,7 +76,30 @@ def test_wrist_retreat_rebases_radial_target_after_actual_lift() -> None:
     assert "self._target_error = max(self._retreat_radial_error, self._retreat_z_error)" in radial_retreat_branch
     assert "self._retreat_radial_error <= tolerance" in radial_retreat_branch
     assert "self._retreat_z_error <= tolerance" in radial_retreat_branch
-    assert "self._bearing_error <= _BEARING_TOLERANCE" not in radial_retreat_branch
+    assert "self._bearing_error <= _RETREAT_BEARING_TOLERANCE" in radial_retreat_branch
+
+
+def test_position_only_posture_is_projected_into_xyz_nullspace() -> None:
+    tree = ast.parse(IK_ACTION_PATH.read_text(encoding="utf-8"), filename=str(IK_ACTION_PATH))
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "PhaseAwareDifferentialInverseKinematicsAction"
+    )
+    setter = next(
+        node
+        for node in class_node.body
+        if isinstance(node, ast.FunctionDef) and node.name == "set_position_only_nullspace_posture_target"
+    )
+    apply_method = next(
+        node for node in class_node.body if isinstance(node, ast.FunctionDef) and node.name == "apply_actions"
+    )
+    setter_source = ast.unparse(setter)
+    apply_source = ast.unparse(apply_method)
+    assert "self.set_position_only(enabled=True)" in setter_source
+    assert "self._position_nullspace_posture_target - joint_pos" in apply_source
+    assert "nullspace_projector = joint_identity - damped_pseudoinverse @ task_jacobian" in apply_source
+    assert "delta_joint_pos = primary_delta + nullspace_delta" in apply_source
 
 
 def test_xz_joint_mode_omits_y_position_and_jacobian_rows() -> None:
@@ -102,9 +119,7 @@ def test_xz_joint_mode_omits_y_position_and_jacobian_rows() -> None:
     assert "self._xyz_joint_nullspace_position_axes_are_world_frame = True" in source
 
     apply_method = next(
-        node
-        for node in class_node.body
-        if isinstance(node, ast.FunctionDef) and node.name == "apply_actions"
+        node for node in class_node.body if isinstance(node, ast.FunctionDef) and node.name == "apply_actions"
     )
     apply_source = ast.unparse(apply_method)
     assert "root_rotation_w = matrix_from_quat(self._asset.data.root_quat_w)" in apply_source
@@ -119,9 +134,7 @@ def test_runtime_control_body_switch_updates_pose_and_jacobian_indices() -> None
         if isinstance(node, ast.ClassDef) and node.name == "PhaseAwareDifferentialInverseKinematicsAction"
     )
     method = next(
-        node
-        for node in class_node.body
-        if isinstance(node, ast.FunctionDef) and node.name == "set_control_body"
+        node for node in class_node.body if isinstance(node, ast.FunctionDef) and node.name == "set_control_body"
     )
     source = ast.unparse(method)
     assert "self._body_idx = body_ids[0]" in source

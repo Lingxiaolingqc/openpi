@@ -1096,6 +1096,11 @@ def main() -> int:
                         wrist_flex_position=round(
                             robot.data.joint_pos[0, robot.data.joint_names.index("wrist_flex")].item(), 7
                         ),
+                        wrist_posture_target=(
+                            None
+                            if state_machine.wrist_posture_target is None
+                            else _rounded_row(state_machine.wrist_posture_target[0], digits=7)
+                        ),
                         ik_task_error=(
                             None
                             if arm_action_term.last_task_error is None
@@ -1105,6 +1110,21 @@ def main() -> int:
                             None
                             if arm_action_term.last_task_singular_values is None
                             else _rounded_row(arm_action_term.last_task_singular_values[0], digits=7)
+                        ),
+                        ik_primary_delta_joint_pos=(
+                            None
+                            if arm_action_term.last_primary_delta_joint_pos is None
+                            else _rounded_row(arm_action_term.last_primary_delta_joint_pos[0], digits=7)
+                        ),
+                        ik_nullspace_delta_joint_pos=(
+                            None
+                            if arm_action_term.last_nullspace_delta_joint_pos is None
+                            else _rounded_row(arm_action_term.last_nullspace_delta_joint_pos[0], digits=7)
+                        ),
+                        ik_delta_joint_pos=(
+                            None
+                            if arm_action_term.last_delta_joint_pos is None
+                            else _rounded_row(arm_action_term.last_delta_joint_pos[0], digits=7)
                         ),
                         jaw_cube_distance=state_machine.jaw_cube_distance,
                         grasp_confirmed=state_machine.grasp_confirmed,
