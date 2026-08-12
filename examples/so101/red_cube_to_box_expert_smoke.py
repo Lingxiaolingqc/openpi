@@ -178,6 +178,7 @@ class _DiagnosticRecorder:
             axis_alignment_cube_x_axis_w = getattr(state_machine, "axis_alignment_cube_x_axis_w", None)
             axis_alignment_cube_y_axis_w = getattr(state_machine, "axis_alignment_cube_y_axis_w", None)
             axis_alignment_desired_axis_w = getattr(state_machine, "axis_alignment_desired_axis_w", None)
+            axis_alignment_direct_joint_target = getattr(state_machine, "axis_alignment_direct_joint_target", None)
             record.update(
                 {
                     "ik_runtime_mode": getattr(state_machine, "ik_runtime_mode", "pose"),
@@ -251,6 +252,30 @@ class _DiagnosticRecorder:
                     ),
                     "axis_alignment_wrist_position_error_m": _finite_or_none(
                         getattr(state_machine, "axis_alignment_wrist_position_error", None)
+                    ),
+                    "axis_alignment_direct_target_error_rad": _finite_or_none(
+                        getattr(state_machine, "axis_alignment_direct_target_error", None)
+                    ),
+                    "axis_alignment_frozen_joint_drift_rad": _finite_or_none(
+                        getattr(state_machine, "axis_alignment_frozen_joint_drift", None)
+                    ),
+                    "axis_alignment_direct_joint_target_rad": (
+                        None
+                        if axis_alignment_direct_joint_target is None
+                        else _rounded_row(axis_alignment_direct_joint_target[0])
+                    ),
+                    "axis_alignment_direct_hold_active": getattr(
+                        state_machine, "axis_alignment_direct_hold_active", None
+                    ),
+                    "axis_alignment_direct_hold_release_reason": getattr(
+                        state_machine, "axis_alignment_direct_hold_release_reason", None
+                    ),
+                    "ik_handoff_streak": getattr(state_machine, "ik_handoff_streak", None),
+                    "ik_handoff_wrist_position_error_m": _finite_or_none(
+                        getattr(state_machine, "ik_handoff_wrist_position_error", None)
+                    ),
+                    "ik_handoff_max_arm_joint_velocity_rad_s": _finite_or_none(
+                        getattr(state_machine, "ik_handoff_max_arm_joint_velocity", None)
                     ),
                     "measured_gripper_above_jaw_z": (
                         None
@@ -811,6 +836,21 @@ def main() -> int:
                         f"{None if getattr(state_machine, 'axis_alignment_max_arm_joint_velocity', None) is None else _rounded_row(state_machine.axis_alignment_max_arm_joint_velocity, digits=7)}:"
                         f"axis_alignment_wrist_position_error_m="
                         f"{None if getattr(state_machine, 'axis_alignment_wrist_position_error', None) is None else _rounded_row(state_machine.axis_alignment_wrist_position_error, digits=7)}:"
+                        f"axis_alignment_direct_target_error_rad="
+                        f"{None if getattr(state_machine, 'axis_alignment_direct_target_error', None) is None else _rounded_row(state_machine.axis_alignment_direct_target_error, digits=7)}:"
+                        f"axis_alignment_frozen_joint_drift_rad="
+                        f"{None if getattr(state_machine, 'axis_alignment_frozen_joint_drift', None) is None else _rounded_row(state_machine.axis_alignment_frozen_joint_drift, digits=7)}:"
+                        f"axis_alignment_direct_joint_target_rad="
+                        f"{None if getattr(state_machine, 'axis_alignment_direct_joint_target', None) is None else _rounded_row(state_machine.axis_alignment_direct_joint_target[0], digits=7)}:"
+                        f"axis_alignment_direct_hold_active="
+                        f"{getattr(state_machine, 'axis_alignment_direct_hold_active', None)}:"
+                        f"axis_alignment_direct_hold_release_reason="
+                        f"{getattr(state_machine, 'axis_alignment_direct_hold_release_reason', None)}:"
+                        f"ik_handoff_streak={getattr(state_machine, 'ik_handoff_streak', None)}:"
+                        f"ik_handoff_wrist_position_error_m="
+                        f"{None if getattr(state_machine, 'ik_handoff_wrist_position_error', None) is None else _rounded_row(state_machine.ik_handoff_wrist_position_error, digits=7)}:"
+                        f"ik_handoff_max_arm_joint_velocity_rad_s="
+                        f"{None if getattr(state_machine, 'ik_handoff_max_arm_joint_velocity', None) is None else _rounded_row(state_machine.ik_handoff_max_arm_joint_velocity, digits=7)}:"
                         f"gripper_target_error="
                         f"{None if state_machine.gripper_target_error is None else _rounded_row(state_machine.gripper_target_error, digits=7)}:"
                         f"gripper_joint_velocity="
@@ -983,6 +1023,7 @@ def main() -> int:
                             else _rounded_row(state_machine.retreat_actual_w[0], digits=7)
                         ),
                         retreat_z_error=state_machine.retreat_z_error,
+                        retreat_xz_error=state_machine.retreat_xz_error,
                         retreat_radial_error=state_machine.retreat_radial_error,
                         target_error=state_machine.target_error,
                         bearing_error=state_machine.bearing_error,
@@ -993,6 +1034,19 @@ def main() -> int:
                             None
                             if state_machine.retreat_wrist_flex_target is None
                             else _rounded_row(state_machine.retreat_wrist_flex_target, digits=7)
+                        ),
+                        wrist_flex_position=round(
+                            robot.data.joint_pos[0, robot.data.joint_names.index("wrist_flex")].item(), 7
+                        ),
+                        ik_task_error=(
+                            None
+                            if arm_action_term.last_task_error is None
+                            else _rounded_row(arm_action_term.last_task_error[0], digits=7)
+                        ),
+                        ik_task_singular_values=(
+                            None
+                            if arm_action_term.last_task_singular_values is None
+                            else _rounded_row(arm_action_term.last_task_singular_values[0], digits=7)
                         ),
                         jaw_cube_distance=state_machine.jaw_cube_distance,
                         grasp_confirmed=state_machine.grasp_confirmed,

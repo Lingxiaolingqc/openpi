@@ -34,10 +34,11 @@ def _call_names(node: ast.AST) -> set[str]:
     }
 
 
-def test_retreat_controls_wrist_xyz_with_one_joint_posture_row() -> None:
+def test_retreat_controls_wrist_xz_with_y_free_and_one_joint_posture_row() -> None:
     calls = _call_names(_method("get_action"))
     assert "set_control_body" in calls
-    assert "set_xyz_joint_nullspace_target" in calls
+    assert "set_xz_joint_nullspace_target" in calls
+    assert "set_xyz_joint_nullspace_target" not in calls
     assert "set_xyz_tilt" not in calls
     assert "set_xyz_pitch_joint_target" not in calls
 
@@ -52,7 +53,34 @@ def test_wrist_retreat_rebases_radial_target_after_actual_lift() -> None:
     assert "start_w = self._retreat_control_position_w(env)" in advance_source
     assert "target_radius = torch.clamp(start_radius - _RETREAT_DISTANCE" in advance_source
     assert "if self._retreat_subphase == 'vertical_lift'" in convergence_source
-    assert "self._target_error = self._retreat_z_error" in convergence_source
+    assert "self._target_error = self._retreat_xz_error" in convergence_source
+    assert "self._bearing_error <= _BEARING_TOLERANCE" not in convergence_source
+
+
+def test_xz_joint_mode_omits_y_position_and_jacobian_rows() -> None:
+    tree = ast.parse(IK_ACTION_PATH.read_text(encoding="utf-8"), filename=str(IK_ACTION_PATH))
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "PhaseAwareDifferentialInverseKinematicsAction"
+    )
+    method = next(
+        node
+        for node in class_node.body
+        if isinstance(node, ast.FunctionDef) and node.name == "set_xz_joint_nullspace_target"
+    )
+    source = ast.unparse(method)
+    assert "self._xyz_joint_nullspace_position_axes = (0, 2)" in source
+    assert "self._xyz_joint_nullspace_position_axes_are_world_frame = True" in source
+
+    apply_method = next(
+        node
+        for node in class_node.body
+        if isinstance(node, ast.FunctionDef) and node.name == "apply_actions"
+    )
+    apply_source = ast.unparse(apply_method)
+    assert "root_rotation_w = matrix_from_quat(self._asset.data.root_quat_w)" in apply_source
+    assert "position_jacobian = root_rotation_w @ position_jacobian" in apply_source
 
 
 def test_runtime_control_body_switch_updates_pose_and_jacobian_indices() -> None:
