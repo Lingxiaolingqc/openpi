@@ -196,3 +196,62 @@ def test_only_axis_alignment_variant_uses_and_clears_direct_joint_hold() -> None
         )
         == 1
     )
+
+
+def test_axis_alignment_waits_for_the_measured_wrist_before_direct_hold() -> None:
+    path = TASK_ROOT / "autogen_reference_axis_align_slow_grasp_state_machine.py"
+    class_node = _class_definition(path, AXIS_ALIGN_CLASS)
+
+    grasp_hook = _method_definition(class_node, "_on_grasp_pose_reached")
+    grasp_hook_source = ast.unparse(grasp_hook)
+    assert "self._ray_hit_tracking_target_b = self._command_pos_b.detach().clone()" in grasp_hook_source
+    assert "self._transition('ray_hit_tracking_settle')" in grasp_hook_source
+    assert "_capture_direct_joint_hold" not in _attribute_calls(grasp_hook)
+
+    state_update = _method_definition(class_node, "_update_state")
+    tracking_branch = next(
+        child
+        for child in ast.walk(state_update)
+        if isinstance(child, ast.If) and ast.unparse(child.test) == "self._state == 'ray_hit_tracking_settle'"
+    )
+    assert "_update_ray_hit_tracking_settle" in _attribute_calls(tracking_branch)
+    assert any(isinstance(child, ast.Return) for child in ast.walk(tracking_branch))
+
+    tracking_update = _method_definition(class_node, "_update_ray_hit_tracking_settle")
+    tracking_source = ast.unparse(tracking_update)
+    assert "self._command_pos_b = self._ray_hit_tracking_target_b.detach().clone()" in tracking_source
+    assert "body_pos_w" in tracking_source
+    assert "joint_vel" in tracking_source
+    assert "self._ray_hit_tracking_streak" in tracking_source
+    assert "DESCEND_STEP" not in tracking_source
+    assert "_update_move" not in _attribute_calls(tracking_update)
+    stable_assignment = next(
+        child
+        for child in tracking_update.body
+        if isinstance(child, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "stable" for target in child.targets)
+    )
+    stable_source = ast.unparse(stable_assignment.value)
+    assert "self.green_ray_hit" in stable_source
+    assert "self.RAY_HIT_TRACKING_POSITION_TOLERANCE" in stable_source
+    assert "self.AXIS_ALIGNMENT_ARM_JOINT_VELOCITY_TOLERANCE" in stable_source
+
+    stable_gate = next(
+        child
+        for child in tracking_update.body
+        if isinstance(child, ast.If)
+        and "self._ray_hit_tracking_streak >= self.RAY_HIT_TRACKING_STABLE_STEPS" in ast.unparse(child.test)
+    )
+    stable_gate_source = ast.unparse(stable_gate)
+    capture_index = stable_gate_source.index("self._capture_direct_joint_hold(env)")
+    rebase_index = stable_gate_source.index("self._rebase_command_to_measured_wrist(env)")
+    transition_index = stable_gate_source.index("self._transition('pregrasp_axis_align')")
+    assert capture_index < rebase_index < transition_index
+
+
+def test_smoke_recorder_uses_the_post_action_phase_and_forces_phase_boundaries() -> None:
+    smoke_path = ROOT / "red_cube_to_box_expert_smoke.py"
+    tree = ast.parse(smoke_path.read_text(encoding="utf-8"), filename=str(smoke_path))
+    source = ast.unparse(tree)
+    assert "recorded_phase = state_machine.phase_name" in source
+    assert "force=recorded_phase != phase" in source

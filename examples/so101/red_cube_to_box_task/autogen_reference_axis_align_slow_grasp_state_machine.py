@@ -30,6 +30,10 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
     AXIS_ALIGNMENT_MAX_TARGET_LEAD = math.radians(2.0)
     AXIS_ALIGNMENT_JOINT_LIMIT_MARGIN = 0.02
 
+    RAY_HIT_TRACKING_STABLE_STEPS = 8
+    RAY_HIT_TRACKING_TIMEOUT_STEPS = 120
+    RAY_HIT_TRACKING_POSITION_TOLERANCE = 0.005
+
     IK_HANDOFF_STABLE_STEPS = 8
     IK_HANDOFF_TIMEOUT_STEPS = 120
     IK_HANDOFF_WRIST_POSITION_TOLERANCE = 0.005
@@ -68,6 +72,15 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
         self._axis_alignment_wrist_roll_control_index: int | None = None
         self._axis_alignment_direct_hold_active = False
         self._axis_alignment_direct_hold_release_reason: str | None = None
+        self._ray_hit_tracking_target_b: torch.Tensor | None = None
+        self._ray_hit_tracking_target_w: torch.Tensor | None = None
+        self._ray_hit_tracking_entry_wrist_pos_w: torch.Tensor | None = None
+        self._ray_hit_tracking_wrist_delta_w: torch.Tensor | None = None
+        self._ray_hit_tracking_residual_descent: torch.Tensor | None = None
+        self._ray_hit_tracking_streak = 0
+        self._ray_hit_tracking_ray_miss_streak = 0
+        self._ray_hit_tracking_wrist_position_error: torch.Tensor | None = None
+        self._ray_hit_tracking_max_arm_joint_velocity: torch.Tensor | None = None
         self._ik_handoff_streak = 0
         self._ik_handoff_target_b: torch.Tensor | None = None
         self._ik_handoff_wrist_flex_target: torch.Tensor | None = None
@@ -75,12 +88,20 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
         self._ik_handoff_max_arm_joint_velocity: torch.Tensor | None = None
 
     def _on_grasp_pose_reached(self, env) -> None:
-        """Take ownership of all five arm targets before changing wrist_roll."""
+        """Freeze the existing IK target and wait for the real wrist to reach it."""
 
         self._gripper_command = self.GRIPPER_OPEN_POSITION
-        self._capture_direct_joint_hold(env)
-        self._rebase_command_to_measured_wrist(env)
-        self._transition("pregrasp_axis_align")
+        assert self._command_pos_b is not None
+        assert self._wrist_body_index is not None
+        robot = env.scene["robot"]
+        self._ray_hit_tracking_target_b = self._command_pos_b.detach().clone()
+        self._ray_hit_tracking_target_w = self._base_position_to_world(robot, self._ray_hit_tracking_target_b).detach()
+        self._ray_hit_tracking_entry_wrist_pos_w = robot.data.body_pos_w[:, self._wrist_body_index].detach().clone()
+        self._ray_hit_tracking_wrist_delta_w = torch.zeros_like(self._ray_hit_tracking_entry_wrist_pos_w)
+        self._ray_hit_tracking_residual_descent = torch.zeros_like(self._ray_hit_tracking_entry_wrist_pos_w[:, 2])
+        self._ray_hit_tracking_streak = 0
+        self._ray_hit_tracking_ray_miss_streak = 0
+        self._transition("ray_hit_tracking_settle")
 
     def _capture_direct_joint_hold(self, env) -> None:
         assert self._arm_action_term is not None
@@ -112,6 +133,9 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
         self._axis_alignment_wrist_roll_target = applied_target[:, wrist_roll_control_index].detach().clone()
 
     def _update_state(self, env) -> None:
+        if self._state == "ray_hit_tracking_settle":
+            self._update_ray_hit_tracking_settle(env)
+            return
         if self._state == "pregrasp_axis_align":
             self._update_pregrasp_axis_alignment(env)
             return
@@ -119,6 +143,62 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
             self._update_ik_handoff(env)
             return
         super()._update_state(env)
+
+    def _update_ray_hit_tracking_settle(self, env) -> None:
+        """Let IK finish its already-issued descent before direct alignment."""
+
+        assert self._ray_hit_tracking_target_b is not None
+        assert self._arm_action_term is not None
+        self._gripper_command = self.GRIPPER_OPEN_POSITION
+        self._command_pos_b = self._ray_hit_tracking_target_b.detach().clone()
+
+        self.green_ray_hit = self._green_ray_intersects_cube(env)
+        if self.green_ray_hit:
+            self._ray_hit_tracking_ray_miss_streak = 0
+        else:
+            self._ray_hit_tracking_ray_miss_streak += 1
+            if self._ray_hit_tracking_ray_miss_streak >= self.AXIS_ALIGNMENT_RAY_MISS_LIMIT:
+                self._fail("ray lost while the wrist tracked the frozen pre-alignment target")
+                return
+
+        robot = env.scene["robot"]
+        target_pos_w = self._base_position_to_world(robot, self._ray_hit_tracking_target_b)
+        assert self._wrist_body_index is not None
+        wrist_pos_w = robot.data.body_pos_w[:, self._wrist_body_index]
+        self._ray_hit_tracking_target_w = target_pos_w.detach().clone()
+        self._wrist_position_w = wrist_pos_w.detach().clone()
+        assert self._ray_hit_tracking_entry_wrist_pos_w is not None
+        self._ray_hit_tracking_wrist_delta_w = (wrist_pos_w - self._ray_hit_tracking_entry_wrist_pos_w).detach()
+        self._ray_hit_tracking_residual_descent = torch.clamp(
+            self._ray_hit_tracking_entry_wrist_pos_w[:, 2] - wrist_pos_w[:, 2], min=0.0
+        ).detach()
+        self._ray_hit_tracking_wrist_position_error = torch.linalg.vector_norm(
+            wrist_pos_w - target_pos_w, dim=-1
+        ).detach()
+        robot_joint_names = list(robot.data.joint_names)
+        controlled_joint_indices = [
+            robot_joint_names.index(name) for name in self._arm_action_term.controlled_joint_names
+        ]
+        controlled_joint_velocity = torch.abs(robot.data.joint_vel[:, controlled_joint_indices])
+        self._ray_hit_tracking_max_arm_joint_velocity = torch.amax(controlled_joint_velocity, dim=-1).detach()
+        stable = (
+            self.green_ray_hit
+            and bool(
+                (self._ray_hit_tracking_wrist_position_error <= self.RAY_HIT_TRACKING_POSITION_TOLERANCE).all().item()
+            )
+            and bool(
+                (self._ray_hit_tracking_max_arm_joint_velocity <= self.AXIS_ALIGNMENT_ARM_JOINT_VELOCITY_TOLERANCE)
+                .all()
+                .item()
+            )
+        )
+        self._ray_hit_tracking_streak = self._ray_hit_tracking_streak + 1 if stable else 0
+        if self._ray_hit_tracking_streak >= self.RAY_HIT_TRACKING_STABLE_STEPS:
+            self._capture_direct_joint_hold(env)
+            self._rebase_command_to_measured_wrist(env)
+            self._transition("pregrasp_axis_align")
+        elif self._state_step > self.RAY_HIT_TRACKING_TIMEOUT_STEPS:
+            self._fail("actual wrist did not settle at the frozen ray-hit IK target")
 
     def _update_pregrasp_axis_alignment(self, env) -> None:
         self._gripper_command = self.GRIPPER_OPEN_POSITION
@@ -188,6 +268,12 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
 
     def _update_posture_target(self, env) -> None:
         assert self._arm_action_term is not None
+        if self._state == "ray_hit_tracking_settle":
+            assert self._ray_hit_tracking_target_b is not None
+            self._command_pos_b = self._ray_hit_tracking_target_b.detach().clone()
+            self._arm_action_term.clear_direct_joint_position_target()
+            super()._update_posture_target(env)
+            return
         if self._state == "pregrasp_axis_align" and not self._axis_alignment_direct_hold_active:
             # The ray-hit transition happens after posture update in the same
             # get_action call.  Preserve the direct target installed by that
@@ -458,6 +544,42 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
         return self._axis_alignment_direct_hold_release_reason
 
     @property
+    def ray_hit_tracking_target_b(self) -> torch.Tensor | None:
+        return self._ray_hit_tracking_target_b
+
+    @property
+    def ray_hit_tracking_target_w(self) -> torch.Tensor | None:
+        return self._ray_hit_tracking_target_w
+
+    @property
+    def ray_hit_tracking_entry_wrist_pos_w(self) -> torch.Tensor | None:
+        return self._ray_hit_tracking_entry_wrist_pos_w
+
+    @property
+    def ray_hit_tracking_wrist_delta_w(self) -> torch.Tensor | None:
+        return self._ray_hit_tracking_wrist_delta_w
+
+    @property
+    def ray_hit_tracking_residual_descent(self) -> torch.Tensor | None:
+        return self._ray_hit_tracking_residual_descent
+
+    @property
+    def ray_hit_tracking_streak(self) -> int:
+        return self._ray_hit_tracking_streak
+
+    @property
+    def ray_hit_tracking_ray_miss_streak(self) -> int:
+        return self._ray_hit_tracking_ray_miss_streak
+
+    @property
+    def ray_hit_tracking_wrist_position_error(self) -> torch.Tensor | None:
+        return self._ray_hit_tracking_wrist_position_error
+
+    @property
+    def ray_hit_tracking_max_arm_joint_velocity(self) -> torch.Tensor | None:
+        return self._ray_hit_tracking_max_arm_joint_velocity
+
+    @property
     def ik_handoff_streak(self) -> int:
         return self._ik_handoff_streak
 
@@ -486,6 +608,12 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
             "alignment_target_kp": self.AXIS_ALIGNMENT_TARGET_KP,
             "alignment_max_target_step_rad": self.AXIS_ALIGNMENT_MAX_TARGET_STEP,
             "alignment_max_target_lead_rad": self.AXIS_ALIGNMENT_MAX_TARGET_LEAD,
+            "pre_alignment_phase": "freeze_existing_ik_target_then_wait_for_measured_wrist",
+            "ray_hit_tracking_position_tolerance_m": self.RAY_HIT_TRACKING_POSITION_TOLERANCE,
+            "ray_hit_tracking_arm_joint_velocity_tolerance_rad_s": (self.AXIS_ALIGNMENT_ARM_JOINT_VELOCITY_TOLERANCE),
+            "ray_hit_tracking_stable_steps": self.RAY_HIT_TRACKING_STABLE_STEPS,
+            "ray_hit_tracking_timeout_steps": self.RAY_HIT_TRACKING_TIMEOUT_STEPS,
+            "ray_hit_tracking_ray_miss_limit": self.AXIS_ALIGNMENT_RAY_MISS_LIMIT,
             "direct_hold_phases": "pregrasp_axis_align,grasp,grasp_settle",
             "direct_hold_release_gate": "feedback_settled_gripper_then_zero_displacement_ik_handoff",
             "pick_cube_semantics": "jaw_distance_and_gripper_angle_only;not_used_to_release_arm_hold",

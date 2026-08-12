@@ -609,12 +609,17 @@ Two additional experts isolate the latest grasp-ejection diagnosis without overw
 - `autogen_reference_slow_grasp` changes only `GRASP_DURATION_STEPS` from 80 to 240. The commanded close slope is
   one third of the reference value; ray geometry, descent, temporary jaw-angle latch, settle gates, and all later phases
   remain unchanged.
-- `autogen_reference_axis_align_slow_grasp` inherits that exact slow close and inserts
-  `pregrasp_axis_align` only after the reference descent has reached its final valid grasp pose. At that boundary it snapshots
-  `shoulder_pan`, `shoulder_lift`, `elbow_flex`, and `wrist_flex`, leaves Cartesian IK, and sends a direct five-joint position
-  target: those first four values remain frozen while only `wrist_roll` is changed. The confirmed closing axis, gripper local
-  `+X`, is compared with the four unoriented candidates `{+cube X, -cube X, +cube Y, -cube Y}`; the controller selects the
-  reachable candidate requiring the smallest wrist-roll change inside the soft limits.
+- `autogen_reference_axis_align_slow_grasp` inherits that exact slow close. When the reference ray gate first becomes valid,
+  it freezes the already-issued Cartesian target and enters `ray_hit_tracking_settle` with the gripper still open. It does
+  not lower that target again: the measured wrist is allowed to finish the residual motion that the baseline controller had
+  already requested. The wrist must remain on the valid ray, approach the frozen target within 5 mm, and keep all five arm
+  joint velocities below 0.03 rad/s for 8 consecutive steps; otherwise the bounded 120-step phase fails safely.
+
+  Only after that tracking gate does the expert snapshot `shoulder_pan`, `shoulder_lift`, `elbow_flex`, and `wrist_flex`,
+  leave Cartesian IK, and enter `pregrasp_axis_align` with a direct five-joint position target: those first four values remain
+  frozen while only `wrist_roll` is changed. The confirmed closing axis, gripper local `+X`, is compared with the four
+  unoriented candidates `{+cube X, -cube X, +cube Y, -cube Y}`; the controller selects the reachable candidate requiring the
+  smallest wrist-roll change inside the soft limits.
 
   The gripper remains open while the roll converges. Once aligned, the same frozen first-four joint target and aligned
   `wrist_roll` target are held throughout the inherited slow close and feedback-settle gate, so Cartesian IK cannot reorient
@@ -713,10 +718,12 @@ done
 ```
 
 The decisive comparison is the gripper velocity printed on `expert_temp_jaw_angle_captured`, whether
-`expert_grasp_event:lost` occurs before lift, the cube XY displacement during grasp, and final success. The axis-aligned
-run additionally reports the selected signed cube axis, measured local-X and cube X/Y directions, signed/absolute
-alignment error, direct wrist-roll target/position/velocity, frozen-joint drift, alignment streak, and the active direct-joint
-hold state in both stdout and `trace.jsonl`.
+`expert_grasp_event:lost` occurs before lift, the cube XY displacement during grasp, and final success. Before alignment,
+the axis-aligned run reports the frozen ray-hit target in base and world frames, measured wrist world position, wrist delta
+and residual descent since ray hit, tracking error, maximum arm-joint velocity, stable streak, and ray-miss streak. It then
+reports the selected signed cube axis, measured local-X and cube X/Y directions, signed/absolute alignment error, direct
+wrist-roll target/position/velocity, frozen-joint drift, alignment streak, and the active direct-joint hold state in both
+stdout and `trace.jsonl`.
 
 The third implementation, `red_cube_to_box_task/servo_state_machine.py`, inherits the adaptive grasp, retry,
 and gradual lift logic but does not replace either comparison expert. Its companion

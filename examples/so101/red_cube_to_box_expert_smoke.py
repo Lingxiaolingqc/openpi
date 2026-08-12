@@ -179,6 +179,11 @@ class _DiagnosticRecorder:
             axis_alignment_cube_y_axis_w = getattr(state_machine, "axis_alignment_cube_y_axis_w", None)
             axis_alignment_desired_axis_w = getattr(state_machine, "axis_alignment_desired_axis_w", None)
             axis_alignment_direct_joint_target = getattr(state_machine, "axis_alignment_direct_joint_target", None)
+            ray_hit_tracking_target_b = getattr(state_machine, "ray_hit_tracking_target_b", None)
+            ray_hit_tracking_target_w = getattr(state_machine, "ray_hit_tracking_target_w", None)
+            ray_hit_tracking_entry_wrist_pos_w = getattr(state_machine, "ray_hit_tracking_entry_wrist_pos_w", None)
+            ray_hit_tracking_wrist_delta_w = getattr(state_machine, "ray_hit_tracking_wrist_delta_w", None)
+            wrist_position_w = getattr(state_machine, "wrist_position_w", None)
             record.update(
                 {
                     "ik_runtime_mode": getattr(state_machine, "ik_runtime_mode", "pose"),
@@ -210,6 +215,36 @@ class _DiagnosticRecorder:
                         None if descent_xy_correction_w is None else _rounded_row(descent_xy_correction_w[0])
                     ),
                     "ray_alignment_streak": getattr(state_machine, "ray_alignment_streak", None),
+                    "ray_hit_tracking_target_b": (
+                        None if ray_hit_tracking_target_b is None else _rounded_row(ray_hit_tracking_target_b[0])
+                    ),
+                    "ray_hit_tracking_target_w": (
+                        None if ray_hit_tracking_target_w is None else _rounded_row(ray_hit_tracking_target_w[0])
+                    ),
+                    "ray_hit_tracking_entry_wrist_pos_w": (
+                        None
+                        if ray_hit_tracking_entry_wrist_pos_w is None
+                        else _rounded_row(ray_hit_tracking_entry_wrist_pos_w[0])
+                    ),
+                    "wrist_position_w": None if wrist_position_w is None else _rounded_row(wrist_position_w[0]),
+                    "ray_hit_tracking_wrist_delta_w": (
+                        None
+                        if ray_hit_tracking_wrist_delta_w is None
+                        else _rounded_row(ray_hit_tracking_wrist_delta_w[0])
+                    ),
+                    "ray_hit_tracking_residual_descent_m": _finite_or_none(
+                        getattr(state_machine, "ray_hit_tracking_residual_descent", None)
+                    ),
+                    "ray_hit_tracking_streak": getattr(state_machine, "ray_hit_tracking_streak", None),
+                    "ray_hit_tracking_ray_miss_streak": getattr(
+                        state_machine, "ray_hit_tracking_ray_miss_streak", None
+                    ),
+                    "ray_hit_tracking_wrist_position_error_m": _finite_or_none(
+                        getattr(state_machine, "ray_hit_tracking_wrist_position_error", None)
+                    ),
+                    "ray_hit_tracking_max_arm_joint_velocity_rad_s": _finite_or_none(
+                        getattr(state_machine, "ray_hit_tracking_max_arm_joint_velocity", None)
+                    ),
                     "axis_alignment_complete": getattr(state_machine, "axis_alignment_complete", None),
                     "axis_alignment_selected_cube_axis": getattr(
                         state_machine, "axis_alignment_selected_cube_axis", None
@@ -808,6 +843,23 @@ def main() -> int:
                         f"descent_xy_correction_w="
                         f"{None if state_machine.descent_xy_correction_w is None else _rounded_row(state_machine.descent_xy_correction_w[0], digits=7)}:"
                         f"ray_alignment_streak={state_machine.ray_alignment_streak}:"
+                        f"ray_hit_tracking_target_b="
+                        f"{None if getattr(state_machine, 'ray_hit_tracking_target_b', None) is None else _rounded_row(state_machine.ray_hit_tracking_target_b[0], digits=7)}:"
+                        f"ray_hit_tracking_target_w="
+                        f"{None if getattr(state_machine, 'ray_hit_tracking_target_w', None) is None else _rounded_row(state_machine.ray_hit_tracking_target_w[0], digits=7)}:"
+                        f"ray_hit_tracking_entry_wrist_pos_w="
+                        f"{None if getattr(state_machine, 'ray_hit_tracking_entry_wrist_pos_w', None) is None else _rounded_row(state_machine.ray_hit_tracking_entry_wrist_pos_w[0], digits=7)}:"
+                        f"ray_hit_tracking_wrist_delta_w="
+                        f"{None if getattr(state_machine, 'ray_hit_tracking_wrist_delta_w', None) is None else _rounded_row(state_machine.ray_hit_tracking_wrist_delta_w[0], digits=7)}:"
+                        f"ray_hit_tracking_residual_descent_m="
+                        f"{None if getattr(state_machine, 'ray_hit_tracking_residual_descent', None) is None else _rounded_row(state_machine.ray_hit_tracking_residual_descent, digits=7)}:"
+                        f"ray_hit_tracking_streak={getattr(state_machine, 'ray_hit_tracking_streak', None)}:"
+                        f"ray_hit_tracking_ray_miss_streak="
+                        f"{getattr(state_machine, 'ray_hit_tracking_ray_miss_streak', None)}:"
+                        f"ray_hit_tracking_wrist_position_error_m="
+                        f"{None if getattr(state_machine, 'ray_hit_tracking_wrist_position_error', None) is None else _rounded_row(state_machine.ray_hit_tracking_wrist_position_error, digits=7)}:"
+                        f"ray_hit_tracking_max_arm_joint_velocity_rad_s="
+                        f"{None if getattr(state_machine, 'ray_hit_tracking_max_arm_joint_velocity', None) is None else _rounded_row(state_machine.ray_hit_tracking_max_arm_joint_velocity, digits=7)}:"
                         f"axis_alignment_complete={getattr(state_machine, 'axis_alignment_complete', None)}:"
                         f"axis_alignment_selected_cube_axis="
                         f"{getattr(state_machine, 'axis_alignment_selected_cube_axis', None)}:"
@@ -1319,7 +1371,15 @@ def main() -> int:
                 state_machine.advance()
                 completed_steps += 1
                 if recorder is not None:
-                    recorder.capture(completed_steps, phase, observations, env, state_machine)
+                    recorded_phase = state_machine.phase_name
+                    recorder.capture(
+                        completed_steps,
+                        recorded_phase,
+                        observations,
+                        env,
+                        state_machine,
+                        force=recorded_phase != phase,
+                    )
 
         success = state_machine.check_success(env)
         cube_offset = cube.data.root_pos_w - floor.data.root_pos_w
