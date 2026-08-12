@@ -86,6 +86,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         self._wrist_body_index: int | None = None
         self._wrist_posture_target: torch.Tensor | None = None
         self._radial_posture_target: torch.Tensor | None = None
+        self._lower_posture_target: torch.Tensor | None = None
         self._retreat_actual_w: torch.Tensor | None = None
         self._retreat_z_error: float | None = None
         self._retreat_xz_error: float | None = None
@@ -123,10 +124,16 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         self._wrist_body_index = wrist_body_index
         self._wrist_posture_target = None
         self._radial_posture_target = None
+        self._lower_posture_target = None
 
     def get_action(self, env) -> torch.Tensor:
         phase = self.phase_name
-        position_only_accumulation_phases = {"retreat_to_safe", "arc_transfer", "radial_transfer"}
+        position_only_accumulation_phases = {
+            "retreat_to_safe",
+            "arc_transfer",
+            "radial_transfer",
+            "lower_into_box",
+        }
         if self._arm_action_term is not None and phase not in position_only_accumulation_phases:
             self._disable_position_joint_target_accumulation()
             self._arm_action_term.restore_configured_control_body()
@@ -173,6 +180,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             gripper = _GRIPPER_CLOSE
         elif phase == "lower_into_box":
             self._initialize_lower(env)
+            self._configure_lower_position_posture_mode()
             if self._detect_polar_grasp_loss(env, phase):
                 target_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :].detach().clone()
             else:
@@ -204,6 +212,8 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             self._apply_retreat_safety_guards(env)
         elif phase in {"arc_transfer", "radial_transfer"} and not self._episode_done:
             self._update_polar_convergence(env, phase)
+        elif phase == "lower_into_box" and not self._episode_done:
+            self._update_lower_convergence(env)
         elif phase in self._MOTION_PHASE_LIMITS and not self._episode_done:
             self._update_motion_convergence(env, phase)
         return self._compose_pose_action_with_quaternion(env, target_w, target_quat_w, gripper)
@@ -271,6 +281,17 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         self._arm_action_term.set_control_body(body_name="gripper")
         self._arm_action_term.set_position_only_nullspace_posture_target(
             joint_target=self._radial_posture_target,
+            damping=_WRIST_POSTURE_DAMPING,
+            posture_gain=_WRIST_POSTURE_GAIN,
+            max_posture_step=_WRIST_POSTURE_MAX_STEP,
+        )
+
+    def _configure_lower_position_posture_mode(self) -> None:
+        assert self._arm_action_term is not None
+        assert self._lower_posture_target is not None
+        self._arm_action_term.set_control_body(body_name="gripper")
+        self._arm_action_term.set_position_only_nullspace_posture_target(
+            joint_target=self._lower_posture_target,
             damping=_WRIST_POSTURE_DAMPING,
             posture_gain=_WRIST_POSTURE_GAIN,
             max_posture_step=_WRIST_POSTURE_MAX_STEP,
@@ -480,6 +501,19 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         self._reference_finished = False
         self._set_motion(start_w, target_w)
 
+    def _initialize_lower(self, env) -> None:
+        if self._motion_start_w is not None:
+            return
+        super()._initialize_lower(env)
+        assert self._arm_action_term is not None
+        robot = env.scene["robot"]
+        controlled_joint_indices = [
+            robot.data.joint_names.index(name) for name in self._arm_action_term.controlled_joint_names
+        ]
+        self._lower_posture_target = robot.data.joint_pos[:, controlled_joint_indices].detach().clone()
+        self._enable_position_joint_target_accumulation()
+        self._arm_action_term.reset_joint_target_accumulation_reference()
+
     def _polar_linear_reference(self, maximum_step: float) -> torch.Tensor:
         assert self._motion_start_w is not None
         assert self._motion_target_w is not None
@@ -537,6 +571,20 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             self._reference_finished and self._target_error <= tolerance and self._bearing_error <= _BEARING_TOLERANCE
         )
         if reached:
+            self._target_stable_streak += 1
+        else:
+            self._target_stable_streak = 0
+        self._motion_ready = self._target_stable_streak >= stable_steps
+
+    def _update_lower_convergence(self, env) -> None:
+        """Accept the safe release height without blocking on an IK-induced XY compromise."""
+
+        assert self._motion_target_w is not None
+        actual_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :]
+        z_error = torch.abs(self._motion_target_w[:, 2] - actual_w[:, 2])
+        self._target_error = float(z_error.max().item())
+        _, _, tolerance, stable_steps = self._MOTION_PHASE_LIMITS["lower_into_box"]
+        if self._target_error <= tolerance:
             self._target_stable_streak += 1
         else:
             self._target_stable_streak = 0
@@ -658,6 +706,9 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             "arc_path": "root_centered_constant_radius_wrist_arc",
             "radial_control_body": "gripper",
             "radial_ik_mode": "gripper_xyz_plus_soft_handoff_joint_posture_in_nullspace",
+            "lower_control_body": "gripper",
+            "lower_ik_mode": "gripper_xyz_plus_soft_lower_entry_joint_posture_in_nullspace",
+            "lower_completion_policy": "actual_gripper_z_within_tolerance",
             "pre_retreat_gripper_gate": "half_closed_and_near_cube_stable",
             "gripper_close_minimum_steps": _GRIPPER_CLOSE_MINIMUM_STEPS,
             "gripper_close_maximum_steps": _GRIPPER_CLOSE_MAXIMUM_STEPS,

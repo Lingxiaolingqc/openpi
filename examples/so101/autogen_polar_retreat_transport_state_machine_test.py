@@ -45,10 +45,9 @@ def test_arc_controls_wrist_with_position_only_xyz_and_wrist_feedback() -> None:
     reference_source = ast.unparse(_method("_arc_reference"))
     convergence_source = ast.unparse(_method("_update_polar_convergence"))
 
-    assert (
-        "position_only_accumulation_phases = {'retreat_to_safe', 'arc_transfer', 'radial_transfer'}"
-        in get_action_source
-    )
+    assert "position_only_accumulation_phases" in get_action_source
+    for phase in ("retreat_to_safe", "arc_transfer", "radial_transfer", "lower_into_box"):
+        assert repr(phase) in get_action_source
     assert "self._configure_wrist_position_posture_mode()" in get_action_source
     assert "start_w = self._retreat_control_position_w(env)" in initialize_source
     assert "self._transport_height = None" in initialize_source
@@ -147,6 +146,23 @@ def test_radial_transfer_rebases_accumulator_and_uses_gripper_position_only() ->
     assert "reset_joint_target_accumulation_reference" in initialize_source
     assert "set_control_body(body_name='gripper')" in configure_source
     assert "set_position_only_nullspace_posture_target" in configure_source
+
+
+def test_lower_rebases_position_only_accumulator_and_completes_on_z() -> None:
+    get_action_source = ast.unparse(_method("get_action"))
+    initialize_source = ast.unparse(_method("_initialize_lower"))
+    configure_source = ast.unparse(_method("_configure_lower_position_posture_mode"))
+    convergence_source = ast.unparse(_method("_update_lower_convergence"))
+
+    assert "self._configure_lower_position_posture_mode()" in get_action_source
+    assert "self._update_lower_convergence(env)" in get_action_source
+    assert "self._lower_posture_target" in initialize_source
+    assert "self._enable_position_joint_target_accumulation()" in initialize_source
+    assert "reset_joint_target_accumulation_reference" in initialize_source
+    assert "set_control_body(body_name='gripper')" in configure_source
+    assert "set_position_only_nullspace_posture_target" in configure_source
+    assert "torch.abs(self._motion_target_w[:, 2] - actual_w[:, 2])" in convergence_source
+    assert "vector_norm" not in convergence_source
 
 
 def test_xz_joint_mode_omits_y_position_and_jacobian_rows() -> None:
