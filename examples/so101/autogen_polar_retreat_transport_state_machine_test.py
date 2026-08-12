@@ -115,7 +115,6 @@ def test_wrist_ik_accumulates_limited_deltas_without_reanchoring_to_live_joints(
     assert "set_joint_target_accumulation" in enable_source
     assert "reset_joint_target_accumulation_reference" in enable_source
     assert "maximum_step=_WRIST_JOINT_TARGET_ACCUMULATION_STEP" in enable_source
-    assert "maximum_tracking_error=_JOINT_TARGET_MAX_TRACKING_ERROR" in enable_source
     assert "set_joint_target_accumulation(maximum_step=None)" in disable_source
     assert "self._disable_position_joint_target_accumulation()" in get_action_source
 
@@ -133,12 +132,8 @@ def test_wrist_ik_accumulates_limited_deltas_without_reanchoring_to_live_joints(
     assert "accumulated_step = delta_joint_pos * scale" in apply_source
     assert "self._joint_target_accumulation_reference = joint_pos_des.detach().clone()" in apply_source
     assert "joint_pos_des = joint_pos + delta_joint_pos" in apply_source
-    assert "reference_tracking_error = self._joint_target_accumulation_reference - joint_pos" in apply_source
-    assert "proposed_tracking_error = proposed_joint_pos_des - joint_pos" in apply_source
-    assert "tracking_limit_reached" in apply_source
-    assert "moves_farther_from_actual" in apply_source
-    assert "freeze_accumulation = tracking_limit_reached & moves_farther_from_actual" in apply_source
-    assert "torch.where" in apply_source
+    assert "tracking_limit_reached" not in apply_source
+    assert "freeze_accumulation" not in apply_source
 
 
 def test_radial_transfer_rebases_accumulator_and_uses_gripper_position_only() -> None:

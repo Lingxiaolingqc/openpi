@@ -28,7 +28,6 @@ _WRIST_POSTURE_DAMPING = 0.04
 _WRIST_POSTURE_GAIN = 0.08
 _WRIST_POSTURE_MAX_STEP = 0.03
 _WRIST_JOINT_TARGET_ACCUMULATION_STEP = 0.005
-_JOINT_TARGET_MAX_TRACKING_ERROR = 0.15
 _RETREAT_Z_OVERSHOOT_LIMIT = 0.020
 _RETREAT_ERROR_WORSENING_MARGIN = 0.010
 _RETREAT_ERROR_WORSENING_STEPS = 20
@@ -281,10 +280,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         assert self._arm_action_term is not None
         if self._position_joint_target_accumulation_enabled:
             return
-        self._arm_action_term.set_joint_target_accumulation(
-            maximum_step=_WRIST_JOINT_TARGET_ACCUMULATION_STEP,
-            maximum_tracking_error=_JOINT_TARGET_MAX_TRACKING_ERROR,
-        )
+        self._arm_action_term.set_joint_target_accumulation(maximum_step=_WRIST_JOINT_TARGET_ACCUMULATION_STEP)
         self._arm_action_term.reset_joint_target_accumulation_reference()
         self._position_joint_target_accumulation_enabled = True
 
@@ -654,8 +650,6 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             "retreat_posture_max_step": _WRIST_POSTURE_MAX_STEP,
             "wrist_joint_target_policy": "accumulate_limited_ik_delta_independent_of_live_joint_drift",
             "wrist_joint_target_accumulation_step": _WRIST_JOINT_TARGET_ACCUMULATION_STEP,
-            "joint_target_max_tracking_error": _JOINT_TARGET_MAX_TRACKING_ERROR,
-            "joint_target_anti_windup_policy": "freeze_only_when_at_limit_and_ik_delta_increases_tracking_gap",
             "retreat_wrist_flex_policy": "soft_nullspace_only_not_a_hard_task_row",
             "retreat_y_policy": "constrained_during_lift_and_root_relative_retreat",
             "retreat_path": "wrist_vertical_lift_then_root_relative_xy_scaled_to_5_over_7",
