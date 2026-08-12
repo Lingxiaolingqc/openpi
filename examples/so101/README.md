@@ -433,9 +433,9 @@ tail -n 420
 ```
 
 The additional `autogen_polar_retreat_transport` expert preserves the independent expert as a comparison and changes
-only the grasped-object route. After closing, it first holds measured X/Y and raises the gripper toward
-`floor + 0.22 m`. It then holds Z and the entry bearing while shortening the measured root-relative radius by exactly
-`0.030 m`. The measured safe height at the arc entry is then frozen. It follows a root-centered arc at constant radius and that frozen height to the live box
+only the grasped-object route. After closing, it first holds measured wrist X/Y and raises the wrist to its safe height.
+It then holds Z and the entry bearing while scaling the measured wrist XY displacement from the robot root to `5/7`.
+The measured safe height at the arc entry is then frozen. It follows a root-centered arc at constant radius and that frozen height to the live box
 bearing; the commanded yaw rotates by the same angle as the arc. A final radial segment moves at fixed box bearing and
 the same frozen height to the live box-floor center before the existing safe lower,
 release, and retract phases. Retreat, arc, and radial phases require the bounded reference to finish and the measured

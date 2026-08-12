@@ -34,11 +34,11 @@ def _call_names(node: ast.AST) -> set[str]:
     }
 
 
-def test_retreat_controls_wrist_xz_with_y_free_and_one_joint_posture_row() -> None:
+def test_retreat_controls_wrist_xyz_with_one_joint_posture_row() -> None:
     calls = _call_names(_method("get_action"))
     assert "set_control_body" in calls
-    assert "set_xz_joint_nullspace_target" in calls
-    assert "set_xyz_joint_nullspace_target" not in calls
+    assert "set_xyz_joint_nullspace_target" in calls
+    assert "set_xz_joint_nullspace_target" not in calls
     assert "set_xyz_tilt" not in calls
     assert "set_xyz_pitch_joint_target" not in calls
 
@@ -46,15 +46,20 @@ def test_retreat_controls_wrist_xz_with_y_free_and_one_joint_posture_row() -> No
 def test_wrist_retreat_rebases_radial_target_after_actual_lift() -> None:
     initialize_source = ast.unparse(_method("_initialize_polar_retreat"))
     advance_source = ast.unparse(_method("_advance_retreat_segment_if_ready"))
+    reference_source = ast.unparse(_method("_retreat_linear_reference"))
     convergence_source = ast.unparse(_method("_update_retreat_convergence"))
 
     assert "_retreat_control_position_w" in initialize_source
     assert "_retreat_radial_target_w = None" in initialize_source
     assert "start_w = self._retreat_control_position_w(env)" in advance_source
-    assert "target_radius = torch.clamp(start_radius - _RETREAT_DISTANCE" in advance_source
+    assert "target_radius = _RETREAT_RADIAL_SCALE * start_radius" in advance_source
+    assert "target_w[:, :2] = robot_root_w[:, :2] + _RETREAT_RADIAL_SCALE * delta_xy" in advance_source
+    assert "torch.clamp" not in advance_source
+    assert "return self._motion_start_w + progress * displacement" in reference_source
+    assert "_retreat_control_position_w" not in reference_source
     assert "if self._retreat_subphase == 'vertical_lift'" in convergence_source
-    assert "self._target_error = self._retreat_xz_error" in convergence_source
-    assert "self._bearing_error <= _BEARING_TOLERANCE" not in convergence_source
+    assert "self._target_error = float(position_error.max().item())" in convergence_source
+    assert "self._bearing_error <= _BEARING_TOLERANCE" in convergence_source
 
 
 def test_xz_joint_mode_omits_y_position_and_jacobian_rows() -> None:

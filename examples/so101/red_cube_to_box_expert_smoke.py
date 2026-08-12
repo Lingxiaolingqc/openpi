@@ -566,7 +566,7 @@ def main() -> int:
                 "transport_until_converged,full_6d_pose,target_box_floor_center_xy,no_offset"
             ),
             "autogen_polar_retreat_transport": (
-                "independent_pickup,30mm_constant-bearing_retreat,root-centered_arc_with_yaw,"
+                "independent_pickup,root_relative_5_over_7_retreat,root-centered_arc_with_yaw,"
                 "radial_box_approach,full_6d_pose,actual_xyz_and_bearing_completion"
             ),
             "autogen_reference": (

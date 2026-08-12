@@ -18,7 +18,7 @@ from .env_cfg import STATE_MACHINE_GRIPPER_CLOSE_POSITION
 
 _GRIPPER_OPEN = 1.0
 _GRIPPER_CLOSE = -1.0
-_RETREAT_DISTANCE = 0.030
+_RETREAT_RADIAL_SCALE = 5.0 / 7.0
 _WRIST_SAFE_HEIGHT_ABOVE_FLOOR_CENTER = 0.255
 _RETREAT_REFERENCE_STEP = 0.0004
 _ARC_REFERENCE_STEP = 0.0010
@@ -137,7 +137,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             self._advance_retreat_segment_if_ready(env)
             assert self._retreat_wrist_flex_target is not None
             self._arm_action_term.set_control_body(body_name="wrist")
-            self._arm_action_term.set_xz_joint_nullspace_target(
+            self._arm_action_term.set_xyz_joint_nullspace_target(
                 joint_name=_RETREAT_POSTURE_JOINT,
                 joint_target=self._retreat_wrist_flex_target,
                 damping=_RETREAT_IK_DAMPING,
@@ -147,7 +147,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             if self._detect_polar_grasp_loss(env, phase):
                 target_w = self._retreat_control_position_w(env).detach().clone()
             else:
-                target_w = self._retreat_linear_reference(env)
+                target_w = self._retreat_linear_reference()
             target_quat_w = self._retreat_control_quaternion_w(env).detach().clone()
             gripper = _GRIPPER_CLOSE
         elif phase == "arc_transfer":
@@ -312,14 +312,13 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         delta_xy = start_w[:, :2] - robot_root_w[:, :2]
         bearing = self._bearing(delta_xy)
         start_radius = torch.linalg.vector_norm(delta_xy, dim=-1)
-        target_radius = torch.clamp(start_radius - _RETREAT_DISTANCE, min=0.10)
+        target_radius = _RETREAT_RADIAL_SCALE * start_radius
         target_w = start_w.clone()
-        target_w[:, 0] = robot_root_w[:, 0] + target_radius * torch.sin(bearing)
-        target_w[:, 1] = robot_root_w[:, 1] + target_radius * torch.cos(bearing)
+        target_w[:, :2] = robot_root_w[:, :2] + _RETREAT_RADIAL_SCALE * delta_xy
         self._retreat_bearing = bearing.detach().clone()
         self._retreat_target_radius = target_radius.detach().clone()
         self._retreat_radial_target_w = target_w.detach().clone()
-        self._retreat_subphase = "short_radial_retreat"
+        self._retreat_subphase = "root_relative_5_over_7_retreat"
         self._retreat_segment_start_phase_step = self._phase_step
         self._retreat_segment_ready = False
         self._reference_finished = False
@@ -329,7 +328,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         self._retreat_worsening_streak = 0
         self._set_motion(start_w, target_w)
 
-    def _retreat_linear_reference(self, env) -> torch.Tensor:
+    def _retreat_linear_reference(self) -> torch.Tensor:
         assert self._motion_start_w is not None
         assert self._motion_target_w is not None
         displacement = self._motion_target_w - self._motion_start_w
@@ -338,11 +337,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         traveled = torch.full_like(distance, (segment_step + 1) * _RETREAT_REFERENCE_STEP)
         progress = torch.clamp(traveled / torch.clamp(distance, min=1.0e-8), max=1.0)
         self._reference_finished = bool(torch.all(progress >= 1.0).item())
-        reference_w = self._motion_start_w + progress * displacement
-        # Cartesian Y is diagnostic only during retreat.  Following the live wrist Y here
-        # makes the command/log explicit; the IK task also omits the Y Jacobian row.
-        reference_w[:, 1] = self._retreat_control_position_w(env)[:, 1]
-        return reference_w
+        return self._motion_start_w + progress * displacement
 
     def _update_retreat_convergence(self, env) -> None:
         assert self._motion_target_w is not None
@@ -350,6 +345,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         robot_root_xy = env.scene["robot"].data.root_pos_w[:, :2]
         target_bearing = self._bearing(self._motion_target_w[:, :2] - robot_root_xy)
         actual_bearing = self._bearing(actual_w[:, :2] - robot_root_xy)
+        position_error = torch.linalg.vector_norm(self._motion_target_w - actual_w, dim=-1)
         xz_error = torch.linalg.vector_norm((self._motion_target_w - actual_w)[:, [0, 2]], dim=-1)
         z_error = torch.abs(self._motion_target_w[:, 2] - actual_w[:, 2])
         target_radius = torch.linalg.vector_norm(self._motion_target_w[:, :2] - robot_root_xy, dim=-1)
@@ -362,8 +358,12 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         self._retreat_radial_error = float(radial_error.max().item())
         self._bearing_error = float(bearing_error.max().item())
         _, _, tolerance, _ = self._MOTION_PHASE_LIMITS["retreat_to_safe"]
-        self._target_error = self._retreat_xz_error
-        reached = self._reference_finished and self._target_error <= tolerance
+        self._target_error = float(position_error.max().item())
+        reached = (
+            self._reference_finished
+            and self._target_error <= tolerance
+            and self._bearing_error <= _BEARING_TOLERANCE
+        )
         if reached:
             self._target_stable_streak += 1
         else:
@@ -570,10 +570,10 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         return {
             "implementation": "polar_path_subclass_of_independent_expert",
             "phase_sequence": (
-                "approach,descend,close,vertical_lift,short_radial_retreat,"
+                "approach,descend,close,vertical_lift,root_relative_5_over_7_retreat,"
                 "arc_transfer,radial_transfer,lower,release,retract,settle"
             ),
-            "retreat_distance": _RETREAT_DISTANCE,
+            "retreat_radial_scale": _RETREAT_RADIAL_SCALE,
             "retreat_reference_step": _RETREAT_REFERENCE_STEP,
             "arc_reference_step": _ARC_REFERENCE_STEP,
             "radial_reference_step": _RADIAL_REFERENCE_STEP,
@@ -581,20 +581,20 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             "transport_height_policy": "freeze_actual_safe_height_at_arc_entry",
             "bearing_tolerance_rad": _BEARING_TOLERANCE,
             "retreat_control_body": "wrist",
-            "retreat_ik_mode": "wrist_world_xz_plus_entry_wrist_flex(world_y_free,no_world_orientation)",
-            "retreat_task_error_order": "wrist_x_m,wrist_z_m,wrist_flex_rad",
-            "retreat_y_policy": "omitted_from_ik_and_completion;command_y_follows_live_wrist",
-            "retreat_path": "wrist_vertical_lift_then_30mm_radial_reference_with_y_free",
+            "retreat_ik_mode": "wrist_xyz_plus_entry_wrist_flex(no_world_orientation)",
+            "retreat_task_error_order": "wrist_x_m,wrist_y_m,wrist_z_m,wrist_flex_rad",
+            "retreat_y_policy": "constrained_during_lift_and_root_relative_retreat",
+            "retreat_path": "wrist_vertical_lift_then_root_relative_xy_scaled_to_5_over_7",
             "pre_retreat_gripper_gate": "half_closed_and_near_cube_stable",
             "gripper_close_minimum_steps": _GRIPPER_CLOSE_MINIMUM_STEPS,
             "gripper_close_maximum_steps": _GRIPPER_CLOSE_MAXIMUM_STEPS,
             "gripper_settle_stable_steps": _GRIPPER_SETTLE_STABLE_STEPS,
-            "retreat_bearing_policy": "diagnostic_only_during_retreat",
+            "retreat_bearing_policy": "preserved_by_xy_scaling_and_checked_for_completion",
             "retreat_z_overshoot_limit": _RETREAT_Z_OVERSHOOT_LIMIT,
             "retreat_error_worsening_margin": _RETREAT_ERROR_WORSENING_MARGIN,
             "retreat_error_worsening_steps": _RETREAT_ERROR_WORSENING_STEPS,
             "orientation_policy": "retreat_has_no_world_orientation_task_then_arc_entry_pose_yaw_co_rotation",
-            "completion_policy": "actual_wrist_xz_stable_during_retreat",
+            "completion_policy": "actual_wrist_xyz_and_root_bearing_stable_during_retreat",
             "grasp_loss_distance": _GRASP_LOSS_DISTANCE,
         }
 
