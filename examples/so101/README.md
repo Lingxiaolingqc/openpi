@@ -644,14 +644,14 @@ Two additional experts isolate the latest grasp-ejection diagnosis without overw
   frame can no longer freeze the close command. If the signal is then false for three consecutive pre-lift frames, the latch
   is cleared and the original per-episode close target is resumed. That nominal target is kept separate from the temporary
   held angle. The flag is deliberately not used to release the arm hold. After closure has settled, an explicit `ik_handoff`
-  rebases the Cartesian command to the measured wrist position, clears direct control, and reacquires that zero-displacement
-  target for several stable steps before lift. The command orientation is the measured wrist orientation already supplied by
-  the reference state machine, so this handoff now goes through Isaac Lab's native pose-IK path. The captured five-joint
-  posture remains diagnostic-only.
+  rebases the Cartesian command to the measured wrist position and replaces the old alignment target with the five measured
+  arm-joint positions at the loaded contact equilibrium. It continues direct joint control until wrist position and joint
+  velocity remain stable, then releases direct control in the same update that configures the normal lift IK mode.
 
-The earlier custom XYZ-plus-nullspace handoff was removed after its seed-42 joint trace showed positive feedback: the
-Cartesian error grew from about 1.5 mm to 17 mm while the DLS elbow correction repeatedly requested the opposite direction
-from the observed elbow motion. Relaxing the stability gate would only hide that controller mismatch. During `ik_handoff`,
+The earlier custom XYZ-plus-nullspace handoff was removed after its seed-42 joint trace showed positive feedback. A subsequent
+native pose-IK test exposed a second issue: at release, the old direct target still differed from the loaded measured joints
+by as much as 0.114 rad, so the actuator immediately moved away from the captured wrist pose. The measured-joint hold removes
+that residual target before any Cartesian controller regains ownership. During `ik_handoff`,
 `expert_axis_handoff` remains available every ten control steps and reports the measured wrist, captured posture, applied
 joint target, actual joint position/error, and velocity. Thus this variant still tests edge alignment plus slow closing,
 while `autogen_reference_slow_grasp` remains the unchanged slow-close-only control.

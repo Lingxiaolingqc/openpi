@@ -182,7 +182,8 @@ def test_only_axis_alignment_variant_uses_and_clears_direct_joint_hold() -> None
     assert "self._ik_handoff_target_b = self._command_pos_b.detach().clone()" in posture_source
     assert "self._command_pos_b = self._ik_handoff_target_b.detach().clone()" in posture_source
     assert "self._ik_handoff_joint_posture_target = robot.data.joint_pos" in posture_source
-    assert "set_position_only(enabled=False)" in posture_source
+    assert "set_direct_joint_position_target(self._ik_handoff_joint_posture_target)" in posture_source
+    assert "_release_direct_joint_hold('measured_joint_handoff_settled')" in posture_source
     assert "set_position_only_nullspace_posture_target" not in posture_source
     assert "set_xyz_joint_nullspace_target" not in ast.unparse(
         next(
@@ -206,6 +207,8 @@ def test_only_axis_alignment_variant_uses_and_clears_direct_joint_hold() -> None
         )
         == 1
     )
+    transition_source = ast.unparse(_method_definition(axis_class, "_transition"))
+    assert "self._state != 'ik_handoff'" in transition_source
 
 
 def test_axis_alignment_waits_for_the_measured_wrist_before_direct_hold() -> None:

@@ -257,12 +257,17 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
         if self._ik_handoff_streak >= self.IK_HANDOFF_STABLE_STEPS:
             self._transition("lift")
         elif self._state_step > self.IK_HANDOFF_TIMEOUT_STEPS:
-            self._fail("IK did not reacquire the measured wrist pose after direct grasp hold")
+            self._fail("measured-joint hold did not settle before lift")
 
     def _transition(self, state: str, env=None) -> None:
         # The base machine normally enters lift as soon as gripper feedback has
-        # settled.  Insert a zero-displacement IK reacquisition first.
-        if state == "lift" and getattr(self, "_axis_alignment_direct_hold_active", False):
+        # settled. Insert one measured-joint settling phase, but allow that
+        # phase itself to complete the transition to lift.
+        if (
+            state == "lift"
+            and self._state != "ik_handoff"
+            and getattr(self, "_axis_alignment_direct_hold_active", False)
+        ):
             state = "ik_handoff"
         super()._transition(state, env)
 
@@ -299,9 +304,11 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
             robot = env.scene["robot"]
             wrist_flex_index = list(robot.data.joint_names).index("wrist_flex")
             if self._ik_handoff_target_b is None:
-                # Capture one fixed, zero-displacement IK target at the exact
-                # direct-hold pose.  It must not follow the measured wrist on
-                # later frames, otherwise the position gate is vacuous.
+                # Rebase both the diagnostic wrist target and all five arm
+                # joint targets to the measured contact equilibrium. The old
+                # alignment target can still differ from reality by more than
+                # 0.1 rad under load; releasing it directly leaves a large
+                # actuator transient that Cartesian IK cannot safely absorb.
                 self._rebase_command_to_measured_wrist(env)
                 assert self._command_pos_b is not None
                 self._ik_handoff_target_b = self._command_pos_b.detach().clone()
@@ -309,24 +316,21 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
                 self._ik_handoff_joint_posture_target = robot.data.joint_pos[
                     :, list(self._axis_alignment_controlled_joint_indices)
                 ].detach().clone()
-                self._release_direct_joint_hold("gripper_feedback_settled")
             else:
                 self._command_pos_b = self._ik_handoff_target_b.detach().clone()
             assert self._ik_handoff_joint_posture_target is not None
             self._posture_target = self._ik_handoff_joint_posture_target[
                 :, self._arm_action_term.controlled_joint_names.index("wrist_flex")
             ]
-            # Reacquire the frozen, measured wrist position through Isaac Lab's
-            # native pose-IK path.  get_action() supplies the measured wrist
-            # orientation, so the orientation error starts at zero without an
-            # over-constrained synthetic posture objective.  In particular, do
-            # not use the custom XYZ DLS here: on the mirrored SO-101 root its
-            # Jacobian update was observed to drive elbow_flex opposite to the
-            # requested Cartesian correction and form positive feedback.
-            self._arm_action_term.set_position_only(enabled=False)
+            self._arm_action_term.set_direct_joint_position_target(self._ik_handoff_joint_posture_target)
             return
 
-        self._arm_action_term.clear_direct_joint_position_target()
+        if self._axis_alignment_direct_hold_active and self._state == "lift":
+            # Release direct control only in the same update that configures
+            # the normal lift IK mode, avoiding a one-frame stale-mode gap.
+            self._release_direct_joint_hold("measured_joint_handoff_settled")
+        else:
+            self._arm_action_term.clear_direct_joint_position_target()
         super()._update_posture_target(env)
 
     def _advance_direct_wrist_roll_target(self, env) -> None:
@@ -622,10 +626,10 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
             "ray_hit_tracking_timeout_steps": self.RAY_HIT_TRACKING_TIMEOUT_STEPS,
             "ray_hit_tracking_ray_miss_limit": self.AXIS_ALIGNMENT_RAY_MISS_LIMIT,
             "direct_hold_phases": "pregrasp_axis_align,grasp,grasp_settle",
-            "direct_hold_release_gate": "feedback_settled_gripper_then_zero_displacement_ik_handoff",
+            "direct_hold_release_gate": "feedback_settled_gripper_then_measured_joint_hold_settle",
             "pick_cube_semantics": "jaw_distance_and_gripper_angle_only;not_used_to_release_arm_hold",
             "post_alignment_gate": "direct_to_slow_grasp_without_cartesian_redescent",
             "ik_handoff_stable_steps": self.IK_HANDOFF_STABLE_STEPS,
-            "ik_handoff_controller": "native_pose_ik_at_frozen_position_with_measured_orientation",
-            "ik_handoff_captured_joint_posture": "diagnostic_only",
+            "ik_handoff_controller": "direct_hold_rebased_to_measured_five_joint_contact_equilibrium",
+            "ik_handoff_captured_joint_posture": "active_hold_target_until_velocity_and_wrist_stable",
         }
