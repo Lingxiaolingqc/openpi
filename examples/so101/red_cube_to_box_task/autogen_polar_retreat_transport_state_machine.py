@@ -27,6 +27,7 @@ _RETREAT_BEARING_TOLERANCE = math.radians(10.0)
 _WRIST_POSTURE_DAMPING = 0.04
 _WRIST_POSTURE_GAIN = 0.08
 _WRIST_POSTURE_MAX_STEP = 0.03
+_WRIST_JOINT_TARGET_ACCUMULATION_STEP = 0.005
 _RETREAT_Z_OVERSHOOT_LIMIT = 0.020
 _RETREAT_ERROR_WORSENING_MARGIN = 0.010
 _RETREAT_ERROR_WORSENING_STEPS = 20
@@ -106,6 +107,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         self._gripper_joint_velocity: float | None = None
         self._gripper_settle_streak = 0
         self._gripper_settle_reason: str | None = None
+        self._wrist_joint_target_accumulation_enabled = False
 
     def setup(self, env) -> None:
         super().setup(env)
@@ -114,6 +116,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
     def reset(self) -> None:
         wrist_body_index = self._wrist_body_index
         if self._arm_action_term is not None:
+            self._disable_wrist_joint_target_accumulation()
             self._arm_action_term.restore_configured_control_body()
         super().reset()
         self._wrist_body_index = wrist_body_index
@@ -123,6 +126,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         phase = self.phase_name
         wrist_position_only_phases = {"retreat_to_safe", "arc_transfer"}
         if self._arm_action_term is not None and phase not in wrist_position_only_phases:
+            self._disable_wrist_joint_target_accumulation()
             self._arm_action_term.restore_configured_control_body()
         if phase in {"approach_cube", "descend_to_cube", "close_gripper"}:
             action = super().get_action(env)
@@ -230,6 +234,8 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             self._episode_done = True
 
     def _advance_phase(self) -> None:
+        if self.phase_name == "arc_transfer":
+            self._disable_wrist_joint_target_accumulation()
         if self.phase_name == "retreat_to_safe" and self._arm_action_term is not None:
             self._arm_action_term.restore_configured_control_body()
         super()._advance_phase()
@@ -255,6 +261,22 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             posture_gain=_WRIST_POSTURE_GAIN,
             max_posture_step=_WRIST_POSTURE_MAX_STEP,
         )
+
+    def _enable_wrist_joint_target_accumulation(self) -> None:
+        assert self._arm_action_term is not None
+        if self._wrist_joint_target_accumulation_enabled:
+            return
+        self._arm_action_term.set_joint_target_accumulation(
+            maximum_step=_WRIST_JOINT_TARGET_ACCUMULATION_STEP
+        )
+        self._arm_action_term.reset_joint_target_accumulation_reference()
+        self._wrist_joint_target_accumulation_enabled = True
+
+    def _disable_wrist_joint_target_accumulation(self) -> None:
+        if self._arm_action_term is None or not self._wrist_joint_target_accumulation_enabled:
+            return
+        self._arm_action_term.set_joint_target_accumulation(maximum_step=None)
+        self._wrist_joint_target_accumulation_enabled = False
 
     def _update_gripper_settle(self, env) -> None:
         robot = env.scene["robot"]
@@ -303,6 +325,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             robot.data.joint_names.index(name) for name in self._arm_action_term.controlled_joint_names
         ]
         self._wrist_posture_target = robot.data.joint_pos[:, controlled_joint_indices].detach().clone()
+        self._enable_wrist_joint_target_accumulation()
         self._retreat_subphase = "vertical_lift"
         self._retreat_safe_z = lift_target_w[:, 2].detach().clone()
         self._retreat_bearing = None
@@ -605,6 +628,8 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             "retreat_posture_damping": _WRIST_POSTURE_DAMPING,
             "retreat_posture_gain": _WRIST_POSTURE_GAIN,
             "retreat_posture_max_step": _WRIST_POSTURE_MAX_STEP,
+            "wrist_joint_target_policy": "accumulate_limited_ik_delta_independent_of_live_joint_drift",
+            "wrist_joint_target_accumulation_step": _WRIST_JOINT_TARGET_ACCUMULATION_STEP,
             "retreat_wrist_flex_policy": "soft_nullspace_only_not_a_hard_task_row",
             "retreat_y_policy": "constrained_during_lift_and_root_relative_retreat",
             "retreat_path": "wrist_vertical_lift_then_root_relative_xy_scaled_to_5_over_7",

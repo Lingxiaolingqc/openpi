@@ -102,6 +102,35 @@ def test_position_only_posture_is_projected_into_xyz_nullspace() -> None:
     assert "delta_joint_pos = primary_delta + nullspace_delta" in apply_source
 
 
+def test_wrist_ik_accumulates_limited_deltas_without_reanchoring_to_live_joints() -> None:
+    initialize_source = ast.unparse(_method("_initialize_polar_retreat"))
+    enable_source = ast.unparse(_method("_enable_wrist_joint_target_accumulation"))
+    disable_source = ast.unparse(_method("_disable_wrist_joint_target_accumulation"))
+    get_action_source = ast.unparse(_method("get_action"))
+
+    assert "self._enable_wrist_joint_target_accumulation()" in initialize_source
+    assert "set_joint_target_accumulation" in enable_source
+    assert "reset_joint_target_accumulation_reference" in enable_source
+    assert "maximum_step=_WRIST_JOINT_TARGET_ACCUMULATION_STEP" in enable_source
+    assert "set_joint_target_accumulation(maximum_step=None)" in disable_source
+    assert "self._disable_wrist_joint_target_accumulation()" in get_action_source
+
+    tree = ast.parse(IK_ACTION_PATH.read_text(encoding="utf-8"), filename=str(IK_ACTION_PATH))
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "PhaseAwareDifferentialInverseKinematicsAction"
+    )
+    apply_method = next(
+        node for node in class_node.body if isinstance(node, ast.FunctionDef) and node.name == "apply_actions"
+    )
+    apply_source = ast.unparse(apply_method)
+    assert "joint_pos_des = self._joint_target_accumulation_reference + accumulated_step" in apply_source
+    assert "accumulated_step = delta_joint_pos * scale" in apply_source
+    assert "self._joint_target_accumulation_reference = joint_pos_des.detach().clone()" in apply_source
+    assert "joint_pos_des = joint_pos + delta_joint_pos" in apply_source
+
+
 def test_xz_joint_mode_omits_y_position_and_jacobian_rows() -> None:
     tree = ast.parse(IK_ACTION_PATH.read_text(encoding="utf-8"), filename=str(IK_ACTION_PATH))
     class_node = next(

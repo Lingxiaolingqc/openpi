@@ -50,6 +50,9 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._joint_target_slew_max_step: float | None = None
         self._joint_target_slew_reference: torch.Tensor | None = None
         self._last_joint_target_slew_step: torch.Tensor | None = None
+        self._joint_target_accumulation_max_step: float | None = None
+        self._joint_target_accumulation_reference: torch.Tensor | None = None
+        self._last_joint_target_accumulation_step: torch.Tensor | None = None
         self._last_joint_position_target: torch.Tensor | None = None
         self._weighted_position_penalties: torch.Tensor | None = None
         self._weighted_position_damping: float | None = None
@@ -68,6 +71,8 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._clear_position_nullspace_posture_target()
         self._clear_solver_diagnostics()
         self._joint_target_slew_reference = None
+        self._joint_target_accumulation_reference = None
+        self._last_joint_target_accumulation_step = None
         self._weighted_position_penalties = None
         self._weighted_position_damping = None
         self._weighted_joint_names = ()
@@ -364,6 +369,21 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._joint_target_slew_reference = None
         self._last_joint_target_slew_step = None
 
+    def set_joint_target_accumulation(self, *, maximum_step: float | None) -> None:
+        """Integrate limited IK deltas into a target that is independent of live joint drift."""
+
+        if maximum_step is not None and maximum_step <= 0.0:
+            raise ValueError(f"Joint target accumulation step must be positive, received {maximum_step}")
+        self._joint_target_accumulation_max_step = maximum_step
+        self._joint_target_accumulation_reference = None
+        self._last_joint_target_accumulation_step = None
+
+    def reset_joint_target_accumulation_reference(self) -> None:
+        """Start the next accumulated target trajectory from the then-current joint state."""
+
+        self._joint_target_accumulation_reference = None
+        self._last_joint_target_accumulation_step = None
+
     def set_weighted_position_only(
         self,
         *,
@@ -431,6 +451,12 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
                 return f"xz_joint_nullspace(xz+{self._xyz_joint_nullspace_name},y_free)"
             return f"xyz_joint_nullspace(xyz+{self._xyz_joint_nullspace_name},joint_limit_avoidance)"
         if self._position_nullspace_posture_target is not None:
+            if self._joint_target_accumulation_max_step is not None:
+                return (
+                    "position_only_nullspace_posture("
+                    f"damping={self._position_nullspace_damping:g},"
+                    f"accumulation_step={self._joint_target_accumulation_max_step:g})"
+                )
             return f"position_only_nullspace_posture(damping={self._position_nullspace_damping:g})"
         if self._weighted_position_penalties is not None:
             return f"weighted_position_only(damping={self._weighted_position_damping:g})"
@@ -649,7 +675,25 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
             self._last_task_singular_values = torch.linalg.svdvals(task_jacobian).detach().clone()
         else:
             self._clear_solver_diagnostics()
-        joint_pos_des = joint_pos + delta_joint_pos
+        if self._joint_target_accumulation_max_step is not None:
+            if self._joint_target_accumulation_reference is None:
+                self._joint_target_accumulation_reference = joint_pos.detach().clone()
+            maximum_component = torch.amax(torch.abs(delta_joint_pos), dim=-1, keepdim=True)
+            scale = torch.clamp(
+                self._joint_target_accumulation_max_step / torch.clamp(maximum_component, min=1.0e-8),
+                max=1.0,
+            )
+            accumulated_step = delta_joint_pos * scale
+            joint_pos_des = self._joint_target_accumulation_reference + accumulated_step
+            soft_limits = self._asset.data.soft_joint_pos_limits[:, self._joint_ids]
+            joint_pos_des = torch.clamp(joint_pos_des, min=soft_limits[..., 0], max=soft_limits[..., 1])
+            self._last_joint_target_accumulation_step = (
+                joint_pos_des - self._joint_target_accumulation_reference
+            ).detach().clone()
+            self._joint_target_accumulation_reference = joint_pos_des.detach().clone()
+            delta_joint_pos = joint_pos_des - joint_pos
+        else:
+            joint_pos_des = joint_pos + delta_joint_pos
 
         if self._joint_target_slew_max_step is not None:
             if self._joint_target_slew_reference is None:
@@ -717,12 +761,20 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         return self._joint_target_slew_max_step
 
     @property
+    def joint_target_accumulation_max_step(self) -> float | None:
+        return self._joint_target_accumulation_max_step
+
+    @property
     def last_joint_position_target(self) -> torch.Tensor | None:
         return self._last_joint_position_target
 
     @property
     def last_joint_target_slew_step(self) -> torch.Tensor | None:
         return self._last_joint_target_slew_step
+
+    @property
+    def last_joint_target_accumulation_step(self) -> torch.Tensor | None:
+        return self._last_joint_target_accumulation_step
 
     @property
     def controlled_joint_names(self) -> tuple[str, ...]:
@@ -763,6 +815,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._last_unlimited_delta_joint_pos = None
         self._last_joint_position_target = None
         self._last_joint_target_slew_step = None
+        self._last_joint_target_accumulation_step = None
 
 
 def configure_servo_ik_action(env_cfg) -> None:

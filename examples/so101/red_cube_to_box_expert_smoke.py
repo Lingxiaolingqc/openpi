@@ -1153,6 +1153,13 @@ def main() -> int:
                                     if arm_action_term.last_delta_joint_pos is None
                                     else _rounded_row(arm_action_term.last_delta_joint_pos[0], digits=7)
                                 ),
+                                "joint_target_accumulation_step": (
+                                    None
+                                    if arm_action_term.last_joint_target_accumulation_step is None
+                                    else _rounded_row(
+                                        arm_action_term.last_joint_target_accumulation_step[0], digits=7
+                                    )
+                                ),
                                 "controlled_joint_names": controlled_joint_names,
                                 "last_joint_position_target": (
                                     None
