@@ -498,10 +498,9 @@ preserved.
 
 Only framework adapters are changed. World targets are expressed in the robot-root frame expected by the source
 implementation; the second-back port's XYZ wrist IK plus continuously recomputed `wrist_flex` correction is restored
-through the existing phase-aware Isaac Lab action term. Because the bundled URDF's `gripper_frame_link` local axes do
-not match the current USD detection-frame axes, this experimental grasp trigger starts at the live wrist body and
-points along `ee_frame.target[0] - wrist` toward and beyond the gripper frame, then evaluates that half-infinite ray
-against the live cube OBB; and the binary
+through the existing phase-aware Isaac Lab action term. The current audited grasp trigger uses the live
+`ee_frame.target[0]` gripper frame, its local `-Z` approach direction, and the local
+`(CUBE_HALF_HEIGHT, 0, -0.04)` origin offset, then range-gates the first intersection with the live cube OBB. The binary
 gripper action is replaced by a continuous gripper-joint target so the source openness range is meaningful. The
 single-object task uses the live target-box floor center instead of Autogen's multi-object placement manager. A failed
 grasp stops safely instead of issuing the source project's direct joint-space return-home recovery. Thus this is a
@@ -600,10 +599,118 @@ The log separates `green_ray_obb_hit` from `green_ray_within_grasp_reach` and re
 applied XY correction, and alignment streak. This distinguishes "the infinite ray points through the cube" from "the
 cube is centered and physically close enough to the gripper to start closing."
 
-This comparison intentionally combines the posture-correction behavior from commit `c1295cb` with the experimental
-wrist-origin/gripper-direction ray. It therefore does not claim to be a bit-for-bit reproduction of the bundled source;
+This comparison intentionally combines the posture-correction behavior from commit `c1295cb` with the audited
+gripper-frame local-axis ray. It therefore does not claim to be a bit-for-bit reproduction of the bundled source;
 the log's `expert_ik_runtime_mode`, `posture_target_rad`, `temp_jaw_angle_rad`, and
 `expert_temp_jaw_angle_captured` fields make that experimental difference explicit.
+
+Two additional experts isolate the latest grasp-ejection diagnosis without overwriting `autogen_reference`:
+
+- `autogen_reference_slow_grasp` changes only `GRASP_DURATION_STEPS` from 80 to 240. The commanded close slope is
+  one third of the reference value; ray geometry, descent, temporary jaw-angle latch, settle gates, and all later phases
+  remain unchanged.
+- `autogen_reference_axis_align_slow_grasp` inherits that exact slow close and inserts
+  `pregrasp_axis_align` after the first valid descend hit. The confirmed closing axis, gripper local `+X`, is compared
+  with the four unoriented candidates `{+cube X, -cube X, +cube Y, -cube Y}`. It selects the reachable candidate needing
+  the smallest wrist-roll angle, holds wrist XYZ, keeps the gripper open, and controls only the extra `wrist_roll` row.
+  Five-degree error, low roll and whole-arm velocity, at most 10 mm wrist-position error, and ten consecutive stable
+  samples are required. Because rotating local X also rotates the ray's local `+X` origin offset, completion returns to `descend`
+  for XY recentering and a fresh OBB/range check. The final close is permitted only after the live ray hit and the
+  remeasured axis error are simultaneously stable; any drift re-enters the bounded alignment phase. This uses the existing
+  `xyz_joint_nullspace(xyz+wrist_roll)` solver and does not restore the removed `xyz_two_joint` mode.
+
+Run both variants from a new terminal with the same seed. Each command writes a separate log and diagnostic recording;
+do not add `--renderer_device`:
+
+```bash
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_ROOT=/home/data/xiaoqinchuan/projects/leisaac
+export LEISAAC_ENV=/home/data/xiaoqinchuan/envs/leisaac-so101
+export LEISAAC_ASSETS_ROOT=/home/data/xiaoqinchuan/assets/leisaac-v0.4.0
+export ISAACSIM_PORTABLE_ROOT=/home/data/xiaoqinchuan/cache/isaacsim-portable
+export OMNI_KIT_ACCEPT_EULA=YES
+export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
+
+export AUTOGEN_SLOW_LOG="$LEISAAC_BASE/results/leisaac/autogen-reference-slow-grasp-seed42.log"
+export AUTOGEN_SLOW_RECORD_DIR="$LEISAAC_BASE/results/leisaac/autogen-reference-slow-grasp-recordings"
+export AUTOGEN_AXIS_LOG="$LEISAAC_BASE/results/leisaac/autogen-reference-axis-align-slow-grasp-seed42.log"
+export AUTOGEN_AXIS_RECORD_DIR="$LEISAAC_BASE/results/leisaac/autogen-reference-axis-align-slow-grasp-recordings"
+
+cd "$OPENPI_ROOT"
+mkdir -p \
+  "$LEISAAC_BASE/results/leisaac" \
+  "$AUTOGEN_SLOW_RECORD_DIR" \
+  "$AUTOGEN_AXIS_RECORD_DIR"
+
+timeout --signal=KILL 600s \
+  "$LEISAAC_ENV/bin/python" \
+  examples/so101/red_cube_to_box_expert_smoke.py \
+  --headless \
+  --enable_cameras \
+  --device cuda:6 \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --expert autogen_reference_slow_grasp \
+  --autogen_ray_axis=-z \
+  --seed 42 \
+  --record_dir "$AUTOGEN_SLOW_RECORD_DIR" \
+  --record_every 4 \
+  --record_fps 15 \
+  2>&1 | tee "$AUTOGEN_SLOW_LOG"
+
+autogen_slow_transport_status=${PIPESTATUS[0]}
+echo "autogen_slow_transport_exit=$autogen_slow_transport_status"
+
+if [ "$autogen_slow_transport_status" -eq 0 ] &&
+   grep -q '^RED_CUBE_TO_BOX_EXPERT_SMOKE_OK$' "$AUTOGEN_SLOW_LOG" &&
+   ! grep -q '^RED_CUBE_TO_BOX_EXPERT_SMOKE_FAILED$' "$AUTOGEN_SLOW_LOG"; then
+  autogen_slow_semantic_status=0
+else
+  autogen_slow_semantic_status=1
+fi
+echo "autogen_slow_semantic_exit=$autogen_slow_semantic_status"
+
+timeout --signal=KILL 600s \
+  "$LEISAAC_ENV/bin/python" \
+  examples/so101/red_cube_to_box_expert_smoke.py \
+  --headless \
+  --enable_cameras \
+  --device cuda:6 \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --expert autogen_reference_axis_align_slow_grasp \
+  --autogen_ray_axis=-z \
+  --seed 42 \
+  --record_dir "$AUTOGEN_AXIS_RECORD_DIR" \
+  --record_every 4 \
+  --record_fps 15 \
+  2>&1 | tee "$AUTOGEN_AXIS_LOG"
+
+autogen_axis_transport_status=${PIPESTATUS[0]}
+echo "autogen_axis_transport_exit=$autogen_axis_transport_status"
+
+if [ "$autogen_axis_transport_status" -eq 0 ] &&
+   grep -q '^RED_CUBE_TO_BOX_EXPERT_SMOKE_OK$' "$AUTOGEN_AXIS_LOG" &&
+   ! grep -q '^RED_CUBE_TO_BOX_EXPERT_SMOKE_FAILED$' "$AUTOGEN_AXIS_LOG"; then
+  autogen_axis_semantic_status=0
+else
+  autogen_axis_semantic_status=1
+fi
+echo "autogen_axis_semantic_exit=$autogen_axis_semantic_status"
+
+for log_path in "$AUTOGEN_SLOW_LOG" "$AUTOGEN_AXIS_LOG"; do
+  echo "========== $log_path =========="
+  grep -nE \
+    'expert_variant|servo_parameters|expert_phase|expert_autogen_reference|expert_temp_jaw_angle_captured|expert_grasp_event|completed_steps|cube_final|cube_offset|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
+    "$log_path" |
+  tail -n 600
+done
+```
+
+The decisive comparison is the gripper velocity printed on `expert_temp_jaw_angle_captured`, whether
+`expert_grasp_event:lost` occurs before lift, the cube XY displacement during grasp, and final success. The axis-aligned
+run additionally reports the selected signed cube axis, measured local-X and cube X/Y directions, signed/absolute
+alignment error, wrist-roll target/position/velocity, XYZ hold error, alignment streak, and final combined-gate streak in
+both stdout and `trace.jsonl`.
 
 The third implementation, `red_cube_to_box_task/servo_state_machine.py`, inherits the adaptive grasp, retry,
 and gradual lift logic but does not replace either comparison expert. Its companion

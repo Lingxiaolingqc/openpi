@@ -10,6 +10,14 @@ import traceback
 
 from isaaclab.app import AppLauncher
 
+AUTOGEN_REFERENCE_EXPERTS = frozenset(
+    {
+        "autogen_reference",
+        "autogen_reference_slow_grasp",
+        "autogen_reference_axis_align_slow_grasp",
+    }
+)
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -24,6 +32,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "autogen_independent_retreat_transport",
             "autogen_polar_retreat_transport",
             "autogen_reference",
+            "autogen_reference_slow_grasp",
+            "autogen_reference_axis_align_slow_grasp",
             "legacy_gripper_anchor",
             "legacy_gripper_anchor_align_then_lower",
             "legacy_gripper_anchor_position_align_then_lower",
@@ -109,6 +119,12 @@ def main() -> int:
     from red_cube_to_box_task.autogen_reference_state_machine import (
         RedCubeToBoxAutogenReferenceStateMachine,
         configure_autogen_reference_action,
+    )
+    from red_cube_to_box_task.autogen_reference_slow_grasp_state_machine import (
+        RedCubeToBoxAutogenReferenceSlowGraspStateMachine,
+    )
+    from red_cube_to_box_task.autogen_reference_axis_align_slow_grasp_state_machine import (
+        RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine,
     )
     from red_cube_to_box_task.env_cfg import configure_planar_safety_sensors
     from red_cube_to_box_task.legacy_gripper_anchor_state_machine import (
@@ -224,7 +240,7 @@ def main() -> int:
             "autogen_polar_retreat_transport",
         }:
             configure_servo_ik_action(env_cfg)
-        if args.expert == "autogen_reference":
+        if args.expert in AUTOGEN_REFERENCE_EXPERTS:
             configure_autogen_reference_action(env_cfg)
         if args.expert in {
             "legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower",
@@ -250,6 +266,8 @@ def main() -> int:
             "autogen_independent_retreat_transport": (RedCubeToBoxAutogenIndependentRetreatTransportStateMachine),
             "autogen_polar_retreat_transport": RedCubeToBoxAutogenPolarRetreatTransportStateMachine,
             "autogen_reference": RedCubeToBoxAutogenReferenceStateMachine,
+            "autogen_reference_slow_grasp": RedCubeToBoxAutogenReferenceSlowGraspStateMachine,
+            "autogen_reference_axis_align_slow_grasp": (RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine),
             "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
             "legacy_gripper_anchor_align_then_lower": RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine,
             "legacy_gripper_anchor_position_align_then_lower": (
@@ -334,6 +352,13 @@ def main() -> int:
                 "bundled_autogen_state_flow,robot-base_coordinates,original_green_ray_obb,"
                 "wrist_xyz_ik_plus_wrist_flex_posture_correction,continuous_gripper"
             ),
+            "autogen_reference_slow_grasp": (
+                "autogen_reference,grasp_close_duration_80_to_240_steps,no_other_behavior_change"
+            ),
+            "autogen_reference_axis_align_slow_grasp": (
+                "autogen_reference_slow_grasp,post_descend_gripper_local_x_to_nearest_cube_local_x_or_y,"
+                "wrist_xyz_plus_wrist_roll,recenter_before_grasp"
+            ),
             "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
             "legacy_gripper_anchor_align_then_lower": "legacy_fixed_world,align_high_then_descend",
             "legacy_gripper_anchor_position_align_then_lower": "position_only_high_align,legacy_pose_descent",
@@ -414,10 +439,10 @@ def main() -> int:
                     if callable(observe_pick_cube):
                         observe_pick_cube(pick_cube, env)
                     ever_grasped = ever_grasped or pick_cube
-                    if phase_name == "lift_cube" and not lift_phase_seen:
+                    if phase_name in {"lift_cube", "lift"} and not lift_phase_seen:
                         lift_phase_seen = True
                         grasped_at_lift = pick_cube
-                    if phase_name == "transfer_to_box" and not transfer_phase_seen:
+                    if phase_name in {"transfer_to_box", "transport"} and not transfer_phase_seen:
                         transfer_phase_seen = True
                         grasped_at_transfer = pick_cube
                     state_machine.advance()

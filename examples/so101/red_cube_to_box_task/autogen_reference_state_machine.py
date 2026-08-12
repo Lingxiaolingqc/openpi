@@ -13,15 +13,17 @@ from __future__ import annotations
 
 import math
 import random
+from typing import ClassVar
 
 import isaaclab.envs.mdp as isaac_mdp
+from isaaclab.markers import VisualizationMarkers
+from isaaclab.markers import VisualizationMarkersCfg
 import isaaclab.sim as sim_utils
-import torch
-from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.utils.math import quat_apply
 from isaaclab.utils.math import quat_inv
 from isaaclab.utils.math import quat_mul
 from leisaac.datagen.state_machine.base import StateMachineBase
+import torch
 
 from . import mdp
 from .env_cfg import CUBE_HALF_HEIGHT
@@ -61,7 +63,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     GREEN_RAY_ORIGIN_OFFSET = (CUBE_HALF_HEIGHT, 0.0, -0.04)
     GREEN_RAY_DIRECTION = (0.0, 0.0, -1.0)
     GREEN_RAY_MAX_HIT_DISTANCE = CUBE_HALF_HEIGHT + 0.048
-    LOCAL_RAY_AXES = {
+    LOCAL_RAY_AXES: ClassVar[dict[str, tuple[float, float, float]]] = {
         "+x": (1.0, 0.0, 0.0),
         "-x": (-1.0, 0.0, 0.0),
         "+y": (0.0, 1.0, 0.0),
@@ -236,7 +238,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         picked = bool(pick_cube.all().item()) if isinstance(pick_cube, torch.Tensor) else bool(pick_cube)
         if not picked or self._held_gripper_angle is not None:
             return False
-        if self._state in {"release", "return_home", "success", "failed"}:
+        if self._state not in {"grasp", "grasp_settle", "lift", "retreat", "transport"}:
             return False
 
         robot = env.scene["robot"]
@@ -300,7 +302,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
                 wrist_pos_w[:, :2] - command_pos_w[:, :2], dim=-1
             ).detach()
             if self.green_ray_hit:
-                self._transition("grasp")
+                self._on_grasp_pose_reached(env)
             elif bool((self._descent_wrist_xy_error > self.MAX_DESCENT_WRIST_XY_ERROR).any().item()):
                 self._fail("actual wrist XY drifted more than 50 mm during Autogen descent")
             elif bool((wrist_pos_w[:, 2] < self.MIN_WRIST_HEIGHT_W).any().item()):
@@ -402,6 +404,17 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
                 self._fail("Autogen placement detection timed out")
         elif self._state == "return_home" and self._update_move():
             self._transition("success")
+
+    def _on_grasp_pose_reached(self, env) -> None:
+        """Enter grasp after descent reaches its ray/OBB gate.
+
+        Variants may override this hook to insert a bounded pre-grasp phase.
+        The reference expert deliberately preserves its original direct
+        ``descend -> grasp`` transition.
+        """
+
+        del env
+        self._transition("grasp")
 
     def _transition(self, state: str, env=None) -> None:
         self._state = state
@@ -634,9 +647,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         repeated_quat_w = gripper_quat_w[:, None, :].expand(-1, len(self.LOCAL_RAY_AXES), -1).reshape(-1, 4)
         axes_w = quat_apply(repeated_quat_w, local_axes).reshape(env.num_envs, len(self.LOCAL_RAY_AXES), 3)
         axis_distances = torch.linspace(0.0, 0.10, 11, device=env.device, dtype=origin_w.dtype)
-        axis_points_w = gripper_pos_w[:, None, None, :] + (
-            axis_distances[None, None, :, None] * axes_w[:, :, None, :]
-        )
+        axis_points_w = gripper_pos_w[:, None, None, :] + (axis_distances[None, None, :, None] * axes_w[:, :, None, :])
         axis_points_w = axis_points_w.reshape(-1, 3)
         axis_marker_indices = (
             torch.arange(4, 10, device=env.device, dtype=torch.int32)
@@ -772,6 +783,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "grasp_confirmation": "feedback_settled_gripper_then_cube_lift_above_episode_initial_z",
             "gripper_target_reached_requires_low_velocity": True,
             "gripper_hold_trigger": "first_observed_pick_cube_true",
+            "gripper_hold_valid_phases": "grasp_through_transport",
             "gripper_hold_value": "measured_gripper_joint_angle_at_trigger",
             "gripper_hold_until": "release",
             "minimum_confirmed_lift": self.MIN_CONFIRMED_LIFT,

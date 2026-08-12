@@ -14,6 +14,14 @@ import traceback
 
 from isaaclab.app import AppLauncher
 
+AUTOGEN_REFERENCE_EXPERTS = frozenset(
+    {
+        "autogen_reference",
+        "autogen_reference_slow_grasp",
+        "autogen_reference_axis_align_slow_grasp",
+    }
+)
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -28,6 +36,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "autogen_independent_retreat_transport",
             "autogen_polar_retreat_transport",
             "autogen_reference",
+            "autogen_reference_slow_grasp",
+            "autogen_reference_axis_align_slow_grasp",
             "legacy_gripper_anchor",
             "legacy_gripper_anchor_align_then_lower",
             "legacy_gripper_anchor_position_align_then_lower",
@@ -157,6 +167,10 @@ class _DiagnosticRecorder:
             ee_point_w = getattr(state_machine, "ee_point_w", None)
             ee_table_projection_w = getattr(state_machine, "ee_table_projection_w", None)
             descent_xy_correction_w = getattr(state_machine, "descent_xy_correction_w", None)
+            axis_alignment_closing_axis_w = getattr(state_machine, "axis_alignment_closing_axis_w", None)
+            axis_alignment_cube_x_axis_w = getattr(state_machine, "axis_alignment_cube_x_axis_w", None)
+            axis_alignment_cube_y_axis_w = getattr(state_machine, "axis_alignment_cube_y_axis_w", None)
+            axis_alignment_desired_axis_w = getattr(state_machine, "axis_alignment_desired_axis_w", None)
             record.update(
                 {
                     "ik_runtime_mode": getattr(state_machine, "ik_runtime_mode", "pose"),
@@ -178,26 +192,59 @@ class _DiagnosticRecorder:
                     "release_authorized": getattr(state_machine, "release_authorized", None),
                     "green_ray_hit": getattr(state_machine, "green_ray_hit", None),
                     "green_ray_obb_hit": getattr(state_machine, "green_ray_obb_hit", None),
-                    "green_ray_within_grasp_reach": getattr(
-                        state_machine, "green_ray_within_grasp_reach", None
-                    ),
-                    "green_ray_hit_distance": _finite_or_none(
-                        getattr(state_machine, "green_ray_hit_distance", None)
-                    ),
-                    "wrist_to_gripper_length": _finite_or_none(
-                        getattr(state_machine, "wrist_to_gripper_length", None)
-                    ),
+                    "green_ray_within_grasp_reach": getattr(state_machine, "green_ray_within_grasp_reach", None),
+                    "green_ray_hit_distance": _finite_or_none(getattr(state_machine, "green_ray_hit_distance", None)),
+                    "wrist_to_gripper_length": _finite_or_none(getattr(state_machine, "wrist_to_gripper_length", None)),
                     "wrist_to_jaw_length": _finite_or_none(getattr(state_machine, "wrist_to_jaw_length", None)),
-                    "approach_tracking_error": _finite_or_none(
-                        getattr(state_machine, "approach_tracking_error", None)
-                    ),
-                    "descent_ray_xy_error": _finite_or_none(
-                        getattr(state_machine, "descent_ray_xy_error", None)
-                    ),
+                    "approach_tracking_error": _finite_or_none(getattr(state_machine, "approach_tracking_error", None)),
+                    "descent_ray_xy_error": _finite_or_none(getattr(state_machine, "descent_ray_xy_error", None)),
                     "descent_xy_correction_w": (
                         None if descent_xy_correction_w is None else _rounded_row(descent_xy_correction_w[0])
                     ),
                     "ray_alignment_streak": getattr(state_machine, "ray_alignment_streak", None),
+                    "axis_alignment_complete": getattr(state_machine, "axis_alignment_complete", None),
+                    "axis_alignment_selected_cube_axis": getattr(
+                        state_machine, "axis_alignment_selected_cube_axis", None
+                    ),
+                    "axis_alignment_closing_axis_w": (
+                        None
+                        if axis_alignment_closing_axis_w is None
+                        else _rounded_row(axis_alignment_closing_axis_w[0])
+                    ),
+                    "axis_alignment_desired_axis_w": (
+                        None
+                        if axis_alignment_desired_axis_w is None
+                        else _rounded_row(axis_alignment_desired_axis_w[0])
+                    ),
+                    "axis_alignment_cube_x_axis_w": (
+                        None if axis_alignment_cube_x_axis_w is None else _rounded_row(axis_alignment_cube_x_axis_w[0])
+                    ),
+                    "axis_alignment_cube_y_axis_w": (
+                        None if axis_alignment_cube_y_axis_w is None else _rounded_row(axis_alignment_cube_y_axis_w[0])
+                    ),
+                    "axis_alignment_error_rad": _finite_or_none(getattr(state_machine, "axis_alignment_error", None)),
+                    "axis_alignment_signed_error_rad": _finite_or_none(
+                        getattr(state_machine, "axis_alignment_signed_error", None)
+                    ),
+                    "axis_alignment_streak": getattr(state_machine, "axis_alignment_streak", None),
+                    "axis_alignment_final_gate_streak": getattr(
+                        state_machine, "axis_alignment_final_gate_streak", None
+                    ),
+                    "axis_alignment_wrist_roll_target_rad": _finite_or_none(
+                        getattr(state_machine, "axis_alignment_wrist_roll_target", None)
+                    ),
+                    "axis_alignment_wrist_roll_position_rad": _finite_or_none(
+                        getattr(state_machine, "axis_alignment_wrist_roll_position", None)
+                    ),
+                    "axis_alignment_wrist_roll_velocity_rad_s": _finite_or_none(
+                        getattr(state_machine, "axis_alignment_wrist_roll_velocity", None)
+                    ),
+                    "axis_alignment_max_arm_joint_velocity_rad_s": _finite_or_none(
+                        getattr(state_machine, "axis_alignment_max_arm_joint_velocity", None)
+                    ),
+                    "axis_alignment_wrist_position_error_m": _finite_or_none(
+                        getattr(state_machine, "axis_alignment_wrist_position_error", None)
+                    ),
                     "measured_gripper_above_jaw_z": (
                         None
                         if getattr(state_machine, "measured_gripper_above_jaw_z", None) is None
@@ -336,6 +383,12 @@ def main() -> int:
         RedCubeToBoxAutogenReferenceStateMachine,
         configure_autogen_reference_action,
     )
+    from red_cube_to_box_task.autogen_reference_slow_grasp_state_machine import (
+        RedCubeToBoxAutogenReferenceSlowGraspStateMachine,
+    )
+    from red_cube_to_box_task.autogen_reference_axis_align_slow_grasp_state_machine import (
+        RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine,
+    )
     from red_cube_to_box_task.env_cfg import configure_planar_safety_sensors
     from red_cube_to_box_task.legacy_gripper_anchor_state_machine import (
         RedCubeToBoxLegacyGripperAnchorStateMachine,
@@ -452,7 +505,7 @@ def main() -> int:
             "autogen_polar_retreat_transport",
         }:
             configure_servo_ik_action(env_cfg)
-        if args.expert == "autogen_reference":
+        if args.expert in AUTOGEN_REFERENCE_EXPERTS:
             configure_autogen_reference_action(env_cfg)
         if args.expert in {
             "legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower",
@@ -487,6 +540,13 @@ def main() -> int:
             "autogen_reference": (
                 "bundled_autogen_state_flow,robot-base_coordinates,original_green_ray_obb,"
                 "wrist_xyz_ik_plus_wrist_flex_posture_correction,continuous_gripper"
+            ),
+            "autogen_reference_slow_grasp": (
+                "autogen_reference,grasp_close_duration_80_to_240_steps,no_other_behavior_change"
+            ),
+            "autogen_reference_axis_align_slow_grasp": (
+                "autogen_reference_slow_grasp,post_descend_gripper_local_x_to_nearest_cube_local_x_or_y,"
+                "wrist_xyz_plus_wrist_roll,recenter_before_grasp"
             ),
             "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",
             "legacy_gripper_anchor_align_then_lower": "legacy_fixed_world,align_high_then_descend",
@@ -542,6 +602,8 @@ def main() -> int:
             "autogen_independent_retreat_transport": (RedCubeToBoxAutogenIndependentRetreatTransportStateMachine),
             "autogen_polar_retreat_transport": RedCubeToBoxAutogenPolarRetreatTransportStateMachine,
             "autogen_reference": RedCubeToBoxAutogenReferenceStateMachine,
+            "autogen_reference_slow_grasp": RedCubeToBoxAutogenReferenceSlowGraspStateMachine,
+            "autogen_reference_axis_align_slow_grasp": (RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine),
             "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
             "legacy_gripper_anchor_align_then_lower": RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine,
             "legacy_gripper_anchor_position_align_then_lower": (
@@ -579,7 +641,7 @@ def main() -> int:
             "legacy_pd_position_servo": RedCubeToBoxLegacyPdPositionServoStateMachine,
             "legacy_trajectory_pd_servo": RedCubeToBoxLegacyTrajectoryPdServoStateMachine,
         }[args.expert]
-        if args.expert == "autogen_reference":
+        if args.expert in AUTOGEN_REFERENCE_EXPERTS:
             state_machine = state_machine_class(green_ray_axis=args.autogen_ray_axis)
         else:
             state_machine = state_machine_class()
@@ -663,7 +725,7 @@ def main() -> int:
                             f"gripper_target_w={_rounded_row(gripper_target[0])}",
                             flush=True,
                         )
-                if args.expert == "autogen_reference" and (phase_changed or completed_steps % 30 == 0):
+                if args.expert in AUTOGEN_REFERENCE_EXPERTS and (phase_changed or completed_steps % 30 == 0):
                     print(
                         f"expert_autogen_reference:{phase}:"
                         f"phase_step={state_machine.phase_step}:"
@@ -711,6 +773,34 @@ def main() -> int:
                         f"descent_xy_correction_w="
                         f"{None if state_machine.descent_xy_correction_w is None else _rounded_row(state_machine.descent_xy_correction_w[0], digits=7)}:"
                         f"ray_alignment_streak={state_machine.ray_alignment_streak}:"
+                        f"axis_alignment_complete={getattr(state_machine, 'axis_alignment_complete', None)}:"
+                        f"axis_alignment_selected_cube_axis="
+                        f"{getattr(state_machine, 'axis_alignment_selected_cube_axis', None)}:"
+                        f"axis_alignment_closing_axis_w="
+                        f"{None if getattr(state_machine, 'axis_alignment_closing_axis_w', None) is None else _rounded_row(state_machine.axis_alignment_closing_axis_w[0], digits=7)}:"
+                        f"axis_alignment_cube_x_axis_w="
+                        f"{None if getattr(state_machine, 'axis_alignment_cube_x_axis_w', None) is None else _rounded_row(state_machine.axis_alignment_cube_x_axis_w[0], digits=7)}:"
+                        f"axis_alignment_cube_y_axis_w="
+                        f"{None if getattr(state_machine, 'axis_alignment_cube_y_axis_w', None) is None else _rounded_row(state_machine.axis_alignment_cube_y_axis_w[0], digits=7)}:"
+                        f"axis_alignment_desired_axis_w="
+                        f"{None if getattr(state_machine, 'axis_alignment_desired_axis_w', None) is None else _rounded_row(state_machine.axis_alignment_desired_axis_w[0], digits=7)}:"
+                        f"axis_alignment_signed_error_rad="
+                        f"{None if getattr(state_machine, 'axis_alignment_signed_error', None) is None else _rounded_row(state_machine.axis_alignment_signed_error, digits=7)}:"
+                        f"axis_alignment_error_rad="
+                        f"{None if getattr(state_machine, 'axis_alignment_error', None) is None else _rounded_row(state_machine.axis_alignment_error, digits=7)}:"
+                        f"axis_alignment_streak={getattr(state_machine, 'axis_alignment_streak', None)}:"
+                        f"axis_alignment_final_gate_streak="
+                        f"{getattr(state_machine, 'axis_alignment_final_gate_streak', None)}:"
+                        f"axis_alignment_wrist_roll_target_rad="
+                        f"{None if getattr(state_machine, 'axis_alignment_wrist_roll_target', None) is None else _rounded_row(state_machine.axis_alignment_wrist_roll_target, digits=7)}:"
+                        f"axis_alignment_wrist_roll_position_rad="
+                        f"{None if getattr(state_machine, 'axis_alignment_wrist_roll_position', None) is None else _rounded_row(state_machine.axis_alignment_wrist_roll_position, digits=7)}:"
+                        f"axis_alignment_wrist_roll_velocity_rad_s="
+                        f"{None if getattr(state_machine, 'axis_alignment_wrist_roll_velocity', None) is None else _rounded_row(state_machine.axis_alignment_wrist_roll_velocity, digits=7)}:"
+                        f"axis_alignment_max_arm_joint_velocity_rad_s="
+                        f"{None if getattr(state_machine, 'axis_alignment_max_arm_joint_velocity', None) is None else _rounded_row(state_machine.axis_alignment_max_arm_joint_velocity, digits=7)}:"
+                        f"axis_alignment_wrist_position_error_m="
+                        f"{None if getattr(state_machine, 'axis_alignment_wrist_position_error', None) is None else _rounded_row(state_machine.axis_alignment_wrist_position_error, digits=7)}:"
                         f"gripper_target_error="
                         f"{None if state_machine.gripper_target_error is None else _rounded_row(state_machine.gripper_target_error, digits=7)}:"
                         f"gripper_joint_velocity="
@@ -1114,7 +1204,8 @@ def main() -> int:
                     print(
                         f"expert_temp_jaw_angle_captured:phase={state_machine.phase_name}:"
                         f"control_step={completed_steps + 1}:"
-                        f"angle_rad={state_machine.held_gripper_angle:.7f}",
+                        f"angle_rad={state_machine.held_gripper_angle:.7f}:"
+                        f"gripper_velocity_rad_s={abs(robot.data.joint_vel[0, -1].item()):.7f}",
                         flush=True,
                     )
                 if previous_pick_cube and not pick_cube_after:
