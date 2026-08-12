@@ -62,7 +62,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
 
     GREEN_RAY_ORIGIN_OFFSET = (CUBE_HALF_HEIGHT, 0.0, -0.04)
     GREEN_RAY_DIRECTION = (0.0, 0.0, -1.0)
-    GREEN_RAY_MAX_HIT_DISTANCE = CUBE_HALF_HEIGHT + 0.048
+    GREEN_RAY_MAX_HIT_DISTANCE = CUBE_HALF_HEIGHT + 0.044
     LOCAL_RAY_AXES: ClassVar[dict[str, tuple[float, float, float]]] = {
         "+x": (1.0, 0.0, 0.0),
         "-x": (-1.0, 0.0, 0.0),
