@@ -1072,6 +1072,17 @@ def main() -> int:
                         actual_focus_w = ee_frame.data.target_pos_w[0, 0]
                         actual_focus_quat_w = ee_frame.data.target_quat_w[0, 0]
 
+                    controlled_joint_names = arm_action_term.controlled_joint_names
+                    controlled_joint_ids = [
+                        robot.data.joint_names.index(joint_name) for joint_name in controlled_joint_names
+                    ]
+                    controlled_joint_position = robot.data.joint_pos[0, controlled_joint_ids]
+                    controlled_joint_velocity = robot.data.joint_vel[0, controlled_joint_ids]
+                    joint_position_target = arm_action_term.last_joint_position_target
+                    joint_position_target_error = (
+                        None if joint_position_target is None else joint_position_target[0] - controlled_joint_position
+                    )
+
                     phase_focus_fields = {
                         "phase_step": state_machine.phase_step,
                         "path_segment": state_machine.retreat_subphase,
@@ -1142,6 +1153,19 @@ def main() -> int:
                                     if arm_action_term.last_delta_joint_pos is None
                                     else _rounded_row(arm_action_term.last_delta_joint_pos[0], digits=7)
                                 ),
+                                "controlled_joint_names": controlled_joint_names,
+                                "last_joint_position_target": (
+                                    None
+                                    if joint_position_target is None
+                                    else _rounded_row(joint_position_target[0], digits=7)
+                                ),
+                                "current_controlled_joint_position": _rounded_row(controlled_joint_position, digits=7),
+                                "joint_target_minus_actual": (
+                                    None
+                                    if joint_position_target_error is None
+                                    else _rounded_row(joint_position_target_error, digits=7)
+                                ),
+                                "actual_joint_velocity": _rounded_row(controlled_joint_velocity, digits=7),
                             }
                         )
                     else:
