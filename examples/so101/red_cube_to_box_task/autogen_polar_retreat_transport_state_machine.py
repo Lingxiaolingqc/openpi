@@ -655,6 +655,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             "wrist_joint_target_policy": "accumulate_limited_ik_delta_independent_of_live_joint_drift",
             "wrist_joint_target_accumulation_step": _WRIST_JOINT_TARGET_ACCUMULATION_STEP,
             "joint_target_max_tracking_error": _JOINT_TARGET_MAX_TRACKING_ERROR,
+            "joint_target_anti_windup_policy": "freeze_only_when_at_limit_and_ik_delta_increases_tracking_gap",
             "retreat_wrist_flex_policy": "soft_nullspace_only_not_a_hard_task_row",
             "retreat_y_policy": "constrained_during_lift_and_root_relative_retreat",
             "retreat_path": "wrist_vertical_lift_then_root_relative_xy_scaled_to_5_over_7",

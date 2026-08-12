@@ -698,14 +698,22 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
                 max=1.0,
             )
             accumulated_step = delta_joint_pos * scale
-            joint_pos_des = self._joint_target_accumulation_reference + accumulated_step
+            proposed_joint_pos_des = self._joint_target_accumulation_reference + accumulated_step
             soft_limits = self._asset.data.soft_joint_pos_limits[:, self._joint_ids]
             assert self._joint_target_accumulation_max_tracking_error is not None
-            tracking_lower = joint_pos - self._joint_target_accumulation_max_tracking_error
-            tracking_upper = joint_pos + self._joint_target_accumulation_max_tracking_error
-            target_lower = torch.maximum(soft_limits[..., 0], tracking_lower)
-            target_upper = torch.minimum(soft_limits[..., 1], tracking_upper)
-            joint_pos_des = torch.clamp(joint_pos_des, min=target_lower, max=target_upper)
+            reference_tracking_error = self._joint_target_accumulation_reference - joint_pos
+            proposed_tracking_error = proposed_joint_pos_des - joint_pos
+            tracking_limit_reached = (
+                torch.abs(reference_tracking_error) >= self._joint_target_accumulation_max_tracking_error
+            )
+            moves_farther_from_actual = torch.abs(proposed_tracking_error) > torch.abs(reference_tracking_error)
+            freeze_accumulation = tracking_limit_reached & moves_farther_from_actual
+            joint_pos_des = torch.where(
+                freeze_accumulation,
+                self._joint_target_accumulation_reference,
+                proposed_joint_pos_des,
+            )
+            joint_pos_des = torch.clamp(joint_pos_des, min=soft_limits[..., 0], max=soft_limits[..., 1])
             self._last_joint_target_accumulation_step = (
                 joint_pos_des - self._joint_target_accumulation_reference
             ).detach().clone()
