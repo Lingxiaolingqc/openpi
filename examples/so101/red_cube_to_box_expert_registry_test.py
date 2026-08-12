@@ -249,6 +249,21 @@ def test_axis_alignment_waits_for_the_measured_wrist_before_direct_hold() -> Non
     assert capture_index < rebase_index < transition_index
 
 
+def test_autogen_pick_hold_preserves_nominal_target_and_uses_velocity_feedback() -> None:
+    path = TASK_ROOT / "autogen_reference_state_machine.py"
+    class_node = _class_definition(path, "RedCubeToBoxAutogenReferenceStateMachine")
+    observer = _method_definition(class_node, "observe_pick_cube")
+    observer_source = ast.unparse(observer)
+
+    assert "joint_vel" in observer_source
+    assert "allow_capture=self._state in self.PICK_HOLD_CAPTURE_PHASES" in observer_source
+    assert "allow_release=self._state in self.PICK_HOLD_RELEASE_PHASES" in observer_source
+    assert "self._grasp_end_position = self._held_gripper_angle" not in observer_source
+    assert "self._gripper_command = self._grasp_end_position" in observer_source
+    assert "elif self._gripper_pick_latch.held_angle is None" not in observer_source
+    assert observer_source.count("self._gripper_command =") == 2
+
+
 def test_smoke_recorder_uses_the_post_action_phase_and_forces_phase_boundaries() -> None:
     smoke_path = ROOT / "red_cube_to_box_expert_smoke.py"
     tree = ast.parse(smoke_path.read_text(encoding="utf-8"), filename=str(smoke_path))

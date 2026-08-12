@@ -832,6 +832,9 @@ def main() -> int:
                         f"{None if state_machine.posture_target is None else _rounded_row(state_machine.posture_target, digits=7)}:"
                         f"temp_jaw_angle_rad={state_machine.held_gripper_angle}:"
                         f"temp_jaw_capture_step={state_machine.held_gripper_angle_capture_step}:"
+                        f"temp_jaw_release_step={state_machine.held_gripper_angle_release_step}:"
+                        f"pick_hold_confirmation_streak={state_machine.pick_hold_confirmation_streak}:"
+                        f"pick_hold_loss_streak={state_machine.pick_hold_loss_streak}:"
                         f"wrist_position_w="
                         f"{None if state_machine.wrist_position_w is None else _rounded_row(state_machine.wrist_position_w[0], digits=7)}:"
                         f"descent_wrist_xy_error="
@@ -1359,6 +1362,14 @@ def main() -> int:
                         f"control_step={completed_steps + 1}:"
                         f"angle_rad={state_machine.held_gripper_angle:.7f}:"
                         f"gripper_velocity_rad_s={abs(robot.data.joint_vel[0, -1].item()):.7f}",
+                        flush=True,
+                    )
+                if getattr(state_machine, "last_pick_hold_event", None) == "released":
+                    print(
+                        f"expert_temp_jaw_angle_released:phase={state_machine.phase_name}:"
+                        f"control_step={completed_steps + 1}:"
+                        f"nominal_angle_rad={state_machine.gripper_command:.7f}:"
+                        f"release_step={state_machine.held_gripper_angle_release_step}",
                         flush=True,
                     )
                 if previous_pick_cube and not pick_cube_after:

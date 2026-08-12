@@ -570,10 +570,11 @@ It times out after 180 steps instead of beginning lift with a still-moving
 gripper. Lift confirmation is first evaluated after 30 actual lift steps and then requires the cube to be at least
 5 mm above its per-episode initial height; it no longer uses the incompatible fixed `gripper < 0.26 rad` threshold.
 The smoke and batch runners feed the environment's actual `subtask_terms.pick_cube` observation back to this expert.
-At its first `True`, the controller stores the measured gripper joint angle as `temp_jaw_angle_rad`, replaces the
-remaining close target with that value, and holds exactly that command through lift, retreat, and transport. It only
-releases the hold when entering the normal `release` phase. This avoids continuing to squeeze or reopen after the
-environment has already confirmed a grasp.
+That geometric flag is debounced only during the final pre-lift phases: it must remain true for eight consecutive
+observations and the gripper speed on the confirmation frame must be no greater than `0.01 rad/s`. Only then does the
+controller store the measured joint angle as `temp_jaw_angle_rad`. A candidate false frame clears the streak; after a
+capture, three consecutive false pre-lift frames cancel the hold and restore the untouched nominal close target. Once
+lift starts, a confirmed angle is held through retreat and transport and is opened only by the normal `release` phase.
 
 The diagnostic recording renders the selected ray and all six gripper-frame axes as USD sphere markers in headless RTX
 video. The long selected ray is yellow while missing and green while intersecting the cube OBB. The six short axes are
@@ -624,8 +625,12 @@ Two additional experts isolate the latest grasp-ejection diagnosis without overw
   The gripper remains open while the roll converges. Once aligned, the same frozen first-four joint target and aligned
   `wrist_roll` target are held throughout the inherited slow close and feedback-settle gate, so Cartesian IK cannot reorient
   or translate the wrist between alignment and contact. The environment's `pick_cube` flag is only a jaw-distance plus
-  gripper-angle observation and can become true before lift, so it remains the aperture-latch signal but is deliberately not
-  used to release the arm hold. After closure has settled, an explicit `ik_handoff` rebases the Cartesian command to the
+  gripper-angle observation and can become true before lift. It now becomes an aperture-latch signal only after eight
+  consecutive true observations and a confirmation-frame gripper speed no greater than `0.01 rad/s`; one threshold-crossing
+  frame can no longer freeze the close command. If the signal is then false for three consecutive pre-lift frames, the latch
+  is cleared and the original per-episode close target is resumed. That nominal target is kept separate from the temporary
+  held angle. The flag is deliberately not used to release the arm hold. After closure has settled, an explicit `ik_handoff`
+  rebases the Cartesian command to the
   measured wrist pose, clears direct control, reacquires that zero-displacement pose for several stable steps, and only then
   begins lift. Thus this variant tests edge alignment plus slow closing, while `autogen_reference_slow_grasp` remains the
   unchanged slow-close-only control.
@@ -711,14 +716,15 @@ echo "autogen_axis_semantic_exit=$autogen_axis_semantic_status"
 for log_path in "$AUTOGEN_SLOW_LOG" "$AUTOGEN_AXIS_LOG"; do
   echo "========== $log_path =========="
   grep -nE \
-    'expert_variant|servo_parameters|expert_phase|expert_autogen_reference|expert_temp_jaw_angle_captured|expert_grasp_event|completed_steps|cube_final|cube_offset|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
+    'expert_variant|servo_parameters|expert_phase|expert_autogen_reference|expert_temp_jaw_angle_captured|expert_temp_jaw_angle_released|expert_grasp_event|completed_steps|cube_final|cube_offset|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
     "$log_path" |
   tail -n 600
 done
 ```
 
-The decisive comparison is the gripper velocity printed on `expert_temp_jaw_angle_captured`, whether
-`expert_grasp_event:lost` occurs before lift, the cube XY displacement during grasp, and final success. Before alignment,
+The decisive comparison is whether `pick_hold_confirmation_streak` reaches eight only after the gripper slows, whether a
+later `expert_temp_jaw_angle_released` restores the nominal command before lift, the cube XY displacement during grasp, and
+final success. Before alignment,
 the axis-aligned run reports the frozen ray-hit target in base and world frames, measured wrist world position, wrist delta
 and residual descent since ray hit, tracking error, maximum arm-joint velocity, stable streak, and ray-miss streak. It then
 reports the selected signed cube axis, measured local-X and cube X/Y directions, signed/absolute alignment error, direct

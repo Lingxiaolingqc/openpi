@@ -27,6 +27,7 @@ import torch
 
 from . import mdp
 from .env_cfg import CUBE_HALF_HEIGHT
+from .gripper_pick_latch import GripperPickLatch
 from .phase_aware_ik_action import PhaseAwareDifferentialInverseKinematicsAction
 from .phase_aware_ik_action import resolve_action_term
 
@@ -53,6 +54,11 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     GRASP_SETTLE_STABLE_STEPS = 8
     GRIPPER_TARGET_TOLERANCE = 0.03
     GRIPPER_STALL_VELOCITY_TOLERANCE = 0.01
+    PICK_HOLD_CONFIRM_STEPS = 8
+    PICK_HOLD_VELOCITY_TOLERANCE = GRIPPER_STALL_VELOCITY_TOLERANCE
+    PICK_HOLD_LOSS_CLEAR_STEPS = 3
+    PICK_HOLD_CAPTURE_PHASES = frozenset({"grasp_settle", "ik_handoff"})
+    PICK_HOLD_RELEASE_PHASES = frozenset({"grasp_settle", "ik_handoff"})
     RELEASE_DURATION_STEPS = 180
 
     GRIPPER_OPEN_POSITION = 1.74533
@@ -95,6 +101,11 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self._rng: random.Random | None = None
         self._wrist_body_index: int | None = None
         self._green_ray_visualizer: VisualizationMarkers | None = None
+        self._gripper_pick_latch = GripperPickLatch(
+            confirmation_steps=self.PICK_HOLD_CONFIRM_STEPS,
+            velocity_tolerance=self.PICK_HOLD_VELOCITY_TOLERANCE,
+            loss_clear_steps=self.PICK_HOLD_LOSS_CLEAR_STEPS,
+        )
         self.reset()
 
     def setup(self, env) -> None:
@@ -175,8 +186,10 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self._gripper_joint_velocity: torch.Tensor | None = None
         self._initial_cube_z_w: torch.Tensor | None = None
         self._posture_target: torch.Tensor | None = None
-        self._held_gripper_angle: float | None = None
+        self._gripper_pick_latch.reset()
         self._held_gripper_angle_capture_step: int | None = None
+        self._held_gripper_angle_release_step: int | None = None
+        self._last_pick_hold_event: str | None = None
         self._wrist_position_w: torch.Tensor | None = None
         self._approach_tracking_error: torch.Tensor | None = None
         self._descent_wrist_xy_error: torch.Tensor | None = None
@@ -222,8 +235,9 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         robot = env.scene["robot"]
         wrist_quat_w = robot.data.body_quat_w[:, self._wrist_body_index]
         target_quat_b = quat_mul(quat_inv(robot.data.root_quat_w), wrist_quat_w)
-        if self._held_gripper_angle is not None and self._state not in {"release", "return_home", "success"}:
-            self._gripper_command = self._held_gripper_angle
+        held_gripper_angle = self._gripper_pick_latch.held_angle
+        if held_gripper_angle is not None and self._state not in {"release", "return_home", "success"}:
+            self._gripper_command = held_gripper_angle
         gripper = torch.full(
             (env.num_envs, 1),
             self._gripper_command,
@@ -233,24 +247,37 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         return torch.cat((self._command_pos_b, target_quat_b, gripper), dim=-1)
 
     def observe_pick_cube(self, pick_cube: bool | torch.Tensor, env) -> bool:
-        """Latch the measured gripper angle on the first environment-confirmed pick."""
+        """Debounce geometric pick feedback before holding the measured gripper angle."""
 
         picked = bool(pick_cube.all().item()) if isinstance(pick_cube, torch.Tensor) else bool(pick_cube)
-        if not picked or self._held_gripper_angle is not None:
-            return False
-        if self._state not in {"grasp", "grasp_settle", "ik_handoff", "lift", "retreat", "transport"}:
-            return False
-
         robot = env.scene["robot"]
         gripper_joint_index = list(robot.data.joint_names).index("gripper")
         measured_angle = robot.data.joint_pos[:, gripper_joint_index]
+        measured_velocity = torch.abs(robot.data.joint_vel[:, gripper_joint_index])
         if measured_angle.numel() != 1:
             raise RuntimeError("autogen_reference gripper-angle hold currently requires exactly one environment")
-        self._held_gripper_angle = float(measured_angle.item())
-        self._held_gripper_angle_capture_step = self._step_count
-        self._grasp_end_position = self._held_gripper_angle
-        self._gripper_command = self._held_gripper_angle
-        return True
+        if measured_velocity.numel() != 1:
+            raise RuntimeError("autogen_reference gripper-angle hold currently requires exactly one environment")
+
+        update = self._gripper_pick_latch.update(
+            picked=picked,
+            measured_angle=float(measured_angle.item()),
+            measured_velocity=float(measured_velocity.item()),
+            nominal_angle=self._grasp_end_position,
+            allow_capture=self._state in self.PICK_HOLD_CAPTURE_PHASES,
+            allow_release=self._state in self.PICK_HOLD_RELEASE_PHASES,
+        )
+        self._last_pick_hold_event = None
+        if update.captured:
+            self._held_gripper_angle_capture_step = self._step_count
+            self._held_gripper_angle_release_step = None
+            self._last_pick_hold_event = "captured"
+            self._gripper_command = update.command_angle
+        elif update.released:
+            self._held_gripper_angle_release_step = self._step_count
+            self._last_pick_hold_event = "released"
+            self._gripper_command = self._grasp_end_position
+        return update.captured
 
     def advance(self) -> None:
         if self._episode_done:
@@ -346,7 +373,10 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             robot = env.scene["robot"]
             gripper_position = robot.data.joint_pos[:, -1]
             gripper_velocity = torch.abs(robot.data.joint_vel[:, -1])
-            target_error = torch.abs(gripper_position - self._grasp_end_position)
+            effective_target = self._gripper_pick_latch.held_angle
+            if effective_target is None:
+                effective_target = self._grasp_end_position
+            target_error = torch.abs(gripper_position - effective_target)
             halfway_closed = gripper_position <= (self.GRIPPER_OPEN_POSITION + self._grasp_end_position) / 2.0
             target_reached = (target_error <= self.GRIPPER_TARGET_TOLERANCE) & (
                 gripper_velocity <= self.GRIPPER_STALL_VELOCITY_TOLERANCE
@@ -428,7 +458,8 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
                 self.GRIPPER_CLOSED_POSITION + (self.GRIPPER_OPEN_POSITION - self.GRIPPER_CLOSED_POSITION) * openness
             )
         elif state == "lift":
-            self._gripper_command = self._grasp_end_position
+            held_gripper_angle = self._gripper_pick_latch.held_angle
+            self._gripper_command = self._grasp_end_position if held_gripper_angle is None else held_gripper_angle
         elif state == "retreat":
             assert self._command_pos_b is not None
             if env is None:
@@ -763,11 +794,27 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
 
     @property
     def held_gripper_angle(self) -> float | None:
-        return self._held_gripper_angle
+        return self._gripper_pick_latch.held_angle
 
     @property
     def held_gripper_angle_capture_step(self) -> int | None:
         return self._held_gripper_angle_capture_step
+
+    @property
+    def held_gripper_angle_release_step(self) -> int | None:
+        return self._held_gripper_angle_release_step
+
+    @property
+    def pick_hold_confirmation_streak(self) -> int:
+        return self._gripper_pick_latch.confirmation_streak
+
+    @property
+    def pick_hold_loss_streak(self) -> int:
+        return self._gripper_pick_latch.loss_streak
+
+    @property
+    def last_pick_hold_event(self) -> str | None:
+        return self._last_pick_hold_event
 
     @property
     def servo_parameters(self) -> dict[str, object]:
@@ -782,10 +829,15 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "green_ray_max_hit_distance": self.GREEN_RAY_MAX_HIT_DISTANCE,
             "grasp_confirmation": "feedback_settled_gripper_then_cube_lift_above_episode_initial_z",
             "gripper_target_reached_requires_low_velocity": True,
-            "gripper_hold_trigger": "first_observed_pick_cube_true",
-            "gripper_hold_valid_phases": "grasp_through_transport",
+            "gripper_hold_trigger": "consecutive_pick_cube_true_with_low_velocity_on_confirmation_frame",
+            "gripper_hold_capture_phases": ",".join(sorted(self.PICK_HOLD_CAPTURE_PHASES)),
+            "gripper_hold_release_phases": ",".join(sorted(self.PICK_HOLD_RELEASE_PHASES)),
+            "gripper_hold_confirmation_steps": self.PICK_HOLD_CONFIRM_STEPS,
+            "gripper_hold_velocity_tolerance_rad_s": self.PICK_HOLD_VELOCITY_TOLERANCE,
+            "gripper_hold_loss_clear_steps": self.PICK_HOLD_LOSS_CLEAR_STEPS,
             "gripper_hold_value": "measured_gripper_joint_angle_at_trigger",
             "gripper_hold_until": "release",
+            "gripper_nominal_target_preserved": True,
             "minimum_confirmed_lift": self.MIN_CONFIRMED_LIFT,
             "gripper_settle_min_steps": self.GRASP_SETTLE_STEPS,
             "gripper_settle_max_steps": self.GRASP_SETTLE_MAX_STEPS,
