@@ -596,6 +596,10 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
         return self._ik_handoff_max_arm_joint_velocity
 
     @property
+    def ik_handoff_joint_posture_target(self) -> torch.Tensor | None:
+        return self._ik_handoff_joint_posture_target
+
+    @property
     def servo_parameters(self) -> dict[str, object]:
         return {
             **super().servo_parameters,

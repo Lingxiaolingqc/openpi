@@ -1190,6 +1190,70 @@ def main() -> int:
                         f"expert_polar_path:{phase}",
                         **phase_focus_fields,
                     )
+                if (
+                    args.expert == "autogen_reference_axis_align_slow_grasp"
+                    and phase == "ik_handoff"
+                    and (phase_changed or state_machine.phase_step % 10 == 0)
+                ):
+                    wrist_body_index = list(robot.data.body_names).index("wrist")
+                    controlled_joint_names = arm_action_term.controlled_joint_names
+                    controlled_joint_ids = [
+                        robot.data.joint_names.index(joint_name) for joint_name in controlled_joint_names
+                    ]
+                    controlled_joint_position = robot.data.joint_pos[0, controlled_joint_ids]
+                    controlled_joint_velocity = robot.data.joint_vel[0, controlled_joint_ids]
+                    joint_position_target = arm_action_term.last_joint_position_target
+                    joint_position_target_error = (
+                        None if joint_position_target is None else joint_position_target[0] - controlled_joint_position
+                    )
+                    _print_fields(
+                        "expert_axis_handoff",
+                        phase_step=state_machine.phase_step,
+                        control_body=arm_action_term.control_body_name,
+                        command_position_b=_rounded_row(state_machine.command_position_b[0], digits=7),
+                        actual_wrist_w=_rounded_row(robot.data.body_pos_w[0, wrist_body_index], digits=7),
+                        captured_joint_posture=(
+                            None
+                            if state_machine.ik_handoff_joint_posture_target is None
+                            else _rounded_row(state_machine.ik_handoff_joint_posture_target[0], digits=7)
+                        ),
+                        wrist_position_error=state_machine.ik_handoff_wrist_position_error,
+                        max_arm_joint_velocity=state_machine.ik_handoff_max_arm_joint_velocity,
+                        stable_streak=state_machine.ik_handoff_streak,
+                        ik_task_error=(
+                            None
+                            if arm_action_term.last_task_error is None
+                            else _rounded_row(arm_action_term.last_task_error[0], digits=7)
+                        ),
+                        ik_primary_delta_joint_pos=(
+                            None
+                            if arm_action_term.last_primary_delta_joint_pos is None
+                            else _rounded_row(arm_action_term.last_primary_delta_joint_pos[0], digits=7)
+                        ),
+                        ik_nullspace_delta_joint_pos=(
+                            None
+                            if arm_action_term.last_nullspace_delta_joint_pos is None
+                            else _rounded_row(arm_action_term.last_nullspace_delta_joint_pos[0], digits=7)
+                        ),
+                        ik_delta_joint_pos=(
+                            None
+                            if arm_action_term.last_delta_joint_pos is None
+                            else _rounded_row(arm_action_term.last_delta_joint_pos[0], digits=7)
+                        ),
+                        controlled_joint_names=controlled_joint_names,
+                        last_joint_position_target=(
+                            None
+                            if joint_position_target is None
+                            else _rounded_row(joint_position_target[0], digits=7)
+                        ),
+                        current_controlled_joint_position=_rounded_row(controlled_joint_position, digits=7),
+                        joint_target_minus_actual=(
+                            None
+                            if joint_position_target_error is None
+                            else _rounded_row(joint_position_target_error, digits=7)
+                        ),
+                        actual_joint_velocity=_rounded_row(controlled_joint_velocity, digits=7),
+                    )
                 ik_runtime_mode = getattr(state_machine, "ik_runtime_mode", "pose")
                 if phase_changed or ik_runtime_mode != previous_ik_runtime_mode:
                     _print_fields(f"expert_ik_runtime_mode:{phase}", mode=ik_runtime_mode)

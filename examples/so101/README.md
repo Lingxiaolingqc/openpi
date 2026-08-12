@@ -652,6 +652,10 @@ unchanged slow-close-only control.
 The handoff preserves the complete measured five-joint grasp posture as a soft nullspace target while XYZ remains fixed.
 This prevents the aligned `wrist_roll` from becoming an unconstrained direction when direct hold is cleared. Per-step IK
 joint corrections are capped at `0.01 rad`, and the commanded joint target is slew-limited to `0.005 rad` per control step.
+During `ik_handoff`, `expert_axis_handoff` is emitted every ten control steps. It reports the current wrist position,
+captured five-joint posture, IK task error, primary/nullspace/final joint correction, applied joint target, actual joint
+position, target-minus-actual error, and actual velocity. This separates an incorrect Cartesian target from one unstable
+joint or a nullspace term that moves the arm away from the captured grasp.
 
 Run both variants from a new terminal with the same seed. Each command writes a separate log and diagnostic recording;
 do not add `--renderer_device`:

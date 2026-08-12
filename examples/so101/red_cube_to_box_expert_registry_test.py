@@ -291,3 +291,15 @@ def test_smoke_recorder_uses_the_post_action_phase_and_forces_phase_boundaries()
     source = ast.unparse(tree)
     assert "recorded_phase = state_machine.phase_name" in source
     assert "force=recorded_phase != phase" in source
+
+
+def test_axis_handoff_smoke_trace_exposes_joint_level_ik_diagnostics() -> None:
+    source = (ROOT / "red_cube_to_box_expert_smoke.py").read_text(encoding="utf-8")
+
+    assert '"expert_axis_handoff"' in source
+    assert "state_machine.ik_handoff_joint_posture_target" in source
+    assert "arm_action_term.last_joint_position_target" in source
+    assert "arm_action_term.last_primary_delta_joint_pos" in source
+    assert "arm_action_term.last_nullspace_delta_joint_pos" in source
+    assert "joint_target_minus_actual" in source
+    assert "actual_joint_velocity" in source
