@@ -34,10 +34,6 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
     RAY_HIT_TRACKING_TIMEOUT_STEPS = 120
     RAY_HIT_TRACKING_POSITION_TOLERANCE = 0.005
 
-    IK_HANDOFF_STABLE_STEPS = 8
-    IK_HANDOFF_TIMEOUT_STEPS = 120
-    IK_HANDOFF_WRIST_POSITION_TOLERANCE = 0.005
-
     def reset(self) -> None:
         arm_action_term = getattr(self, "_arm_action_term", None)
         if arm_action_term is not None:
@@ -81,11 +77,6 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
         self._ray_hit_tracking_ray_miss_streak = 0
         self._ray_hit_tracking_wrist_position_error: torch.Tensor | None = None
         self._ray_hit_tracking_max_arm_joint_velocity: torch.Tensor | None = None
-        self._ik_handoff_streak = 0
-        self._ik_handoff_target_b: torch.Tensor | None = None
-        self._ik_handoff_joint_posture_target: torch.Tensor | None = None
-        self._ik_handoff_wrist_position_error: torch.Tensor | None = None
-        self._ik_handoff_max_arm_joint_velocity: torch.Tensor | None = None
 
     def _on_grasp_pose_reached(self, env) -> None:
         """Freeze the existing IK target and wait for the real wrist to reach it."""
@@ -138,9 +129,6 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
             return
         if self._state == "pregrasp_axis_align":
             self._update_pregrasp_axis_alignment(env)
-            return
-        if self._state == "ik_handoff":
-            self._update_ik_handoff(env)
             return
         super()._update_state(env)
 
@@ -241,36 +229,6 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
         elif self._state_step > self.AXIS_ALIGNMENT_TIMEOUT_STEPS:
             self._fail("gripper closing axis did not align with a cube X/Y edge")
 
-    def _update_ik_handoff(self, env) -> None:
-        robot = env.scene["robot"]
-        assert self._axis_alignment_controlled_joint_indices is not None
-        velocities = torch.abs(robot.data.joint_vel[:, list(self._axis_alignment_controlled_joint_indices)])
-        self._ik_handoff_max_arm_joint_velocity = torch.amax(velocities, dim=-1).detach()
-        assert self._command_pos_b is not None
-        command_pos_w = self._base_position_to_world(robot, self._command_pos_b)
-        wrist_pos_w = robot.data.body_pos_w[:, self._wrist_body_index]
-        self._ik_handoff_wrist_position_error = torch.linalg.vector_norm(wrist_pos_w - command_pos_w, dim=-1).detach()
-        stable = (self._ik_handoff_max_arm_joint_velocity <= self.AXIS_ALIGNMENT_ARM_JOINT_VELOCITY_TOLERANCE) & (
-            self._ik_handoff_wrist_position_error <= self.IK_HANDOFF_WRIST_POSITION_TOLERANCE
-        )
-        self._ik_handoff_streak = self._ik_handoff_streak + 1 if bool(stable.all().item()) else 0
-        if self._ik_handoff_streak >= self.IK_HANDOFF_STABLE_STEPS:
-            self._transition("lift")
-        elif self._state_step > self.IK_HANDOFF_TIMEOUT_STEPS:
-            self._fail("measured-joint hold did not settle before lift")
-
-    def _transition(self, state: str, env=None) -> None:
-        # The base machine normally enters lift as soon as gripper feedback has
-        # settled. Insert one measured-joint settling phase, but allow that
-        # phase itself to complete the transition to lift.
-        if (
-            state == "lift"
-            and self._state != "ik_handoff"
-            and getattr(self, "_axis_alignment_direct_hold_active", False)
-        ):
-            state = "ik_handoff"
-        super()._transition(state, env)
-
     def _update_posture_target(self, env) -> None:
         assert self._arm_action_term is not None
         if self._state == "ray_hit_tracking_settle":
@@ -300,35 +258,13 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
             self._posture_target = robot.data.joint_pos[:, wrist_flex_index].detach().clone()
             return
 
-        if self._state == "ik_handoff":
-            robot = env.scene["robot"]
-            wrist_flex_index = list(robot.data.joint_names).index("wrist_flex")
-            if self._ik_handoff_target_b is None:
-                # Rebase both the diagnostic wrist target and all five arm
-                # joint targets to the measured contact equilibrium. The old
-                # alignment target can still differ from reality by more than
-                # 0.1 rad under load; releasing it directly leaves a large
-                # actuator transient that Cartesian IK cannot safely absorb.
-                self._rebase_command_to_measured_wrist(env)
-                assert self._command_pos_b is not None
-                self._ik_handoff_target_b = self._command_pos_b.detach().clone()
-                assert self._axis_alignment_controlled_joint_indices is not None
-                self._ik_handoff_joint_posture_target = robot.data.joint_pos[
-                    :, list(self._axis_alignment_controlled_joint_indices)
-                ].detach().clone()
-            else:
-                self._command_pos_b = self._ik_handoff_target_b.detach().clone()
-            assert self._ik_handoff_joint_posture_target is not None
-            self._posture_target = self._ik_handoff_joint_posture_target[
-                :, self._arm_action_term.controlled_joint_names.index("wrist_flex")
-            ]
-            self._arm_action_term.set_direct_joint_position_target(self._ik_handoff_joint_posture_target)
-            return
-
         if self._axis_alignment_direct_hold_active and self._state == "lift":
-            # Release direct control only in the same update that configures
-            # the normal lift IK mode, avoiding a one-frame stale-mode gap.
-            self._release_direct_joint_hold("measured_joint_handoff_settled")
+            # grasp_settle already verified the gripper aperture window. Do
+            # not wait under table/cube contact for the arm to become static:
+            # release direct control in the same update that configures lift,
+            # whose first Cartesian target starts at the rebased measured
+            # wrist position and then rises by LIFT_STEP.
+            self._release_direct_joint_hold("gripper_settled_immediate_lift")
         else:
             self._arm_action_term.clear_direct_joint_position_target()
         super()._update_posture_target(env)
@@ -587,22 +523,6 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
         return self._ray_hit_tracking_max_arm_joint_velocity
 
     @property
-    def ik_handoff_streak(self) -> int:
-        return self._ik_handoff_streak
-
-    @property
-    def ik_handoff_wrist_position_error(self) -> torch.Tensor | None:
-        return self._ik_handoff_wrist_position_error
-
-    @property
-    def ik_handoff_max_arm_joint_velocity(self) -> torch.Tensor | None:
-        return self._ik_handoff_max_arm_joint_velocity
-
-    @property
-    def ik_handoff_joint_posture_target(self) -> torch.Tensor | None:
-        return self._ik_handoff_joint_posture_target
-
-    @property
     def servo_parameters(self) -> dict[str, object]:
         return {
             **super().servo_parameters,
@@ -626,10 +546,8 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
             "ray_hit_tracking_timeout_steps": self.RAY_HIT_TRACKING_TIMEOUT_STEPS,
             "ray_hit_tracking_ray_miss_limit": self.AXIS_ALIGNMENT_RAY_MISS_LIMIT,
             "direct_hold_phases": "pregrasp_axis_align,grasp,grasp_settle",
-            "direct_hold_release_gate": "feedback_settled_gripper_then_measured_joint_hold_settle",
+            "direct_hold_release_gate": "feedback_settled_gripper_then_immediate_lift",
             "pick_cube_semantics": "jaw_distance_and_gripper_angle_only;not_used_to_release_arm_hold",
             "post_alignment_gate": "direct_to_slow_grasp_without_cartesian_redescent",
-            "ik_handoff_stable_steps": self.IK_HANDOFF_STABLE_STEPS,
-            "ik_handoff_controller": "direct_hold_rebased_to_measured_five_joint_contact_equilibrium",
-            "ik_handoff_captured_joint_posture": "active_hold_target_until_velocity_and_wrist_stable",
+            "post_grasp_transition": "direct_hold_to_lift_without_stationary_contact_wait",
         }

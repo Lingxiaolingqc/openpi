@@ -178,37 +178,10 @@ def test_only_axis_alignment_variant_uses_and_clears_direct_joint_hold() -> None
     assert "clear_direct_joint_position_target" in cleanup_calls
 
     posture_source = ast.unparse(posture_update)
-    assert "if self._ik_handoff_target_b is None" in posture_source
-    assert "self._ik_handoff_target_b = self._command_pos_b.detach().clone()" in posture_source
-    assert "self._command_pos_b = self._ik_handoff_target_b.detach().clone()" in posture_source
-    assert "self._ik_handoff_joint_posture_target = robot.data.joint_pos" in posture_source
-    assert "set_direct_joint_position_target(self._ik_handoff_joint_posture_target)" in posture_source
-    assert "_release_direct_joint_hold('measured_joint_handoff_settled')" in posture_source
+    assert "self._state == 'lift'" in posture_source
+    assert "_release_direct_joint_hold('gripper_settled_immediate_lift')" in posture_source
     assert "set_position_only_nullspace_posture_target" not in posture_source
-    assert "set_xyz_joint_nullspace_target" not in ast.unparse(
-        next(
-            child
-            for child in ast.walk(posture_update)
-            if isinstance(child, ast.If) and ast.unparse(child.test) == "self._state == 'ik_handoff'"
-        )
-    )
-    handoff_branch = next(
-        child
-        for child in ast.walk(posture_update)
-        if isinstance(child, ast.If) and ast.unparse(child.test) == "self._state == 'ik_handoff'"
-    )
-    assert (
-        sum(
-            1
-            for child in ast.walk(handoff_branch)
-            if isinstance(child, ast.Call)
-            and isinstance(child.func, ast.Attribute)
-            and child.func.attr == "_rebase_command_to_measured_wrist"
-        )
-        == 1
-    )
-    transition_source = ast.unparse(_method_definition(axis_class, "_transition"))
-    assert "self._state != 'ik_handoff'" in transition_source
+    assert "ik_handoff" not in axis_source
 
 
 def test_axis_alignment_waits_for_the_measured_wrist_before_direct_hold() -> None:
@@ -297,13 +270,8 @@ def test_smoke_recorder_uses_the_post_action_phase_and_forces_phase_boundaries()
     assert "force=recorded_phase != phase" in source
 
 
-def test_axis_handoff_smoke_trace_exposes_joint_level_ik_diagnostics() -> None:
+def test_removed_axis_handoff_has_no_dead_detailed_smoke_logger() -> None:
     source = (ROOT / "red_cube_to_box_expert_smoke.py").read_text(encoding="utf-8")
 
-    assert '"expert_axis_handoff"' in source
-    assert "state_machine.ik_handoff_joint_posture_target" in source
-    assert "arm_action_term.last_joint_position_target" in source
-    assert "arm_action_term.last_primary_delta_joint_pos" in source
-    assert "arm_action_term.last_nullspace_delta_joint_pos" in source
-    assert "joint_target_minus_actual" in source
-    assert "actual_joint_velocity" in source
+    assert '"expert_axis_handoff"' not in source
+    assert "state_machine.ik_handoff_joint_posture_target" not in source

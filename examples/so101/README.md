@@ -643,18 +643,15 @@ Two additional experts isolate the latest grasp-ejection diagnosis without overw
   consecutive true observations and a confirmation-frame gripper speed no greater than `0.01 rad/s`; one threshold-crossing
   frame can no longer freeze the close command. If the signal is then false for three consecutive pre-lift frames, the latch
   is cleared and the original per-episode close target is resumed. That nominal target is kept separate from the temporary
-  held angle. The flag is deliberately not used to release the arm hold. After closure has settled, an explicit `ik_handoff`
-  rebases the Cartesian command to the measured wrist position and replaces the old alignment target with the five measured
-  arm-joint positions at the loaded contact equilibrium. It continues direct joint control until wrist position and joint
-  velocity remain stable, then releases direct control in the same update that configures the normal lift IK mode.
+  held angle. The flag is deliberately not used to release the arm hold. After closure has settled, the expert immediately
+  enters `lift`: the Cartesian command has already been rebased to the measured wrist on every direct-hold frame, and direct
+  control is released in the same update that configures the normal lift IK mode.
 
-The earlier custom XYZ-plus-nullspace handoff was removed after its seed-42 joint trace showed positive feedback. A subsequent
-native pose-IK test exposed a second issue: at release, the old direct target still differed from the loaded measured joints
-by as much as 0.114 rad, so the actuator immediately moved away from the captured wrist pose. The measured-joint hold removes
-that residual target before any Cartesian controller regains ownership. During `ik_handoff`,
-`expert_axis_handoff` remains available every ten control steps and reports the measured wrist, captured posture, applied
-joint target, actual joint position/error, and velocity. Thus this variant still tests edge alignment plus slow closing,
-while `autogen_reference_slow_grasp` remains the unchanged slow-close-only control.
+Two explicit handoff experiments were removed after their traces showed that waiting under contact is counterproductive. The
+custom XYZ-plus-nullspace controller formed positive feedback; native pose IK reduced the drift but did not settle; and even
+a direct hold rebased to the five measured joints remained displaced by contact load while wrist-flex velocity stayed near
+0.116 rad/s. The old `ik_handoff` phase and its detailed logger are therefore gone. This variant now tests edge alignment plus
+slow closing followed by prompt contact relief, while `autogen_reference_slow_grasp` remains the slow-close-only control.
 
 Run both variants from a new terminal with the same seed. Each command writes a separate log and diagnostic recording;
 do not add `--renderer_device`:
