@@ -19,7 +19,7 @@ from .env_cfg import STATE_MACHINE_GRIPPER_CLOSE_POSITION
 _GRIPPER_OPEN = 1.0
 _GRIPPER_CLOSE = -1.0
 _RETREAT_DISTANCE = 0.030
-_HOVER_HEIGHT_ABOVE_FLOOR_CENTER = 0.22
+_WRIST_SAFE_HEIGHT_ABOVE_FLOOR_CENTER = 0.255
 _RETREAT_REFERENCE_STEP = 0.0004
 _ARC_REFERENCE_STEP = 0.0010
 _RADIAL_REFERENCE_STEP = 0.0010
@@ -34,6 +34,8 @@ _GRASP_LOSS_DISTANCE = 0.025
 _GRIPPER_CLOSE_MINIMUM_STEPS = 80
 _GRIPPER_CLOSE_MAXIMUM_STEPS = 200
 _GRIPPER_SETTLE_STABLE_STEPS = 8
+_RETREAT_POSTURE_JOINT = "wrist_flex"
+_RETREAT_IK_DAMPING = 0.04
 _SMOOTHERSTEP_MAX_DERIVATIVE = 1.875
 
 
@@ -78,6 +80,11 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         super().__init__()
         self._retreat_bearing: torch.Tensor | None = None
         self._retreat_radial_target_w: torch.Tensor | None = None
+        self._wrist_body_index: int | None = None
+        self._retreat_wrist_flex_target: torch.Tensor | None = None
+        self._retreat_actual_w: torch.Tensor | None = None
+        self._retreat_z_error: float | None = None
+        self._retreat_radial_error: float | None = None
         self._retreat_segment_start_phase_step = 0
         self._retreat_segment_ready = False
         self._arc_radius: torch.Tensor | None = None
@@ -98,8 +105,21 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         self._gripper_settle_streak = 0
         self._gripper_settle_reason: str | None = None
 
+    def setup(self, env) -> None:
+        super().setup(env)
+        self._wrist_body_index = list(env.scene["robot"].data.body_names).index("wrist")
+
+    def reset(self) -> None:
+        wrist_body_index = self._wrist_body_index
+        if self._arm_action_term is not None:
+            self._arm_action_term.restore_configured_control_body()
+        super().reset()
+        self._wrist_body_index = wrist_body_index
+
     def get_action(self, env) -> torch.Tensor:
         phase = self.phase_name
+        if self._arm_action_term is not None and phase != "retreat_to_safe":
+            self._arm_action_term.restore_configured_control_body()
         if phase in {"approach_cube", "descend_to_cube", "close_gripper"}:
             action = super().get_action(env)
             if phase == "close_gripper":
@@ -115,18 +135,20 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         if phase == "retreat_to_safe":
             self._initialize_polar_retreat(env)
             self._advance_retreat_segment_if_ready(env)
-            # SO-101 has five arm joints. Solving XYZ + pitch + shoulder-pan
-            # consumed all five task rows while leaving gripper roll/yaw free;
-            # near the pickup pose that task became ill-conditioned and the jaw
-            # swung sideways during a nominally vertical lift. Preserve both
-            # world-frame tilt components instead and leave yaw/base pan free.
-            self._arm_action_term.set_xyz_tilt(enabled=True)
+            assert self._retreat_wrist_flex_target is not None
+            self._arm_action_term.set_control_body(body_name="wrist")
+            self._arm_action_term.set_xyz_joint_nullspace_target(
+                joint_name=_RETREAT_POSTURE_JOINT,
+                joint_target=self._retreat_wrist_flex_target,
+                damping=_RETREAT_IK_DAMPING,
+                posture_gain=0.0,
+                max_posture_step=0.03,
+            )
             if self._detect_polar_grasp_loss(env, phase):
-                target_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :].detach().clone()
+                target_w = self._retreat_control_position_w(env).detach().clone()
             else:
                 target_w = self._retreat_linear_reference()
-            assert self._arc_start_quat_w is not None
-            target_quat_w = self._arc_start_quat_w
+            target_quat_w = self._retreat_control_quaternion_w(env).detach().clone()
             gripper = _GRIPPER_CLOSE
         elif phase == "arc_transfer":
             self._initialize_arc_transfer(env)
@@ -211,10 +233,20 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             self._episode_done = True
 
     def _advance_phase(self) -> None:
+        if self.phase_name == "retreat_to_safe" and self._arm_action_term is not None:
+            self._arm_action_term.restore_configured_control_body()
         super()._advance_phase()
         self._current_target_quat_w = None
         self._bearing_error = None
         self._reference_finished = False
+
+    def _retreat_control_position_w(self, env) -> torch.Tensor:
+        assert self._wrist_body_index is not None
+        return env.scene["robot"].data.body_pos_w[:, self._wrist_body_index]
+
+    def _retreat_control_quaternion_w(self, env) -> torch.Tensor:
+        assert self._wrist_body_index is not None
+        return env.scene["robot"].data.body_quat_w[:, self._wrist_body_index]
 
     def _update_gripper_settle(self, env) -> None:
         robot = env.scene["robot"]
@@ -248,43 +280,45 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         if self._motion_start_w is not None:
             return
         assert self._floor_anchor_w is not None
-        start_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :].detach().clone()
-        start_quat_w = env.scene["ee_frame"].data.target_quat_w[:, 0, :].detach().clone()
-        robot_root_w = env.scene["robot"].data.root_pos_w
-        delta_xy = start_w[:, :2] - robot_root_w[:, :2]
-        start_radius = torch.linalg.vector_norm(delta_xy, dim=-1)
-        start_bearing = self._bearing(delta_xy)
-        target_radius = torch.clamp(start_radius - _RETREAT_DISTANCE, min=0.10)
-
+        robot = env.scene["robot"]
+        start_w = self._retreat_control_position_w(env).detach().clone()
         lift_target_w = start_w.clone()
         lift_target_w[:, 2] = torch.maximum(
             start_w[:, 2],
-            self._floor_anchor_w[:, 2] + _HOVER_HEIGHT_ABOVE_FLOOR_CENTER,
+            self._floor_anchor_w[:, 2] + _WRIST_SAFE_HEIGHT_ABOVE_FLOOR_CENTER,
         )
-        radial_target_w = lift_target_w.clone()
-        radial_target_w[:, 0] = robot_root_w[:, 0] + target_radius * torch.sin(start_bearing)
-        radial_target_w[:, 1] = robot_root_w[:, 1] + target_radius * torch.cos(start_bearing)
 
         jaw_w = env.scene["ee_frame"].data.target_pos_w[:, 1, :]
         cube_w = env.scene["cube"].data.root_pos_w
         self._jaw_cube_distance = float(torch.linalg.vector_norm(jaw_w - cube_w, dim=-1).max().item())
         self._grasp_confirmed = self._jaw_cube_distance <= _GRASP_CONFIRM_DISTANCE
+        wrist_flex_index = robot.data.joint_names.index(_RETREAT_POSTURE_JOINT)
+        self._retreat_wrist_flex_target = robot.data.joint_pos[:, wrist_flex_index].detach().clone()
         self._retreat_subphase = "vertical_lift"
-        self._retreat_bearing = start_bearing.detach().clone()
         self._retreat_safe_z = lift_target_w[:, 2].detach().clone()
-        self._retreat_target_radius = target_radius.detach().clone()
-        self._retreat_radial_target_w = radial_target_w.detach().clone()
+        self._retreat_bearing = None
+        self._retreat_target_radius = None
+        self._retreat_radial_target_w = None
         self._retreat_segment_start_phase_step = self._phase_step
         self._retreat_segment_ready = False
-        self._arc_start_quat_w = start_quat_w
         self._reference_finished = False
         self._set_motion(start_w, lift_target_w)
 
     def _advance_retreat_segment_if_ready(self, env) -> None:
         if self._retreat_subphase != "vertical_lift" or not self._retreat_segment_ready:
             return
-        assert self._retreat_radial_target_w is not None
-        start_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :].detach().clone()
+        start_w = self._retreat_control_position_w(env).detach().clone()
+        robot_root_w = env.scene["robot"].data.root_pos_w
+        delta_xy = start_w[:, :2] - robot_root_w[:, :2]
+        bearing = self._bearing(delta_xy)
+        start_radius = torch.linalg.vector_norm(delta_xy, dim=-1)
+        target_radius = torch.clamp(start_radius - _RETREAT_DISTANCE, min=0.10)
+        target_w = start_w.clone()
+        target_w[:, 0] = robot_root_w[:, 0] + target_radius * torch.sin(bearing)
+        target_w[:, 1] = robot_root_w[:, 1] + target_radius * torch.cos(bearing)
+        self._retreat_bearing = bearing.detach().clone()
+        self._retreat_target_radius = target_radius.detach().clone()
+        self._retreat_radial_target_w = target_w.detach().clone()
         self._retreat_subphase = "short_radial_retreat"
         self._retreat_segment_start_phase_step = self._phase_step
         self._retreat_segment_ready = False
@@ -293,7 +327,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         self._motion_ready = False
         self._retreat_min_target_error = math.inf
         self._retreat_worsening_streak = 0
-        self._set_motion(start_w, self._retreat_radial_target_w)
+        self._set_motion(start_w, target_w)
 
     def _retreat_linear_reference(self) -> torch.Tensor:
         assert self._motion_start_w is not None
@@ -308,18 +342,31 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
 
     def _update_retreat_convergence(self, env) -> None:
         assert self._motion_target_w is not None
-        actual_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :]
+        actual_w = self._retreat_control_position_w(env)
         robot_root_xy = env.scene["robot"].data.root_pos_w[:, :2]
         target_bearing = self._bearing(self._motion_target_w[:, :2] - robot_root_xy)
         actual_bearing = self._bearing(actual_w[:, :2] - robot_root_xy)
         position_error = torch.linalg.vector_norm(self._motion_target_w - actual_w, dim=-1)
+        z_error = torch.abs(self._motion_target_w[:, 2] - actual_w[:, 2])
+        target_radius = torch.linalg.vector_norm(self._motion_target_w[:, :2] - robot_root_xy, dim=-1)
+        actual_radius = torch.linalg.vector_norm(actual_w[:, :2] - robot_root_xy, dim=-1)
+        radial_error = torch.abs(target_radius - actual_radius)
         bearing_error = torch.abs(self._wrap_angle(target_bearing - actual_bearing))
-        self._target_error = float(position_error.max().item())
+        self._retreat_actual_w = actual_w.detach().clone()
+        self._retreat_z_error = float(z_error.max().item())
+        self._retreat_radial_error = float(radial_error.max().item())
         self._bearing_error = float(bearing_error.max().item())
         _, _, tolerance, _ = self._MOTION_PHASE_LIMITS["retreat_to_safe"]
-        reached = (
-            self._reference_finished and self._target_error <= tolerance and self._bearing_error <= _BEARING_TOLERANCE
-        )
+        if self._retreat_subphase == "vertical_lift":
+            self._target_error = self._retreat_z_error
+            reached = self._reference_finished and self._retreat_z_error <= tolerance
+        else:
+            self._target_error = float(position_error.max().item())
+            reached = (
+                self._reference_finished
+                and self._target_error <= tolerance
+                and self._bearing_error <= _BEARING_TOLERANCE
+            )
         if reached:
             self._target_stable_streak += 1
         else:
@@ -463,7 +510,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         assert self._motion_target_w is not None
         assert self._target_error is not None
         assert self._bearing_error is not None
-        actual_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :]
+        actual_w = self._retreat_control_position_w(env)
         maximum_z_overshoot = float(torch.max(actual_w[:, 2] - self._motion_target_w[:, 2]).item())
         self._retreat_min_target_error = min(self._retreat_min_target_error, self._target_error)
         if (
@@ -476,7 +523,10 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
 
         if maximum_z_overshoot > _RETREAT_Z_OVERSHOOT_LIMIT:
             reason = f"retreat_z_overshoot:overshoot={maximum_z_overshoot}:limit={_RETREAT_Z_OVERSHOOT_LIMIT}"
-        elif self._bearing_error > _RETREAT_BEARING_ABORT_THRESHOLD:
+        elif (
+            self._retreat_subphase == "short_radial_retreat"
+            and self._bearing_error > _RETREAT_BEARING_ABORT_THRESHOLD
+        ):
             reason = f"retreat_bearing_diverged:error={self._bearing_error}:limit={_RETREAT_BEARING_ABORT_THRESHOLD}"
         elif self._retreat_worsening_streak >= _RETREAT_ERROR_WORSENING_STEPS:
             reason = (
@@ -535,11 +585,12 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             "retreat_reference_step": _RETREAT_REFERENCE_STEP,
             "arc_reference_step": _ARC_REFERENCE_STEP,
             "radial_reference_step": _RADIAL_REFERENCE_STEP,
-            "hover_height_above_floor_center": _HOVER_HEIGHT_ABOVE_FLOOR_CENTER,
+            "wrist_safe_height_above_floor_center": _WRIST_SAFE_HEIGHT_ABOVE_FLOOR_CENTER,
             "transport_height_policy": "freeze_actual_safe_height_at_arc_entry",
             "bearing_tolerance_rad": _BEARING_TOLERANCE,
-            "retreat_ik_mode": "xyz_tilt(xyz+orientation_xy,yaw_free)",
-            "retreat_path": "vertical_lift_then_30mm_constant_bearing_radial_retreat",
+            "retreat_control_body": "wrist",
+            "retreat_ik_mode": "wrist_xyz_plus_entry_wrist_flex(no_world_orientation)",
+            "retreat_path": "wrist_vertical_lift_then_live_bearing_30mm_radial_retreat",
             "pre_retreat_gripper_gate": "half_closed_and_near_cube_stable",
             "gripper_close_minimum_steps": _GRIPPER_CLOSE_MINIMUM_STEPS,
             "gripper_close_maximum_steps": _GRIPPER_CLOSE_MAXIMUM_STEPS,
@@ -548,9 +599,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             "retreat_z_overshoot_limit": _RETREAT_Z_OVERSHOOT_LIMIT,
             "retreat_error_worsening_margin": _RETREAT_ERROR_WORSENING_MARGIN,
             "retreat_error_worsening_steps": _RETREAT_ERROR_WORSENING_STEPS,
-            "orientation_policy": (
-                "retreat_preserves_entry_roll_pitch_with_yaw_free_then_arc_entry_pose_yaw_co_rotation"
-            ),
+            "orientation_policy": "retreat_has_no_world_orientation_task_then_arc_entry_pose_yaw_co_rotation",
             "completion_policy": "actual_xyz_and_root_bearing_stable",
             "grasp_loss_distance": _GRASP_LOSS_DISTANCE,
         }
@@ -570,6 +619,28 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
     @property
     def retreat_safety_reason(self) -> str | None:
         return self._retreat_safety_reason
+
+    @property
+    def retreat_actual_w(self) -> torch.Tensor | None:
+        return self._retreat_actual_w
+
+    @property
+    def retreat_z_error(self) -> float | None:
+        return self._retreat_z_error
+
+    @property
+    def retreat_radial_error(self) -> float | None:
+        return self._retreat_radial_error
+
+    @property
+    def retreat_wrist_flex_target(self) -> torch.Tensor | None:
+        return self._retreat_wrist_flex_target
+
+    @property
+    def retreat_control_body(self) -> str:
+        if self._arm_action_term is None:
+            return "wrist"
+        return self._arm_action_term.control_body_name
 
     @property
     def retreat_shoulder_pan_target(self) -> None:

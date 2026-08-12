@@ -84,6 +84,13 @@ def _rounded_row(values, digits: int = 5) -> tuple[float, ...]:
     return tuple(round(float(value), digits) for value in values.detach().cpu().tolist())
 
 
+def _print_fields(prefix: str, /, **fields: object) -> None:
+    """Print one diagnostic field per line while preserving its grep-friendly prefix."""
+
+    lines = [prefix, *(f"  {name}={value}" for name, value in fields.items())]
+    print("\n" + "\n".join(lines), flush=True)
+
+
 def _finite_or_none(value):
     """Keep diagnostic JSON standards-compliant before the first safety update."""
 
@@ -647,7 +654,11 @@ def main() -> int:
             state_machine = state_machine_class()
         state_machine.setup(env)
         state_machine.reset()
-        print(f"servo_parameters: {getattr(state_machine, 'servo_parameters', 'not_applicable')}", flush=True)
+        servo_parameters = getattr(state_machine, "servo_parameters", None)
+        if isinstance(servo_parameters, dict):
+            _print_fields("servo_parameters", **servo_parameters)
+        else:
+            _print_fields("servo_parameters", value="not_applicable")
 
         if record_root is not None:
             recorder = _DiagnosticRecorder(
@@ -686,20 +697,19 @@ def main() -> int:
                 phase = state_machine.phase_name
                 phase_changed = phase != previous_phase
                 if phase_changed:
-                    print(f"expert_phase:{phase}:step={state_machine.step_count}", flush=True)
+                    _print_fields(f"expert_phase:{phase}", step=state_machine.step_count)
                     gripper_pos = ee_frame.data.target_pos_w[0, 0]
                     jaw_pos = ee_frame.data.target_pos_w[0, 1]
                     jaw_cube_distance = torch.linalg.vector_norm(jaw_pos - cube.data.root_pos_w[0])
                     pick_cube = observations["subtask_terms"]["pick_cube"][0]
-                    print(
-                        f"expert_state:{phase}:"
-                        f"gripper_pos_w={_rounded_row(gripper_pos)}:"
-                        f"jaw_pos_w={_rounded_row(jaw_pos)}:"
-                        f"cube_pos_w={_rounded_row(cube.data.root_pos_w[0])}:"
-                        f"jaw_cube_distance={jaw_cube_distance.item():.5f}:"
-                        f"gripper_joint={robot.data.joint_pos[0, -1].item():.5f}:"
-                        f"pick_cube={bool(pick_cube.item())}",
-                        flush=True,
+                    _print_fields(
+                        f"expert_state:{phase}",
+                        gripper_pos_w=_rounded_row(gripper_pos),
+                        jaw_pos_w=_rounded_row(jaw_pos),
+                        cube_pos_w=_rounded_row(cube.data.root_pos_w[0]),
+                        jaw_cube_distance=f"{jaw_cube_distance.item():.5f}",
+                        gripper_joint=f"{robot.data.joint_pos[0, -1].item():.5f}",
+                        pick_cube=bool(pick_cube.item()),
                     )
                     previous_phase = phase
 
@@ -713,7 +723,7 @@ def main() -> int:
                 if not bool(torch.isfinite(action).all()):
                     raise RuntimeError("Expert produced a non-finite action")
                 if phase_changed:
-                    print(f"expert_action:{phase}:{_rounded_row(action[0])}", flush=True)
+                    _print_fields(f"expert_action:{phase}", action=_rounded_row(action[0]))
                     desired_cube = getattr(state_machine, "last_desired_cube_w", None)
                     cube_error = getattr(state_machine, "last_cube_error_w", None)
                     gripper_target = getattr(state_machine, "last_gripper_target_w", None)
@@ -916,6 +926,21 @@ def main() -> int:
                     )
                 if (
                     args.expert == "autogen_polar_retreat_transport"
+                    and phase == "close_gripper"
+                    and (phase_changed or completed_steps % 25 == 0)
+                ):
+                    _print_fields(
+                        f"expert_polar_close:{phase}",
+                        phase_step=state_machine.phase_step,
+                        gripper_target_error=state_machine.gripper_target_error,
+                        gripper_joint_velocity=state_machine.gripper_joint_velocity,
+                        gripper_settle_streak=state_machine.gripper_settle_streak,
+                        gripper_settle_reason=state_machine.gripper_settle_reason,
+                        jaw_cube_distance=state_machine.jaw_cube_distance,
+                        pick_cube=bool(observations["subtask_terms"]["pick_cube"][0].item()),
+                    )
+                if (
+                    args.expert == "autogen_polar_retreat_transport"
                     and phase
                     in {
                         "retreat_to_safe",
@@ -926,33 +951,55 @@ def main() -> int:
                     }
                     and (phase_changed or completed_steps % 25 == 0)
                 ):
-                    print(
-                        f"expert_polar_path:{phase}:"
-                        f"phase_step={state_machine.phase_step}:"
-                        f"path_segment={state_machine.retreat_subphase}:"
-                        f"motion_start_w="
-                        f"{None if state_machine.motion_start_w is None else _rounded_row(state_machine.motion_start_w[0], digits=7)}:"
-                        f"motion_target_w="
-                        f"{None if state_machine.motion_target_w is None else _rounded_row(state_machine.motion_target_w[0], digits=7)}:"
-                        f"current_target_w="
-                        f"{None if state_machine.current_target_w is None else _rounded_row(state_machine.current_target_w[0], digits=7)}:"
-                        f"current_target_quat_w="
-                        f"{None if state_machine.current_target_quat_w is None else _rounded_row(state_machine.current_target_quat_w[0], digits=7)}:"
-                        f"actual_gripper_w={_rounded_row(ee_frame.data.target_pos_w[0, 0], digits=7)}:"
-                        f"target_error={state_machine.target_error}:"
-                        f"bearing_error={state_machine.bearing_error}:"
-                        f"stable_streak={state_machine.target_stable_streak}:"
-                        f"retreat_worsening_streak={state_machine.retreat_worsening_streak}:"
-                        f"retreat_safety_reason={state_machine.retreat_safety_reason}:"
-                        f"shoulder_pan_target="
-                        f"{None if state_machine.retreat_shoulder_pan_target is None else _rounded_row(state_machine.retreat_shoulder_pan_target, digits=7)}:"
-                        f"jaw_cube_distance={state_machine.jaw_cube_distance}:"
-                        f"grasp_confirmed={state_machine.grasp_confirmed}",
-                        flush=True,
+                    _print_fields(
+                        f"expert_polar_path:{phase}",
+                        phase_step=state_machine.phase_step,
+                        path_segment=state_machine.retreat_subphase,
+                        control_body=state_machine.retreat_control_body,
+                        motion_start_w=(
+                            None
+                            if state_machine.motion_start_w is None
+                            else _rounded_row(state_machine.motion_start_w[0], digits=7)
+                        ),
+                        motion_target_w=(
+                            None
+                            if state_machine.motion_target_w is None
+                            else _rounded_row(state_machine.motion_target_w[0], digits=7)
+                        ),
+                        current_target_w=(
+                            None
+                            if state_machine.current_target_w is None
+                            else _rounded_row(state_machine.current_target_w[0], digits=7)
+                        ),
+                        current_target_quat_w=(
+                            None
+                            if state_machine.current_target_quat_w is None
+                            else _rounded_row(state_machine.current_target_quat_w[0], digits=7)
+                        ),
+                        actual_gripper_w=_rounded_row(ee_frame.data.target_pos_w[0, 0], digits=7),
+                        actual_retreat_control_w=(
+                            None
+                            if state_machine.retreat_actual_w is None
+                            else _rounded_row(state_machine.retreat_actual_w[0], digits=7)
+                        ),
+                        retreat_z_error=state_machine.retreat_z_error,
+                        retreat_radial_error=state_machine.retreat_radial_error,
+                        target_error=state_machine.target_error,
+                        bearing_error=state_machine.bearing_error,
+                        stable_streak=state_machine.target_stable_streak,
+                        retreat_worsening_streak=state_machine.retreat_worsening_streak,
+                        retreat_safety_reason=state_machine.retreat_safety_reason,
+                        wrist_flex_target=(
+                            None
+                            if state_machine.retreat_wrist_flex_target is None
+                            else _rounded_row(state_machine.retreat_wrist_flex_target, digits=7)
+                        ),
+                        jaw_cube_distance=state_machine.jaw_cube_distance,
+                        grasp_confirmed=state_machine.grasp_confirmed,
                     )
                 ik_runtime_mode = getattr(state_machine, "ik_runtime_mode", "pose")
                 if phase_changed or ik_runtime_mode != previous_ik_runtime_mode:
-                    print(f"expert_ik_runtime_mode:{phase}:{ik_runtime_mode}", flush=True)
+                    _print_fields(f"expert_ik_runtime_mode:{phase}", mode=ik_runtime_mode)
                     previous_ik_runtime_mode = ik_runtime_mode
                 if (
                     args.expert
@@ -1145,16 +1192,16 @@ def main() -> int:
                     gripper_pos = ee_frame.data.target_pos_w[0, 0]
                     jaw_pos = ee_frame.data.target_pos_w[0, 1]
                     cube_pos = cube.data.root_pos_w[0]
-                    print(
-                        f"expert_tracking:{phase}:step={state_machine.step_count}:"
-                        f"gripper_pos_w={_rounded_row(gripper_pos)}:"
-                        f"gripper_quat_w={_rounded_row(ee_frame.data.target_quat_w[0, 0])}:"
-                        f"jaw_pos_w={_rounded_row(jaw_pos)}:"
-                        f"cube_pos_w={_rounded_row(cube_pos)}:"
-                        f"jaw_cube_distance={torch.linalg.vector_norm(jaw_pos - cube_pos).item():.6f}:"
-                        f"joint_pos={_rounded_row(robot.data.joint_pos[0])}:"
-                        f"pick_cube={bool(observations['subtask_terms']['pick_cube'][0].item())}",
-                        flush=True,
+                    _print_fields(
+                        f"expert_tracking:{phase}",
+                        step=state_machine.step_count,
+                        gripper_pos_w=_rounded_row(gripper_pos),
+                        gripper_quat_w=_rounded_row(ee_frame.data.target_quat_w[0, 0]),
+                        jaw_pos_w=_rounded_row(jaw_pos),
+                        cube_pos_w=_rounded_row(cube_pos),
+                        jaw_cube_distance=f"{torch.linalg.vector_norm(jaw_pos - cube_pos).item():.6f}",
+                        joint_pos=_rounded_row(robot.data.joint_pos[0]),
+                        pick_cube=bool(observations["subtask_terms"]["pick_cube"][0].item()),
                     )
                 if (
                     args.expert

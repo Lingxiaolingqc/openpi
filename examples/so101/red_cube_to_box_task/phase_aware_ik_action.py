@@ -48,6 +48,8 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._weighted_position_damping: float | None = None
         self._weighted_joint_names: tuple[str, ...] = ()
         self._last_weighted_delta_joint_pos: torch.Tensor | None = None
+        self._direct_joint_position_target: torch.Tensor | None = None
+        self._configured_body_name = self._body_name
 
     def reset(self, env_ids=None) -> None:
         super().reset(env_ids)
@@ -62,6 +64,38 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._weighted_position_damping = None
         self._weighted_joint_names = ()
         self._last_weighted_delta_joint_pos = None
+        self.clear_direct_joint_position_target()
+
+    def set_direct_joint_position_target(self, joint_target: torch.Tensor) -> None:
+        """Bypass IK and hold the complete controlled-joint vector directly.
+
+        A complete target is required so the action term remains the sole writer
+        for every arm joint.  This avoids racing a one-joint state-machine write
+        against the normal IK write performed later in the same environment step.
+        """
+
+        expected_shape = (self._asset.data.joint_pos.shape[0], len(self.controlled_joint_names))
+        if joint_target.shape != expected_shape:
+            raise ValueError(
+                f"Direct joint target must have shape {expected_shape}; received {tuple(joint_target.shape)}"
+            )
+        target = joint_target.to(
+            device=self._asset.data.joint_pos.device,
+            dtype=self._asset.data.joint_pos.dtype,
+        ).detach()
+        if not bool(torch.isfinite(target).all()):
+            raise ValueError("Direct joint target contains a non-finite value")
+        soft_limits = self._asset.data.soft_joint_pos_limits[:, self._joint_ids]
+        self._direct_joint_position_target = torch.clamp(
+            target,
+            min=soft_limits[..., 0],
+            max=soft_limits[..., 1],
+        ).clone()
+
+    def clear_direct_joint_position_target(self) -> None:
+        """Return action execution to the configured differential-IK mode."""
+
+        self._direct_joint_position_target = None
 
     def set_position_only(self, *, enabled: bool) -> None:
         """Select whether the next physics applications solve translation only."""
@@ -221,6 +255,21 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._offset_rot.zero_()
         self._offset_rot[:, 0] = 1.0
 
+    def set_control_body(self, *, body_name: str) -> None:
+        """Switch the rigid body and corresponding Jacobian used by differential IK."""
+
+        body_ids, body_names = self._asset.find_bodies(body_name)
+        if len(body_ids) != 1:
+            raise ValueError(f"Expected one body named {body_name!r}; found {body_names}")
+        self._body_idx = body_ids[0]
+        self._body_name = body_names[0]
+        self._jacobi_body_idx = self._body_idx - 1 if self._asset.is_fixed_base else self._body_idx
+
+    def restore_configured_control_body(self) -> None:
+        """Restore the rigid body selected by the environment configuration."""
+
+        self.set_control_body(body_name=self._configured_body_name)
+
     def set_maximum_joint_target_step(self, *, maximum_step: float | None) -> None:
         """Limit each IK application without changing the requested joint-space direction."""
 
@@ -296,6 +345,8 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
 
     @property
     def runtime_mode(self) -> str:
+        if self._direct_joint_position_target is not None:
+            return "direct_joint_hold"
         if self._planar_pose:
             return "planar_pose(xy+orientation)"
         if self._xyz_tilt:
@@ -313,6 +364,15 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         return f"translation_priority(weight={self._orientation_weight:g})"
 
     def apply_actions(self) -> None:
+        if self._direct_joint_position_target is not None:
+            joint_pos_des = self._direct_joint_position_target
+            if not bool(torch.isfinite(joint_pos_des).all()):
+                raise RuntimeError("Direct joint hold contains a non-finite target")
+            self._clear_solver_diagnostics()
+            self._last_joint_position_target = joint_pos_des.detach().clone()
+            self._asset.set_joint_position_target(joint_pos_des, self._joint_ids)
+            return
+
         if (
             not self._planar_pose
             and not self._xyz_tilt
@@ -561,6 +621,14 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         if isinstance(self._joint_ids, slice):
             return tuple(all_joint_names[self._joint_ids])
         return tuple(all_joint_names[joint_id] for joint_id in self._joint_ids)
+
+    @property
+    def direct_joint_position_target(self) -> torch.Tensor | None:
+        return self._direct_joint_position_target
+
+    @property
+    def control_body_name(self) -> str:
+        return self._body_name
 
     def _clear_xyz_pitch_joint_target(self) -> None:
         self._xyz_pitch_joint_name = None

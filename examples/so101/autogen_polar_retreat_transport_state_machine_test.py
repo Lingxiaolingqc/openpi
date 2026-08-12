@@ -9,6 +9,7 @@ from pathlib import Path
 SOURCE_PATH = Path(__file__).resolve().parent / "red_cube_to_box_task" / (
     "autogen_polar_retreat_transport_state_machine.py"
 )
+IK_ACTION_PATH = Path(__file__).resolve().parent / "red_cube_to_box_task" / "phase_aware_ik_action.py"
 CLASS_NAME = "RedCubeToBoxAutogenPolarRetreatTransportStateMachine"
 
 
@@ -33,10 +34,43 @@ def _call_names(node: ast.AST) -> set[str]:
     }
 
 
-def test_retreat_uses_five_row_xyz_tilt_instead_of_pan_lock() -> None:
+def test_retreat_controls_wrist_xyz_with_one_joint_posture_row() -> None:
     calls = _call_names(_method("get_action"))
-    assert "set_xyz_tilt" in calls
+    assert "set_control_body" in calls
+    assert "set_xyz_joint_nullspace_target" in calls
+    assert "set_xyz_tilt" not in calls
     assert "set_xyz_pitch_joint_target" not in calls
+
+
+def test_wrist_retreat_rebases_radial_target_after_actual_lift() -> None:
+    initialize_source = ast.unparse(_method("_initialize_polar_retreat"))
+    advance_source = ast.unparse(_method("_advance_retreat_segment_if_ready"))
+    convergence_source = ast.unparse(_method("_update_retreat_convergence"))
+
+    assert "_retreat_control_position_w" in initialize_source
+    assert "_retreat_radial_target_w = None" in initialize_source
+    assert "start_w = self._retreat_control_position_w(env)" in advance_source
+    assert "target_radius = torch.clamp(start_radius - _RETREAT_DISTANCE" in advance_source
+    assert "if self._retreat_subphase == 'vertical_lift'" in convergence_source
+    assert "self._target_error = self._retreat_z_error" in convergence_source
+
+
+def test_runtime_control_body_switch_updates_pose_and_jacobian_indices() -> None:
+    tree = ast.parse(IK_ACTION_PATH.read_text(encoding="utf-8"), filename=str(IK_ACTION_PATH))
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "PhaseAwareDifferentialInverseKinematicsAction"
+    )
+    method = next(
+        node
+        for node in class_node.body
+        if isinstance(node, ast.FunctionDef) and node.name == "set_control_body"
+    )
+    source = ast.unparse(method)
+    assert "self._body_idx = body_ids[0]" in source
+    assert "self._body_name = body_names[0]" in source
+    assert "self._jacobi_body_idx" in source
 
 
 def test_close_phase_has_feedback_settle_gate() -> None:
