@@ -63,8 +63,10 @@ def test_wrist_retreat_rebases_radial_target_after_actual_lift() -> None:
     assert "if self._retreat_subphase == 'vertical_lift'" in vertical_lift_branch
     assert "self._target_error = self._retreat_z_error" in vertical_lift_branch
     assert "self._bearing_error <= _BEARING_TOLERANCE" not in vertical_lift_branch
-    assert "self._target_error = float(position_error.max().item())" in radial_retreat_branch
-    assert "self._bearing_error <= _BEARING_TOLERANCE" in radial_retreat_branch
+    assert "self._target_error = max(self._retreat_radial_error, self._retreat_z_error)" in radial_retreat_branch
+    assert "self._retreat_radial_error <= tolerance" in radial_retreat_branch
+    assert "self._retreat_z_error <= tolerance" in radial_retreat_branch
+    assert "self._bearing_error <= _BEARING_TOLERANCE" not in radial_retreat_branch
 
 
 def test_xz_joint_mode_omits_y_position_and_jacobian_rows() -> None:

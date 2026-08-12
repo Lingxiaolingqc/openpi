@@ -332,7 +332,6 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         robot_root_xy = env.scene["robot"].data.root_pos_w[:, :2]
         target_bearing = self._bearing(self._motion_target_w[:, :2] - robot_root_xy)
         actual_bearing = self._bearing(actual_w[:, :2] - robot_root_xy)
-        position_error = torch.linalg.vector_norm(self._motion_target_w - actual_w, dim=-1)
         xz_error = torch.linalg.vector_norm((self._motion_target_w - actual_w)[:, [0, 2]], dim=-1)
         z_error = torch.abs(self._motion_target_w[:, 2] - actual_w[:, 2])
         target_radius = torch.linalg.vector_norm(self._motion_target_w[:, :2] - robot_root_xy, dim=-1)
@@ -352,11 +351,14 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             self._target_error = self._retreat_z_error
             reached = self._reference_finished and self._target_error <= tolerance
         else:
-            self._target_error = float(position_error.max().item())
+            # The 5/7 retreat only needs to establish a safer root radius while
+            # preserving height.  Bearing drift is retained as a diagnostic;
+            # the following root-centered arc is responsible for changing it.
+            self._target_error = max(self._retreat_radial_error, self._retreat_z_error)
             reached = (
                 self._reference_finished
-                and self._target_error <= tolerance
-                and self._bearing_error <= _BEARING_TOLERANCE
+                and self._retreat_radial_error <= tolerance
+                and self._retreat_z_error <= tolerance
             )
         if reached:
             self._target_stable_streak += 1
@@ -591,7 +593,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             "orientation_policy": "retreat_has_no_world_orientation_task_then_arc_entry_pose_yaw_co_rotation",
             "completion_policy": (
                 "vertical_lift_actual_wrist_z_only_then_"
-                "radial_retreat_actual_wrist_xyz_and_root_bearing"
+                "radial_retreat_actual_wrist_radius_and_z_only"
             ),
             "grasp_loss_distance": _GRASP_LOSS_DISTANCE,
         }
