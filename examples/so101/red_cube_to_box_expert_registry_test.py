@@ -270,7 +270,8 @@ def test_autogen_pick_hold_preserves_nominal_target_and_uses_velocity_feedback()
     state_source = ast.unparse(_method_definition(class_node, "_update_state"))
     assert "env.scene['cube'].data.root_lin_vel_w" in state_source
     assert "self._gripper_settle_angle_span <= self.GRIPPER_SETTLE_ANGLE_SPAN_TOLERANCE" in state_source
-    assert "self._cube_settle_max_speed <= self.CUBE_SETTLE_SPEED_TOLERANCE" in state_source
+    assert "self._cube_settle_max_speed <= self.CUBE_SETTLE_SPEED" not in state_source
+    assert "latched_gripper_window_stable_cube_speed_diagnostic_only" in state_source
     assert "angle_span_rad=" in state_source
     assert "cube_max_speed_m_s=" in state_source
 

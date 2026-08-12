@@ -56,7 +56,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     GRIPPER_STALL_VELOCITY_TOLERANCE = 0.01
     GRIPPER_SETTLE_WINDOW_STEPS = 12
     GRIPPER_SETTLE_ANGLE_SPAN_TOLERANCE = 0.01
-    CUBE_SETTLE_SPEED_TOLERANCE = 0.02
+    CUBE_SETTLE_SPEED_DIAGNOSTIC_THRESHOLD = 0.02
     PICK_HOLD_CONFIRM_STEPS = 20
     PICK_HOLD_VELOCITY_TOLERANCE = GRIPPER_STALL_VELOCITY_TOLERANCE
     PICK_HOLD_LOSS_CLEAR_STEPS = 3
@@ -407,13 +407,12 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
                 window_ready
                 and bool((target_error <= self.GRIPPER_TARGET_TOLERANCE).all().item())
                 and self._gripper_settle_angle_span <= self.GRIPPER_SETTLE_ANGLE_SPAN_TOLERANCE
-                and self._cube_settle_max_speed <= self.CUBE_SETTLE_SPEED_TOLERANCE
             )
             self._gripper_target_error = target_error.detach()
             self._gripper_joint_velocity = gripper_velocity.detach()
             if self._state_step >= self.GRASP_SETTLE_STEPS and settled:
                 self._gripper_settle_streak += 1
-                self._gripper_settle_reason = "latched_contact_window_stable"
+                self._gripper_settle_reason = "latched_gripper_window_stable_cube_speed_diagnostic_only"
             else:
                 self._gripper_settle_streak = 0
                 self._gripper_settle_reason = None
@@ -907,7 +906,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "gripper_stall_velocity_tolerance": self.GRIPPER_STALL_VELOCITY_TOLERANCE,
             "gripper_settle_window_steps": self.GRIPPER_SETTLE_WINDOW_STEPS,
             "gripper_settle_angle_span_tolerance_rad": self.GRIPPER_SETTLE_ANGLE_SPAN_TOLERANCE,
-            "cube_settle_speed_tolerance_m_s": self.CUBE_SETTLE_SPEED_TOLERANCE,
+            "cube_settle_speed_diagnostic_threshold_m_s": self.CUBE_SETTLE_SPEED_DIAGNOSTIC_THRESHOLD,
             "approach_height": self.APPROACH_HEIGHT,
             "lift_height": self.LIFT_HEIGHT,
             "safe_height": self.SAFE_HEIGHT,

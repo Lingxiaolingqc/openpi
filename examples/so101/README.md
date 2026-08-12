@@ -581,10 +581,10 @@ persistent false `pick_cube` value is diagnostic only and cannot reopen the grip
 explicit normal `release` transition.
 
 After capture, lift readiness no longer depends on eight consecutive samples of raw instantaneous gripper velocity. It
-uses a 12-step contact window: the measured gripper-angle span must be at most `0.01 rad`, the maximum cube linear speed in
-the same window must be at most `0.02 m/s`, and the gripper must remain within `0.03 rad` of its captured hold. All three
-conditions must then remain true for eight control steps. This admits small contact-velocity noise while still rejecting a
-cube that is bouncing or being ejected.
+uses a 12-step contact window: the measured gripper-angle span must be at most `0.01 rad`, and the gripper must remain within
+`0.03 rad` of its captured hold. Both conditions must then remain true for eight control steps. The maximum cube linear speed
+in the same window is retained as a diagnostic, with `0.02 m/s` shown as a reference threshold, but is not a lift gate:
+contact impulses made this maximum stay near `0.075 m/s` even when the grasp latch and gripper angle were stable.
 After the hold is captured, smoke logging samples this contact window every five control steps. A settle timeout includes
 the final target error, gripper-angle span, maximum cube speed, and stable streak directly in `expert_abort_before_step`,
 so the failing gate can be identified without lowering any threshold speculatively.
