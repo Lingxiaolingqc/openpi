@@ -310,21 +310,20 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
                     :, list(self._axis_alignment_controlled_joint_indices)
                 ].detach().clone()
                 self._release_direct_joint_hold("gripper_feedback_settled")
-                self._arm_action_term.set_maximum_joint_target_step(maximum_step=0.01)
-                self._arm_action_term.set_joint_target_slew_limit(maximum_step=0.005)
-                self._arm_action_term.reset_joint_target_slew_reference()
             else:
                 self._command_pos_b = self._ik_handoff_target_b.detach().clone()
             assert self._ik_handoff_joint_posture_target is not None
-            self._posture_target = self._ik_handoff_joint_posture_target[:,
-                self._arm_action_term.controlled_joint_names.index("wrist_flex")
+            self._posture_target = self._ik_handoff_joint_posture_target[
+                :, self._arm_action_term.controlled_joint_names.index("wrist_flex")
             ]
-            self._arm_action_term.set_position_only_nullspace_posture_target(
-                joint_target=self._ik_handoff_joint_posture_target,
-                damping=0.04,
-                posture_gain=0.10,
-                max_posture_step=0.01,
-            )
+            # Reacquire the frozen, measured wrist position through Isaac Lab's
+            # native pose-IK path.  get_action() supplies the measured wrist
+            # orientation, so the orientation error starts at zero without an
+            # over-constrained synthetic posture objective.  In particular, do
+            # not use the custom XYZ DLS here: on the mirrored SO-101 root its
+            # Jacobian update was observed to drive elbow_flex opposite to the
+            # requested Cartesian correction and form positive feedback.
+            self._arm_action_term.set_position_only(enabled=False)
             return
 
         self._arm_action_term.clear_direct_joint_position_target()
@@ -627,7 +626,6 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
             "pick_cube_semantics": "jaw_distance_and_gripper_angle_only;not_used_to_release_arm_hold",
             "post_alignment_gate": "direct_to_slow_grasp_without_cartesian_redescent",
             "ik_handoff_stable_steps": self.IK_HANDOFF_STABLE_STEPS,
-            "ik_handoff_controller": "position_only_xyz_with_captured_five_joint_nullspace_posture",
-            "ik_handoff_maximum_joint_target_step_rad": 0.01,
-            "ik_handoff_joint_target_slew_step_rad": 0.005,
+            "ik_handoff_controller": "native_pose_ik_at_frozen_position_with_measured_orientation",
+            "ik_handoff_captured_joint_posture": "diagnostic_only",
         }

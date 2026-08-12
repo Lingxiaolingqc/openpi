@@ -644,18 +644,17 @@ Two additional experts isolate the latest grasp-ejection diagnosis without overw
   frame can no longer freeze the close command. If the signal is then false for three consecutive pre-lift frames, the latch
   is cleared and the original per-episode close target is resumed. That nominal target is kept separate from the temporary
   held angle. The flag is deliberately not used to release the arm hold. After closure has settled, an explicit `ik_handoff`
-  rebases the Cartesian command to the
-measured wrist pose, clears direct control, reacquires that zero-displacement pose for several stable steps, and only then
-begins lift. Thus this variant tests edge alignment plus slow closing, while `autogen_reference_slow_grasp` remains the
-unchanged slow-close-only control.
+  rebases the Cartesian command to the measured wrist position, clears direct control, and reacquires that zero-displacement
+  target for several stable steps before lift. The command orientation is the measured wrist orientation already supplied by
+  the reference state machine, so this handoff now goes through Isaac Lab's native pose-IK path. The captured five-joint
+  posture remains diagnostic-only.
 
-The handoff preserves the complete measured five-joint grasp posture as a soft nullspace target while XYZ remains fixed.
-This prevents the aligned `wrist_roll` from becoming an unconstrained direction when direct hold is cleared. Per-step IK
-joint corrections are capped at `0.01 rad`, and the commanded joint target is slew-limited to `0.005 rad` per control step.
-During `ik_handoff`, `expert_axis_handoff` is emitted every ten control steps. It reports the current wrist position,
-captured five-joint posture, IK task error, primary/nullspace/final joint correction, applied joint target, actual joint
-position, target-minus-actual error, and actual velocity. This separates an incorrect Cartesian target from one unstable
-joint or a nullspace term that moves the arm away from the captured grasp.
+The earlier custom XYZ-plus-nullspace handoff was removed after its seed-42 joint trace showed positive feedback: the
+Cartesian error grew from about 1.5 mm to 17 mm while the DLS elbow correction repeatedly requested the opposite direction
+from the observed elbow motion. Relaxing the stability gate would only hide that controller mismatch. During `ik_handoff`,
+`expert_axis_handoff` remains available every ten control steps and reports the measured wrist, captured posture, applied
+joint target, actual joint position/error, and velocity. Thus this variant still tests edge alignment plus slow closing,
+while `autogen_reference_slow_grasp` remains the unchanged slow-close-only control.
 
 Run both variants from a new terminal with the same seed. Each command writes a separate log and diagnostic recording;
 do not add `--renderer_device`:
