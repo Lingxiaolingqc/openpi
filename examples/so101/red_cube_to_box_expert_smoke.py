@@ -1062,7 +1062,7 @@ def main() -> int:
                     }
                     and (phase_changed or completed_steps % 25 == 0)
                 ):
-                    wrist_focus_phases = {"retreat_to_safe", "arc_transfer", "radial_transfer"}
+                    wrist_focus_phases = {"retreat_to_safe", "arc_transfer"}
                     focus_is_wrist = phase in wrist_focus_phases
                     if focus_is_wrist:
                         wrist_body_index = list(robot.data.body_names).index("wrist")

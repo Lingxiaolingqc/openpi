@@ -45,7 +45,10 @@ def test_arc_controls_wrist_with_position_only_xyz_and_wrist_feedback() -> None:
     reference_source = ast.unparse(_method("_arc_reference"))
     convergence_source = ast.unparse(_method("_update_polar_convergence"))
 
-    assert "wrist_position_only_phases = {'retreat_to_safe', 'arc_transfer'}" in get_action_source
+    assert (
+        "position_only_accumulation_phases = {'retreat_to_safe', 'arc_transfer', 'radial_transfer'}"
+        in get_action_source
+    )
     assert "self._configure_wrist_position_posture_mode()" in get_action_source
     assert "start_w = self._retreat_control_position_w(env)" in initialize_source
     assert "self._transport_height = None" in initialize_source
@@ -104,16 +107,17 @@ def test_position_only_posture_is_projected_into_xyz_nullspace() -> None:
 
 def test_wrist_ik_accumulates_limited_deltas_without_reanchoring_to_live_joints() -> None:
     initialize_source = ast.unparse(_method("_initialize_polar_retreat"))
-    enable_source = ast.unparse(_method("_enable_wrist_joint_target_accumulation"))
-    disable_source = ast.unparse(_method("_disable_wrist_joint_target_accumulation"))
+    enable_source = ast.unparse(_method("_enable_position_joint_target_accumulation"))
+    disable_source = ast.unparse(_method("_disable_position_joint_target_accumulation"))
     get_action_source = ast.unparse(_method("get_action"))
 
-    assert "self._enable_wrist_joint_target_accumulation()" in initialize_source
+    assert "self._enable_position_joint_target_accumulation()" in initialize_source
     assert "set_joint_target_accumulation" in enable_source
     assert "reset_joint_target_accumulation_reference" in enable_source
     assert "maximum_step=_WRIST_JOINT_TARGET_ACCUMULATION_STEP" in enable_source
+    assert "maximum_tracking_error=_JOINT_TARGET_MAX_TRACKING_ERROR" in enable_source
     assert "set_joint_target_accumulation(maximum_step=None)" in disable_source
-    assert "self._disable_wrist_joint_target_accumulation()" in get_action_source
+    assert "self._disable_position_joint_target_accumulation()" in get_action_source
 
     tree = ast.parse(IK_ACTION_PATH.read_text(encoding="utf-8"), filename=str(IK_ACTION_PATH))
     class_node = next(
@@ -129,6 +133,21 @@ def test_wrist_ik_accumulates_limited_deltas_without_reanchoring_to_live_joints(
     assert "accumulated_step = delta_joint_pos * scale" in apply_source
     assert "self._joint_target_accumulation_reference = joint_pos_des.detach().clone()" in apply_source
     assert "joint_pos_des = joint_pos + delta_joint_pos" in apply_source
+    assert "tracking_lower = joint_pos - self._joint_target_accumulation_max_tracking_error" in apply_source
+    assert "tracking_upper = joint_pos + self._joint_target_accumulation_max_tracking_error" in apply_source
+
+
+def test_radial_transfer_rebases_accumulator_and_uses_gripper_position_only() -> None:
+    get_action_source = ast.unparse(_method("get_action"))
+    initialize_source = ast.unparse(_method("_initialize_radial_transfer"))
+    configure_source = ast.unparse(_method("_configure_gripper_position_posture_mode"))
+
+    assert "self._configure_gripper_position_posture_mode()" in get_action_source
+    assert "self._radial_posture_target" in initialize_source
+    assert "self._enable_position_joint_target_accumulation()" in initialize_source
+    assert "reset_joint_target_accumulation_reference" in initialize_source
+    assert "set_control_body(body_name='gripper')" in configure_source
+    assert "set_position_only_nullspace_posture_target" in configure_source
 
 
 def test_xz_joint_mode_omits_y_position_and_jacobian_rows() -> None:

@@ -51,6 +51,7 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._joint_target_slew_reference: torch.Tensor | None = None
         self._last_joint_target_slew_step: torch.Tensor | None = None
         self._joint_target_accumulation_max_step: float | None = None
+        self._joint_target_accumulation_max_tracking_error: float | None = None
         self._joint_target_accumulation_reference: torch.Tensor | None = None
         self._last_joint_target_accumulation_step: torch.Tensor | None = None
         self._last_joint_position_target: torch.Tensor | None = None
@@ -369,12 +370,24 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
         self._joint_target_slew_reference = None
         self._last_joint_target_slew_step = None
 
-    def set_joint_target_accumulation(self, *, maximum_step: float | None) -> None:
+    def set_joint_target_accumulation(
+        self,
+        *,
+        maximum_step: float | None,
+        maximum_tracking_error: float | None = None,
+    ) -> None:
         """Integrate limited IK deltas into a target that is independent of live joint drift."""
 
         if maximum_step is not None and maximum_step <= 0.0:
             raise ValueError(f"Joint target accumulation step must be positive, received {maximum_step}")
+        if maximum_step is not None and maximum_tracking_error is None:
+            raise ValueError("An active joint target accumulator requires a maximum tracking error")
+        if maximum_tracking_error is not None and maximum_tracking_error <= 0.0:
+            raise ValueError(
+                f"Joint target maximum tracking error must be positive, received {maximum_tracking_error}"
+            )
         self._joint_target_accumulation_max_step = maximum_step
+        self._joint_target_accumulation_max_tracking_error = maximum_tracking_error
         self._joint_target_accumulation_reference = None
         self._last_joint_target_accumulation_step = None
 
@@ -455,7 +468,8 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
                 return (
                     "position_only_nullspace_posture("
                     f"damping={self._position_nullspace_damping:g},"
-                    f"accumulation_step={self._joint_target_accumulation_max_step:g})"
+                    f"accumulation_step={self._joint_target_accumulation_max_step:g},"
+                    f"tracking_error={self._joint_target_accumulation_max_tracking_error:g})"
                 )
             return f"position_only_nullspace_posture(damping={self._position_nullspace_damping:g})"
         if self._weighted_position_penalties is not None:
@@ -686,7 +700,12 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
             accumulated_step = delta_joint_pos * scale
             joint_pos_des = self._joint_target_accumulation_reference + accumulated_step
             soft_limits = self._asset.data.soft_joint_pos_limits[:, self._joint_ids]
-            joint_pos_des = torch.clamp(joint_pos_des, min=soft_limits[..., 0], max=soft_limits[..., 1])
+            assert self._joint_target_accumulation_max_tracking_error is not None
+            tracking_lower = joint_pos - self._joint_target_accumulation_max_tracking_error
+            tracking_upper = joint_pos + self._joint_target_accumulation_max_tracking_error
+            target_lower = torch.maximum(soft_limits[..., 0], tracking_lower)
+            target_upper = torch.minimum(soft_limits[..., 1], tracking_upper)
+            joint_pos_des = torch.clamp(joint_pos_des, min=target_lower, max=target_upper)
             self._last_joint_target_accumulation_step = (
                 joint_pos_des - self._joint_target_accumulation_reference
             ).detach().clone()
@@ -763,6 +782,10 @@ class PhaseAwareDifferentialInverseKinematicsAction(DifferentialInverseKinematic
     @property
     def joint_target_accumulation_max_step(self) -> float | None:
         return self._joint_target_accumulation_max_step
+
+    @property
+    def joint_target_accumulation_max_tracking_error(self) -> float | None:
+        return self._joint_target_accumulation_max_tracking_error
 
     @property
     def last_joint_position_target(self) -> torch.Tensor | None:
