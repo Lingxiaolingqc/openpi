@@ -644,9 +644,13 @@ Two additional experts isolate the latest grasp-ejection diagnosis without overw
   is cleared and the original per-episode close target is resumed. That nominal target is kept separate from the temporary
   held angle. The flag is deliberately not used to release the arm hold. After closure has settled, an explicit `ik_handoff`
   rebases the Cartesian command to the
-  measured wrist pose, clears direct control, reacquires that zero-displacement pose for several stable steps, and only then
-  begins lift. Thus this variant tests edge alignment plus slow closing, while `autogen_reference_slow_grasp` remains the
-  unchanged slow-close-only control.
+measured wrist pose, clears direct control, reacquires that zero-displacement pose for several stable steps, and only then
+begins lift. Thus this variant tests edge alignment plus slow closing, while `autogen_reference_slow_grasp` remains the
+unchanged slow-close-only control.
+
+The handoff preserves the complete measured five-joint grasp posture as a soft nullspace target while XYZ remains fixed.
+This prevents the aligned `wrist_roll` from becoming an unconstrained direction when direct hold is cleared. Per-step IK
+joint corrections are capped at `0.01 rad`, and the commanded joint target is slew-limited to `0.005 rad` per control step.
 
 Run both variants from a new terminal with the same seed. Each command writes a separate log and diagnostic recording;
 do not add `--renderer_device`:

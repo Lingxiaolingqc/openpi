@@ -181,6 +181,15 @@ def test_only_axis_alignment_variant_uses_and_clears_direct_joint_hold() -> None
     assert "if self._ik_handoff_target_b is None" in posture_source
     assert "self._ik_handoff_target_b = self._command_pos_b.detach().clone()" in posture_source
     assert "self._command_pos_b = self._ik_handoff_target_b.detach().clone()" in posture_source
+    assert "self._ik_handoff_joint_posture_target = robot.data.joint_pos" in posture_source
+    assert "set_position_only_nullspace_posture_target" in posture_source
+    assert "set_xyz_joint_nullspace_target" not in ast.unparse(
+        next(
+            child
+            for child in ast.walk(posture_update)
+            if isinstance(child, ast.If) and ast.unparse(child.test) == "self._state == 'ik_handoff'"
+        )
+    )
     handoff_branch = next(
         child
         for child in ast.walk(posture_update)

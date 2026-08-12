@@ -83,7 +83,7 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
         self._ray_hit_tracking_max_arm_joint_velocity: torch.Tensor | None = None
         self._ik_handoff_streak = 0
         self._ik_handoff_target_b: torch.Tensor | None = None
-        self._ik_handoff_wrist_flex_target: torch.Tensor | None = None
+        self._ik_handoff_joint_posture_target: torch.Tensor | None = None
         self._ik_handoff_wrist_position_error: torch.Tensor | None = None
         self._ik_handoff_max_arm_joint_velocity: torch.Tensor | None = None
 
@@ -305,21 +305,25 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
                 self._rebase_command_to_measured_wrist(env)
                 assert self._command_pos_b is not None
                 self._ik_handoff_target_b = self._command_pos_b.detach().clone()
-                self._ik_handoff_wrist_flex_target = robot.data.joint_pos[:, wrist_flex_index].detach().clone()
+                assert self._axis_alignment_controlled_joint_indices is not None
+                self._ik_handoff_joint_posture_target = robot.data.joint_pos[
+                    :, list(self._axis_alignment_controlled_joint_indices)
+                ].detach().clone()
                 self._release_direct_joint_hold("gripper_feedback_settled")
-                self._arm_action_term.set_maximum_joint_target_step(maximum_step=None)
-                self._arm_action_term.set_joint_target_slew_limit(maximum_step=None)
+                self._arm_action_term.set_maximum_joint_target_step(maximum_step=0.01)
+                self._arm_action_term.set_joint_target_slew_limit(maximum_step=0.005)
                 self._arm_action_term.reset_joint_target_slew_reference()
             else:
                 self._command_pos_b = self._ik_handoff_target_b.detach().clone()
-            assert self._ik_handoff_wrist_flex_target is not None
-            self._posture_target = self._ik_handoff_wrist_flex_target
-            self._arm_action_term.set_xyz_joint_nullspace_target(
-                joint_name="wrist_flex",
-                joint_target=self._ik_handoff_wrist_flex_target,
+            assert self._ik_handoff_joint_posture_target is not None
+            self._posture_target = self._ik_handoff_joint_posture_target[:,
+                self._arm_action_term.controlled_joint_names.index("wrist_flex")
+            ]
+            self._arm_action_term.set_position_only_nullspace_posture_target(
+                joint_target=self._ik_handoff_joint_posture_target,
                 damping=0.04,
-                posture_gain=0.0,
-                max_posture_step=0.03,
+                posture_gain=0.10,
+                max_posture_step=0.01,
             )
             return
 
@@ -619,4 +623,7 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
             "pick_cube_semantics": "jaw_distance_and_gripper_angle_only;not_used_to_release_arm_hold",
             "post_alignment_gate": "direct_to_slow_grasp_without_cartesian_redescent",
             "ik_handoff_stable_steps": self.IK_HANDOFF_STABLE_STEPS,
+            "ik_handoff_controller": "position_only_xyz_with_captured_five_joint_nullspace_posture",
+            "ik_handoff_maximum_joint_target_step_rad": 0.01,
+            "ik_handoff_joint_target_slew_step_rad": 0.005,
         }
