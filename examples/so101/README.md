@@ -574,7 +574,8 @@ That geometric flag is debounced only during the final pre-lift phases: it must 
 observations and the gripper speed on the confirmation frame must be no greater than `0.01 rad/s`. During that continuous
 streak the controller remembers the smallest measured joint angle. Because smaller SO-101 gripper angles mean tighter
 closure, the confirmed `temp_jaw_angle_rad` is the measured streak minimum (minus the configured safety closure, currently
-zero) and can subsequently only stay unchanged or decrease. This stops the position actuator from continually squeezing
+zero) and is then frozen until explicit release. Later smaller measurements cannot lower the command. This stops the
+position actuator from continually squeezing
 past the observed contact equilibrium merely to reach a sampled nominal target. A false candidate frame clears an
 unconfirmed streak, but after confirmation even a transient or
 persistent false `pick_cube` value is diagnostic only and cannot reopen the gripper. The hold is cleared only on the
@@ -741,7 +742,7 @@ done
 
 The decisive comparison is whether `pick_hold_confirmation_streak` reaches 20 only after the gripper slows, whether
 `expert_temp_jaw_angle_captured` equals the continuous-pick streak minimum (subject to the configured safety closure), whether later
-`expert_temp_jaw_angle_tightened` events are monotonically non-increasing, the cube XY displacement during grasp, and final
+`expert_temp_jaw_angle_tightened` events are absent, the cube XY displacement during grasp, and final
 success. `expert_temp_jaw_angle_released` should appear only at the explicit release phase. Before alignment,
 the axis-aligned run reports the frozen ray-hit target in base and world frames, measured wrist world position, wrist delta
 and residual descent since ray hit, tracking error, maximum arm-joint velocity, stable streak, and ray-miss streak. It then

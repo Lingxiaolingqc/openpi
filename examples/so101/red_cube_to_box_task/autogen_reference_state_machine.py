@@ -894,7 +894,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "gripper_hold_loss_clear_steps": self.PICK_HOLD_LOSS_CLEAR_STEPS,
             "gripper_hold_safety_closure_rad": self.PICK_HOLD_SAFETY_CLOSURE,
             "gripper_hold_value": "minimum_measured_angle_during_continuous_pick_streak",
-            "gripper_hold_monotonic_direction": "non_increasing_until_explicit_release",
+            "gripper_hold_update_policy": "frozen_after_confirmation_until_explicit_release",
             "gripper_hold_pick_loss_policy": "diagnostic_only_no_reopen",
             "gripper_hold_until": "release",
             "gripper_nominal_target_preserved": True,

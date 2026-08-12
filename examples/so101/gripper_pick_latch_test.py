@@ -1,4 +1,4 @@
-"""Behavioral regression tests for monotonic gripper-angle holding."""
+"""Behavioral regression tests for frozen confirmed gripper-angle holding."""
 
 from __future__ import annotations
 
@@ -100,15 +100,14 @@ def test_capture_holds_confirmed_contact_equilibrium(latch) -> None:
     assert latch.held_angle == 0.2439685
 
 
-def test_confirmed_hold_can_only_tighten(latch) -> None:
+def test_confirmed_hold_ignores_later_smaller_measurements(latch) -> None:
     _capture(latch, measured_angle=0.24, nominal_angle=0.30)
-    commands = [latch.held_angle]
     for measured_angle in (0.27, 0.22, 0.28, 0.21, 0.40):
         update = _update(latch, picked=True, measured_angle=measured_angle, nominal_angle=0.30)
-        commands.append(update.command_angle)
 
-    assert commands == sorted(commands, reverse=True)
-    assert commands[-1] == 0.21
+        assert update.command_angle == 0.24
+        assert not update.tightened
+    assert latch.minimum_pick_angle == 0.24
 
 
 def test_pick_loss_never_reopens_confirmed_hold(latch) -> None:
@@ -122,7 +121,7 @@ def test_pick_loss_never_reopens_confirmed_hold(latch) -> None:
     assert latch.loss_streak >= LOSS_CLEAR_STEPS
 
 
-def test_only_explicit_release_clears_monotonic_hold(latch) -> None:
+def test_only_explicit_release_clears_frozen_hold(latch) -> None:
     _capture(latch, measured_angle=0.22)
 
     assert latch.release()
@@ -143,5 +142,6 @@ def test_safety_closure_and_joint_limit_are_applied() -> None:
     first = _update(latch, picked=True, measured_angle=0.25, nominal_angle=0.30)
     assert first.command_angle == pytest.approx(0.24)
 
-    tighter = _update(latch, picked=True, measured_angle=-0.20, nominal_angle=0.30)
-    assert tighter.command_angle == MINIMUM_ANGLE
+    later_measurement = _update(latch, picked=True, measured_angle=-0.20, nominal_angle=0.30)
+    assert later_measurement.command_angle == pytest.approx(0.24)
+    assert not later_measurement.tightened

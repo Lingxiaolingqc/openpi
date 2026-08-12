@@ -1,4 +1,4 @@
-"""Debounce LeIsaac's pick signal and monotonically hold a safe gripper angle."""
+"""Debounce LeIsaac's pick signal and freeze a confirmed gripper angle."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ class GripperPickLatchUpdate:
 
 
 class GripperPickLatch:
-    """Hold the tightest confirmed gripper angle until an explicit release."""
+    """Hold the confirmation-window angle unchanged until an explicit release."""
 
     def __init__(
         self,
@@ -50,7 +50,7 @@ class GripperPickLatch:
         self.loss_streak = 0
 
     def release(self) -> bool:
-        """Clear the monotonic hold only for an explicit release transition."""
+        """Clear the frozen hold only for an explicit release transition."""
 
         had_hold = self.held_angle is not None
         self.reset()
@@ -97,16 +97,6 @@ class GripperPickLatch:
                 captured = True
         else:
             self.confirmation_streak = 0
-            if allow_capture and picked:
-                self.minimum_pick_angle = (
-                    measured_angle
-                    if self.minimum_pick_angle is None
-                    else min(self.minimum_pick_angle, measured_angle)
-                )
-                safe_angle = self._safe_angle(self.minimum_pick_angle)
-                if safe_angle < self.held_angle:
-                    self.held_angle = safe_angle
-                    tightened = True
             if track_loss:
                 self.loss_streak = 0 if picked else min(self.loss_streak + 1, self.loss_clear_steps)
             else:
