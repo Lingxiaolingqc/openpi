@@ -33,8 +33,6 @@ _GRASP_LOSS_DISTANCE = 0.025
 _GRIPPER_CLOSE_MINIMUM_STEPS = 80
 _GRIPPER_CLOSE_MAXIMUM_STEPS = 200
 _GRIPPER_SETTLE_STABLE_STEPS = 8
-_RETREAT_POSTURE_JOINT = "wrist_flex"
-_RETREAT_IK_DAMPING = 0.04
 _SMOOTHERSTEP_MAX_DERIVATIVE = 1.875
 
 
@@ -80,7 +78,6 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         self._retreat_bearing: torch.Tensor | None = None
         self._retreat_radial_target_w: torch.Tensor | None = None
         self._wrist_body_index: int | None = None
-        self._retreat_wrist_flex_target: torch.Tensor | None = None
         self._retreat_actual_w: torch.Tensor | None = None
         self._retreat_z_error: float | None = None
         self._retreat_xz_error: float | None = None
@@ -135,15 +132,8 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         if phase == "retreat_to_safe":
             self._initialize_polar_retreat(env)
             self._advance_retreat_segment_if_ready(env)
-            assert self._retreat_wrist_flex_target is not None
             self._arm_action_term.set_control_body(body_name="wrist")
-            self._arm_action_term.set_xyz_joint_nullspace_target(
-                joint_name=_RETREAT_POSTURE_JOINT,
-                joint_target=self._retreat_wrist_flex_target,
-                damping=_RETREAT_IK_DAMPING,
-                posture_gain=0.0,
-                max_posture_step=0.03,
-            )
+            self._arm_action_term.set_position_only(enabled=True)
             if self._detect_polar_grasp_loss(env, phase):
                 target_w = self._retreat_control_position_w(env).detach().clone()
             else:
@@ -280,7 +270,6 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         if self._motion_start_w is not None:
             return
         assert self._floor_anchor_w is not None
-        robot = env.scene["robot"]
         start_w = self._retreat_control_position_w(env).detach().clone()
         lift_target_w = start_w.clone()
         lift_target_w[:, 2] = torch.maximum(
@@ -292,8 +281,6 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         cube_w = env.scene["cube"].data.root_pos_w
         self._jaw_cube_distance = float(torch.linalg.vector_norm(jaw_w - cube_w, dim=-1).max().item())
         self._grasp_confirmed = self._jaw_cube_distance <= _GRASP_CONFIRM_DISTANCE
-        wrist_flex_index = robot.data.joint_names.index(_RETREAT_POSTURE_JOINT)
-        self._retreat_wrist_flex_target = robot.data.joint_pos[:, wrist_flex_index].detach().clone()
         self._retreat_subphase = "vertical_lift"
         self._retreat_safe_z = lift_target_w[:, 2].detach().clone()
         self._retreat_bearing = None
@@ -358,12 +345,19 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         self._retreat_radial_error = float(radial_error.max().item())
         self._bearing_error = float(bearing_error.max().item())
         _, _, tolerance, _ = self._MOTION_PHASE_LIMITS["retreat_to_safe"]
-        self._target_error = float(position_error.max().item())
-        reached = (
-            self._reference_finished
-            and self._target_error <= tolerance
-            and self._bearing_error <= _BEARING_TOLERANCE
-        )
+        if self._retreat_subphase == "vertical_lift":
+            # The lift is a clearance operation.  Once the commanded reference
+            # and actual wrist Z are high enough, preserve the achieved XY and
+            # rebase the following 5/7 radial segment from that real position.
+            self._target_error = self._retreat_z_error
+            reached = self._reference_finished and self._target_error <= tolerance
+        else:
+            self._target_error = float(position_error.max().item())
+            reached = (
+                self._reference_finished
+                and self._target_error <= tolerance
+                and self._bearing_error <= _BEARING_TOLERANCE
+            )
         if reached:
             self._target_stable_streak += 1
         else:
@@ -581,8 +575,9 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             "transport_height_policy": "freeze_actual_safe_height_at_arc_entry",
             "bearing_tolerance_rad": _BEARING_TOLERANCE,
             "retreat_control_body": "wrist",
-            "retreat_ik_mode": "wrist_xyz_plus_entry_wrist_flex(no_world_orientation)",
-            "retreat_task_error_order": "wrist_x_m,wrist_y_m,wrist_z_m,wrist_flex_rad",
+            "retreat_ik_mode": "wrist_xyz_position_only(no_world_orientation,no_wrist_flex_task)",
+            "retreat_task_error_order": "wrist_x_m,wrist_y_m,wrist_z_m",
+            "retreat_wrist_flex_policy": "unconstrained",
             "retreat_y_policy": "constrained_during_lift_and_root_relative_retreat",
             "retreat_path": "wrist_vertical_lift_then_root_relative_xy_scaled_to_5_over_7",
             "pre_retreat_gripper_gate": "half_closed_and_near_cube_stable",
@@ -594,7 +589,10 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             "retreat_error_worsening_margin": _RETREAT_ERROR_WORSENING_MARGIN,
             "retreat_error_worsening_steps": _RETREAT_ERROR_WORSENING_STEPS,
             "orientation_policy": "retreat_has_no_world_orientation_task_then_arc_entry_pose_yaw_co_rotation",
-            "completion_policy": "actual_wrist_xyz_and_root_bearing_stable_during_retreat",
+            "completion_policy": (
+                "vertical_lift_actual_wrist_z_only_then_"
+                "radial_retreat_actual_wrist_xyz_and_root_bearing"
+            ),
             "grasp_loss_distance": _GRASP_LOSS_DISTANCE,
         }
 
@@ -632,7 +630,9 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
 
     @property
     def retreat_wrist_flex_target(self) -> torch.Tensor | None:
-        return self._retreat_wrist_flex_target
+        """Compatibility diagnostic: position-only retreat has no wrist-flex target."""
+
+        return None
 
     @property
     def retreat_control_body(self) -> str:

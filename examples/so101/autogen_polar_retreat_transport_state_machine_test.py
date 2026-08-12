@@ -59,9 +59,12 @@ def test_wrist_retreat_rebases_radial_target_after_actual_lift() -> None:
     assert "torch.clamp" not in advance_source
     assert "return self._motion_start_w + progress * displacement" in reference_source
     assert "_retreat_control_position_w" not in reference_source
-    assert "if self._retreat_subphase == 'vertical_lift'" in convergence_source
-    assert "self._target_error = float(position_error.max().item())" in convergence_source
-    assert "self._bearing_error <= _BEARING_TOLERANCE" in convergence_source
+    vertical_lift_branch, radial_retreat_branch = convergence_source.split("else:", maxsplit=1)
+    assert "if self._retreat_subphase == 'vertical_lift'" in vertical_lift_branch
+    assert "self._target_error = self._retreat_z_error" in vertical_lift_branch
+    assert "self._bearing_error <= _BEARING_TOLERANCE" not in vertical_lift_branch
+    assert "self._target_error = float(position_error.max().item())" in radial_retreat_branch
+    assert "self._bearing_error <= _BEARING_TOLERANCE" in radial_retreat_branch
 
 
 def test_xz_joint_mode_omits_y_position_and_jacobian_rows() -> None:
