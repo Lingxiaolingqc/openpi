@@ -913,6 +913,8 @@ def main() -> int:
                         f"{None if state_machine.gripper_target_error is None else _rounded_row(state_machine.gripper_target_error, digits=7)}:"
                         f"gripper_joint_velocity="
                         f"{None if state_machine.gripper_joint_velocity is None else _rounded_row(state_machine.gripper_joint_velocity, digits=7)}:"
+                        f"gripper_settle_angle_span_rad={state_machine.gripper_settle_angle_span}:"
+                        f"cube_settle_max_speed_m_s={state_machine.cube_settle_max_speed}:"
                         f"gripper_settle_streak={state_machine.gripper_settle_streak}:"
                         f"gripper_settle_reason={state_machine.gripper_settle_reason}:"
                         f"retreat_target_b="
@@ -1030,6 +1032,8 @@ def main() -> int:
                     _print_fields(
                         f"expert_polar_close:{phase}",
                         phase_step=state_machine.phase_step,
+                        focus_body="gripper",
+                        actual_focus_w=_rounded_row(ee_frame.data.target_pos_w[0, 0], digits=7),
                         gripper_target_error=state_machine.gripper_target_error,
                         gripper_joint_velocity=state_machine.gripper_joint_velocity,
                         gripper_settle_streak=state_machine.gripper_settle_streak,
@@ -1045,89 +1049,108 @@ def main() -> int:
                         "arc_transfer",
                         "radial_transfer",
                         "lower_into_box",
+                        "release_cube",
                         "retract_gripper",
+                        "settle",
                     }
                     and (phase_changed or completed_steps % 25 == 0)
                 ):
-                    _print_fields(
-                        f"expert_polar_path:{phase}",
-                        phase_step=state_machine.phase_step,
-                        path_segment=state_machine.retreat_subphase,
-                        control_body=state_machine.retreat_control_body,
-                        motion_start_w=(
+                    wrist_focus_phases = {"retreat_to_safe", "arc_transfer", "radial_transfer"}
+                    focus_is_wrist = phase in wrist_focus_phases
+                    if focus_is_wrist:
+                        wrist_body_index = list(robot.data.body_names).index("wrist")
+                        actual_focus_w = robot.data.body_pos_w[0, wrist_body_index]
+                        actual_focus_quat_w = robot.data.body_quat_w[0, wrist_body_index]
+                    else:
+                        actual_focus_w = ee_frame.data.target_pos_w[0, 0]
+                        actual_focus_quat_w = ee_frame.data.target_quat_w[0, 0]
+
+                    phase_focus_fields = {
+                        "phase_step": state_machine.phase_step,
+                        "path_segment": state_machine.retreat_subphase,
+                        "focus_body": "wrist" if focus_is_wrist else "gripper",
+                        "control_body": state_machine.retreat_control_body,
+                        "actual_focus_w": _rounded_row(actual_focus_w, digits=7),
+                        "actual_focus_quat_w": _rounded_row(actual_focus_quat_w, digits=7),
+                        "motion_start_w": (
                             None
                             if state_machine.motion_start_w is None
                             else _rounded_row(state_machine.motion_start_w[0], digits=7)
                         ),
-                        motion_target_w=(
+                        "motion_target_w": (
                             None
                             if state_machine.motion_target_w is None
                             else _rounded_row(state_machine.motion_target_w[0], digits=7)
                         ),
-                        current_target_w=(
+                        "current_target_w": (
                             None
                             if state_machine.current_target_w is None
                             else _rounded_row(state_machine.current_target_w[0], digits=7)
                         ),
-                        current_target_quat_w=(
-                            None
-                            if state_machine.current_target_quat_w is None
-                            else _rounded_row(state_machine.current_target_quat_w[0], digits=7)
-                        ),
-                        actual_gripper_w=_rounded_row(ee_frame.data.target_pos_w[0, 0], digits=7),
-                        actual_retreat_control_w=(
-                            None
-                            if state_machine.retreat_actual_w is None
-                            else _rounded_row(state_machine.retreat_actual_w[0], digits=7)
-                        ),
-                        retreat_z_error=state_machine.retreat_z_error,
-                        retreat_xz_error=state_machine.retreat_xz_error,
-                        retreat_radial_error=state_machine.retreat_radial_error,
-                        target_error=state_machine.target_error,
-                        bearing_error=state_machine.bearing_error,
-                        stable_streak=state_machine.target_stable_streak,
-                        retreat_worsening_streak=state_machine.retreat_worsening_streak,
-                        retreat_safety_reason=state_machine.retreat_safety_reason,
-                        wrist_flex_target=(
-                            None
-                            if state_machine.retreat_wrist_flex_target is None
-                            else _rounded_row(state_machine.retreat_wrist_flex_target, digits=7)
-                        ),
-                        wrist_flex_position=round(
-                            robot.data.joint_pos[0, robot.data.joint_names.index("wrist_flex")].item(), 7
-                        ),
-                        wrist_posture_target=(
-                            None
-                            if state_machine.wrist_posture_target is None
-                            else _rounded_row(state_machine.wrist_posture_target[0], digits=7)
-                        ),
-                        ik_task_error=(
-                            None
-                            if arm_action_term.last_task_error is None
-                            else _rounded_row(arm_action_term.last_task_error[0], digits=7)
-                        ),
-                        ik_task_singular_values=(
-                            None
-                            if arm_action_term.last_task_singular_values is None
-                            else _rounded_row(arm_action_term.last_task_singular_values[0], digits=7)
-                        ),
-                        ik_primary_delta_joint_pos=(
-                            None
-                            if arm_action_term.last_primary_delta_joint_pos is None
-                            else _rounded_row(arm_action_term.last_primary_delta_joint_pos[0], digits=7)
-                        ),
-                        ik_nullspace_delta_joint_pos=(
-                            None
-                            if arm_action_term.last_nullspace_delta_joint_pos is None
-                            else _rounded_row(arm_action_term.last_nullspace_delta_joint_pos[0], digits=7)
-                        ),
-                        ik_delta_joint_pos=(
-                            None
-                            if arm_action_term.last_delta_joint_pos is None
-                            else _rounded_row(arm_action_term.last_delta_joint_pos[0], digits=7)
-                        ),
-                        jaw_cube_distance=state_machine.jaw_cube_distance,
-                        grasp_confirmed=state_machine.grasp_confirmed,
+                        "target_error": state_machine.target_error,
+                        "stable_streak": state_machine.target_stable_streak,
+                        "jaw_cube_distance": state_machine.jaw_cube_distance,
+                        "grasp_confirmed": state_machine.grasp_confirmed,
+                    }
+                    if focus_is_wrist:
+                        phase_focus_fields.update(
+                            {
+                                "retreat_z_error": state_machine.retreat_z_error,
+                                "retreat_xz_error": state_machine.retreat_xz_error,
+                                "retreat_radial_error": state_machine.retreat_radial_error,
+                                "bearing_error": state_machine.bearing_error,
+                                "retreat_worsening_streak": state_machine.retreat_worsening_streak,
+                                "retreat_safety_reason": state_machine.retreat_safety_reason,
+                                "wrist_flex_position": round(
+                                    robot.data.joint_pos[0, robot.data.joint_names.index("wrist_flex")].item(),
+                                    7,
+                                ),
+                                "wrist_posture_target": (
+                                    None
+                                    if state_machine.wrist_posture_target is None
+                                    else _rounded_row(state_machine.wrist_posture_target[0], digits=7)
+                                ),
+                                "ik_task_error": (
+                                    None
+                                    if arm_action_term.last_task_error is None
+                                    else _rounded_row(arm_action_term.last_task_error[0], digits=7)
+                                ),
+                                "ik_task_singular_values": (
+                                    None
+                                    if arm_action_term.last_task_singular_values is None
+                                    else _rounded_row(arm_action_term.last_task_singular_values[0], digits=7)
+                                ),
+                                "ik_primary_delta_joint_pos": (
+                                    None
+                                    if arm_action_term.last_primary_delta_joint_pos is None
+                                    else _rounded_row(arm_action_term.last_primary_delta_joint_pos[0], digits=7)
+                                ),
+                                "ik_nullspace_delta_joint_pos": (
+                                    None
+                                    if arm_action_term.last_nullspace_delta_joint_pos is None
+                                    else _rounded_row(arm_action_term.last_nullspace_delta_joint_pos[0], digits=7)
+                                ),
+                                "ik_delta_joint_pos": (
+                                    None
+                                    if arm_action_term.last_delta_joint_pos is None
+                                    else _rounded_row(arm_action_term.last_delta_joint_pos[0], digits=7)
+                                ),
+                            }
+                        )
+                    else:
+                        phase_focus_fields.update(
+                            {
+                                "current_target_quat_w": (
+                                    None
+                                    if state_machine.current_target_quat_w is None
+                                    else _rounded_row(state_machine.current_target_quat_w[0], digits=7)
+                                ),
+                                "gripper_joint_position": round(robot.data.joint_pos[0, -1].item(), 7),
+                            }
+                        )
+                    _print_fields(
+                        f"expert_polar_path:{phase}",
+                        **phase_focus_fields,
                     )
                 ik_runtime_mode = getattr(state_machine, "ik_runtime_mode", "pose")
                 if phase_changed or ik_runtime_mode != previous_ik_runtime_mode:

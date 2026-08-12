@@ -54,6 +54,9 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     GRASP_SETTLE_STABLE_STEPS = 8
     GRIPPER_TARGET_TOLERANCE = 0.03
     GRIPPER_STALL_VELOCITY_TOLERANCE = 0.01
+    GRIPPER_SETTLE_WINDOW_STEPS = 12
+    GRIPPER_SETTLE_ANGLE_SPAN_TOLERANCE = 0.01
+    CUBE_SETTLE_SPEED_TOLERANCE = 0.02
     PICK_HOLD_CONFIRM_STEPS = 20
     PICK_HOLD_VELOCITY_TOLERANCE = GRIPPER_STALL_VELOCITY_TOLERANCE
     PICK_HOLD_LOSS_CLEAR_STEPS = 3
@@ -187,6 +190,10 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self._gripper_settle_reason: str | None = None
         self._gripper_target_error: torch.Tensor | None = None
         self._gripper_joint_velocity: torch.Tensor | None = None
+        self._gripper_settle_angle_window: list[float] = []
+        self._cube_settle_speed_window: list[float] = []
+        self._gripper_settle_angle_span: float | None = None
+        self._cube_settle_max_speed: float | None = None
         self._initial_cube_z_w: torch.Tensor | None = None
         self._posture_target: torch.Tensor | None = None
         self._gripper_pick_latch.reset()
@@ -271,6 +278,9 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             track_loss=self._state in self.PICK_HOLD_LOSS_TRACKING_PHASES,
         )
         if update.captured:
+            self._gripper_settle_angle_window.clear()
+            self._cube_settle_speed_window.clear()
+            self._gripper_settle_streak = 0
             self._held_gripper_angle_capture_step = self._step_count
             self._held_gripper_angle_release_step = None
             self._last_pick_hold_event = "captured"
@@ -374,23 +384,36 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             robot = env.scene["robot"]
             gripper_position = robot.data.joint_pos[:, -1]
             gripper_velocity = torch.abs(robot.data.joint_vel[:, -1])
+            cube_speed = torch.linalg.vector_norm(env.scene["cube"].data.root_lin_vel_w, dim=-1)
             effective_target = self._gripper_pick_latch.held_angle
             if effective_target is None:
                 effective_target = self._grasp_end_position
             target_error = torch.abs(gripper_position - effective_target)
-            halfway_closed = gripper_position <= (self.GRIPPER_OPEN_POSITION + self._grasp_end_position) / 2.0
-            target_reached = (target_error <= self.GRIPPER_TARGET_TOLERANCE) & (
-                gripper_velocity <= self.GRIPPER_STALL_VELOCITY_TOLERANCE
+            if self._gripper_pick_latch.held_angle is not None:
+                self._gripper_settle_angle_window.append(float(gripper_position.item()))
+                self._cube_settle_speed_window.append(float(cube_speed.item()))
+                del self._gripper_settle_angle_window[: -self.GRIPPER_SETTLE_WINDOW_STEPS]
+                del self._cube_settle_speed_window[: -self.GRIPPER_SETTLE_WINDOW_STEPS]
+            window_ready = len(self._gripper_settle_angle_window) >= self.GRIPPER_SETTLE_WINDOW_STEPS
+            if window_ready:
+                self._gripper_settle_angle_span = max(self._gripper_settle_angle_window) - min(
+                    self._gripper_settle_angle_window
+                )
+                self._cube_settle_max_speed = max(self._cube_settle_speed_window)
+            else:
+                self._gripper_settle_angle_span = None
+                self._cube_settle_max_speed = None
+            settled = (
+                window_ready
+                and bool((target_error <= self.GRIPPER_TARGET_TOLERANCE).all().item())
+                and self._gripper_settle_angle_span <= self.GRIPPER_SETTLE_ANGLE_SPAN_TOLERANCE
+                and self._cube_settle_max_speed <= self.CUBE_SETTLE_SPEED_TOLERANCE
             )
-            contact_stalled = halfway_closed & (gripper_velocity <= self.GRIPPER_STALL_VELOCITY_TOLERANCE)
-            settled = target_reached | contact_stalled
             self._gripper_target_error = target_error.detach()
             self._gripper_joint_velocity = gripper_velocity.detach()
-            if self._state_step >= self.GRASP_SETTLE_STEPS and bool(settled.all().item()):
+            if self._state_step >= self.GRASP_SETTLE_STEPS and settled:
                 self._gripper_settle_streak += 1
-                self._gripper_settle_reason = (
-                    "target_reached" if bool(target_reached.all().item()) else "contact_stalled"
-                )
+                self._gripper_settle_reason = "latched_contact_window_stable"
             else:
                 self._gripper_settle_streak = 0
                 self._gripper_settle_reason = None
@@ -797,6 +820,14 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         return self._gripper_joint_velocity
 
     @property
+    def gripper_settle_angle_span(self) -> float | None:
+        return self._gripper_settle_angle_span
+
+    @property
+    def cube_settle_max_speed(self) -> float | None:
+        return self._cube_settle_max_speed
+
+    @property
     def held_gripper_angle(self) -> float | None:
         return self._gripper_pick_latch.held_angle
 
@@ -868,6 +899,9 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "gripper_settle_stable_steps": self.GRASP_SETTLE_STABLE_STEPS,
             "gripper_target_tolerance": self.GRIPPER_TARGET_TOLERANCE,
             "gripper_stall_velocity_tolerance": self.GRIPPER_STALL_VELOCITY_TOLERANCE,
+            "gripper_settle_window_steps": self.GRIPPER_SETTLE_WINDOW_STEPS,
+            "gripper_settle_angle_span_tolerance_rad": self.GRIPPER_SETTLE_ANGLE_SPAN_TOLERANCE,
+            "cube_settle_speed_tolerance_m_s": self.CUBE_SETTLE_SPEED_TOLERANCE,
             "approach_height": self.APPROACH_HEIGHT,
             "lift_height": self.LIFT_HEIGHT,
             "safe_height": self.SAFE_HEIGHT,

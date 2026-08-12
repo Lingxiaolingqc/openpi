@@ -80,7 +80,7 @@ def test_fast_pick_signal_does_not_latch_until_confirmation_frame_is_slow(latch)
 
     captured = _update(latch, picked=True, measured_angle=0.2439685)
     assert captured.captured
-    assert captured.command_angle == NOMINAL_ANGLE
+    assert captured.command_angle == 0.2439685
 
 
 def test_confirmation_uses_streak_minimum_instead_of_rebound_angle(latch) -> None:
@@ -93,11 +93,11 @@ def test_confirmation_uses_streak_minimum_instead_of_rebound_angle(latch) -> Non
     assert update.command_angle == 0.232
 
 
-def test_capture_never_opens_beyond_nominal_target(latch) -> None:
+def test_capture_holds_confirmed_contact_equilibrium(latch) -> None:
     _capture(latch, measured_angle=0.2439685)
 
     assert latch.minimum_pick_angle == 0.2439685
-    assert latch.held_angle == NOMINAL_ANGLE
+    assert latch.held_angle == 0.2439685
 
 
 def test_confirmed_hold_can_only_tighten(latch) -> None:

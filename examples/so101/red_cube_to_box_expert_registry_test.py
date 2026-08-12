@@ -267,6 +267,11 @@ def test_autogen_pick_hold_preserves_nominal_target_and_uses_velocity_feedback()
     assert transition_source.count("self._gripper_pick_latch.release()") == 1
     assert "if state == 'release'" in transition_source
 
+    state_source = ast.unparse(_method_definition(class_node, "_update_state"))
+    assert "env.scene['cube'].data.root_lin_vel_w" in state_source
+    assert "self._gripper_settle_angle_span <= self.GRIPPER_SETTLE_ANGLE_SPAN_TOLERANCE" in state_source
+    assert "self._cube_settle_max_speed <= self.CUBE_SETTLE_SPEED_TOLERANCE" in state_source
+
 
 def test_smoke_recorder_uses_the_post_action_phase_and_forces_phase_boundaries() -> None:
     smoke_path = ROOT / "red_cube_to_box_expert_smoke.py"

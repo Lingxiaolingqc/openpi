@@ -573,10 +573,18 @@ The smoke and batch runners feed the environment's actual `subtask_terms.pick_cu
 That geometric flag is debounced only during the final pre-lift phases: it must remain true for 20 consecutive
 observations and the gripper speed on the confirmation frame must be no greater than `0.01 rad/s`. During that continuous
 streak the controller remembers the smallest measured joint angle. Because smaller SO-101 gripper angles mean tighter
-closure, the confirmed `temp_jaw_angle_rad` is `min(nominal_close_target, streak_minimum)` and can subsequently only stay
-unchanged or decrease. A false candidate frame clears an unconfirmed streak, but after confirmation even a transient or
+closure, the confirmed `temp_jaw_angle_rad` is the measured streak minimum (minus the configured safety closure, currently
+zero) and can subsequently only stay unchanged or decrease. This stops the position actuator from continually squeezing
+past the observed contact equilibrium merely to reach a sampled nominal target. A false candidate frame clears an
+unconfirmed streak, but after confirmation even a transient or
 persistent false `pick_cube` value is diagnostic only and cannot reopen the gripper. The hold is cleared only on the
 explicit normal `release` transition.
+
+After capture, lift readiness no longer depends on eight consecutive samples of raw instantaneous gripper velocity. It
+uses a 12-step contact window: the measured gripper-angle span must be at most `0.01 rad`, the maximum cube linear speed in
+the same window must be at most `0.02 m/s`, and the gripper must remain within `0.03 rad` of its captured hold. All three
+conditions must then remain true for eight control steps. This admits small contact-velocity noise while still rejecting a
+cube that is bouncing or being ejected.
 
 The diagnostic recording renders the selected ray and all six gripper-frame axes as USD sphere markers in headless RTX
 video. The long selected ray is yellow while missing and green while intersecting the cube OBB. The six short axes are
@@ -725,7 +733,7 @@ done
 ```
 
 The decisive comparison is whether `pick_hold_confirmation_streak` reaches 20 only after the gripper slows, whether
-`expert_temp_jaw_angle_captured` is no larger than the nominal close target, whether later
+`expert_temp_jaw_angle_captured` equals the continuous-pick streak minimum (subject to the configured safety closure), whether later
 `expert_temp_jaw_angle_tightened` events are monotonically non-increasing, the cube XY displacement during grasp, and final
 success. `expert_temp_jaw_angle_released` should appear only at the explicit release phase. Before alignment,
 the axis-aligned run reports the frozen ray-hit target in base and world frames, measured wrist world position, wrist delta

@@ -56,8 +56,8 @@ class GripperPickLatch:
         self.reset()
         return had_hold
 
-    def _safe_angle(self, measured_angle: float, nominal_angle: float) -> float:
-        return max(self.minimum_angle, min(nominal_angle, measured_angle - self.safety_closure))
+    def _safe_angle(self, measured_angle: float) -> float:
+        return max(self.minimum_angle, measured_angle - self.safety_closure)
 
     def update(
         self,
@@ -91,7 +91,7 @@ class GripperPickLatch:
             if self.confirmation_streak >= self.confirmation_steps and stable_pick:
                 assert self.candidate_min_angle is not None
                 self.minimum_pick_angle = self.candidate_min_angle
-                self.held_angle = self._safe_angle(self.minimum_pick_angle, nominal_angle)
+                self.held_angle = self._safe_angle(self.minimum_pick_angle)
                 self.candidate_min_angle = None
                 self.confirmation_streak = 0
                 captured = True
@@ -103,7 +103,7 @@ class GripperPickLatch:
                     if self.minimum_pick_angle is None
                     else min(self.minimum_pick_angle, measured_angle)
                 )
-                safe_angle = self._safe_angle(self.minimum_pick_angle, nominal_angle)
+                safe_angle = self._safe_angle(self.minimum_pick_angle)
                 if safe_angle < self.held_angle:
                     self.held_angle = safe_angle
                     tightened = True
