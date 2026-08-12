@@ -257,11 +257,15 @@ def test_autogen_pick_hold_preserves_nominal_target_and_uses_velocity_feedback()
 
     assert "joint_vel" in observer_source
     assert "allow_capture=self._state in self.PICK_HOLD_CAPTURE_PHASES" in observer_source
-    assert "allow_release=self._state in self.PICK_HOLD_RELEASE_PHASES" in observer_source
+    assert "track_loss=self._state in self.PICK_HOLD_LOSS_TRACKING_PHASES" in observer_source
     assert "self._grasp_end_position = self._held_gripper_angle" not in observer_source
-    assert "self._gripper_command = self._grasp_end_position" in observer_source
+    assert "self._gripper_command = self._grasp_end_position" not in observer_source
     assert "elif self._gripper_pick_latch.held_angle is None" not in observer_source
     assert observer_source.count("self._gripper_command =") == 2
+
+    transition_source = ast.unparse(_method_definition(class_node, "_transition"))
+    assert transition_source.count("self._gripper_pick_latch.release()") == 1
+    assert "if state == 'release'" in transition_source
 
 
 def test_smoke_recorder_uses_the_post_action_phase_and_forces_phase_boundaries() -> None:

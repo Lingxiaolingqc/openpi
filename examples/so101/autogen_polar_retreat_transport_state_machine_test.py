@@ -44,6 +44,22 @@ def test_retreat_controls_wrist_with_position_only_xyz() -> None:
     assert "set_xyz_pitch_joint_target" not in calls
 
 
+def test_arc_controls_wrist_with_position_only_xyz_and_wrist_feedback() -> None:
+    get_action_source = ast.unparse(_method("get_action"))
+    initialize_source = ast.unparse(_method("_initialize_arc_transfer"))
+    reference_source = ast.unparse(_method("_arc_reference"))
+    convergence_source = ast.unparse(_method("_update_polar_convergence"))
+
+    assert "wrist_position_only_phases = {'retreat_to_safe', 'arc_transfer'}" in get_action_source
+    assert "self._arm_action_term.set_control_body(body_name='wrist')" in get_action_source
+    assert "self._arm_action_term.set_position_only(enabled=True)" in get_action_source
+    assert "start_w = self._retreat_control_position_w(env)" in initialize_source
+    assert "self._transport_height = None" in initialize_source
+    assert "target_quat_w = self._retreat_control_quaternion_w(env)" in reference_source
+    assert "if phase == 'arc_transfer'" in convergence_source
+    assert "actual_w = self._retreat_control_position_w(env)" in convergence_source
+
+
 def test_wrist_retreat_rebases_radial_target_after_actual_lift() -> None:
     initialize_source = ast.unparse(_method("_initialize_polar_retreat"))
     advance_source = ast.unparse(_method("_advance_retreat_segment_if_ready"))

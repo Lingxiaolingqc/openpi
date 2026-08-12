@@ -1,4 +1,4 @@
-"""Debounce LeIsaac's geometric pick signal before holding a gripper angle."""
+"""Debounce LeIsaac's pick signal and monotonically hold a safe gripper angle."""
 
 from __future__ import annotations
 
@@ -11,29 +11,53 @@ class GripperPickLatchUpdate:
 
     command_angle: float
     captured: bool
-    released: bool
+    tightened: bool
 
 
 class GripperPickLatch:
-    """Latch a measured gripper angle only after stable, low-speed pick feedback."""
+    """Hold the tightest confirmed gripper angle until an explicit release."""
 
-    def __init__(self, *, confirmation_steps: int, velocity_tolerance: float, loss_clear_steps: int) -> None:
+    def __init__(
+        self,
+        *,
+        confirmation_steps: int,
+        velocity_tolerance: float,
+        loss_clear_steps: int,
+        minimum_angle: float,
+        safety_closure: float = 0.0,
+    ) -> None:
         if confirmation_steps <= 0:
             raise ValueError("confirmation_steps must be positive")
         if velocity_tolerance < 0.0:
             raise ValueError("velocity_tolerance must be non-negative")
         if loss_clear_steps <= 0:
             raise ValueError("loss_clear_steps must be positive")
+        if safety_closure < 0.0:
+            raise ValueError("safety_closure must be non-negative")
 
         self.confirmation_steps = confirmation_steps
         self.velocity_tolerance = velocity_tolerance
         self.loss_clear_steps = loss_clear_steps
+        self.minimum_angle = minimum_angle
+        self.safety_closure = safety_closure
         self.reset()
 
     def reset(self) -> None:
         self.held_angle: float | None = None
+        self.candidate_min_angle: float | None = None
+        self.minimum_pick_angle: float | None = None
         self.confirmation_streak = 0
         self.loss_streak = 0
+
+    def release(self) -> bool:
+        """Clear the monotonic hold only for an explicit release transition."""
+
+        had_hold = self.held_angle is not None
+        self.reset()
+        return had_hold
+
+    def _safe_angle(self, measured_angle: float, nominal_angle: float) -> float:
+        return max(self.minimum_angle, min(nominal_angle, measured_angle - self.safety_closure))
 
     def update(
         self,
@@ -43,30 +67,48 @@ class GripperPickLatch:
         measured_velocity: float,
         nominal_angle: float,
         allow_capture: bool,
-        allow_release: bool,
+        track_loss: bool,
     ) -> GripperPickLatchUpdate:
         """Update debounce state and return the angle that should be commanded."""
 
         captured = False
-        released = False
+        tightened = False
 
         if self.held_angle is None:
             self.loss_streak = 0
             candidate_pick = allow_capture and picked
-            self.confirmation_streak = self.confirmation_streak + 1 if candidate_pick else 0
+            if candidate_pick:
+                self.confirmation_streak += 1
+                self.candidate_min_angle = (
+                    measured_angle
+                    if self.candidate_min_angle is None
+                    else min(self.candidate_min_angle, measured_angle)
+                )
+            else:
+                self.confirmation_streak = 0
+                self.candidate_min_angle = None
             stable_pick = candidate_pick and abs(measured_velocity) <= self.velocity_tolerance
             if self.confirmation_streak >= self.confirmation_steps and stable_pick:
-                self.held_angle = measured_angle
+                assert self.candidate_min_angle is not None
+                self.minimum_pick_angle = self.candidate_min_angle
+                self.held_angle = self._safe_angle(self.minimum_pick_angle, nominal_angle)
+                self.candidate_min_angle = None
                 self.confirmation_streak = 0
                 captured = True
         else:
             self.confirmation_streak = 0
-            if allow_release:
-                self.loss_streak = 0 if picked else self.loss_streak + 1
-                if self.loss_streak >= self.loss_clear_steps:
-                    self.held_angle = None
-                    self.loss_streak = 0
-                    released = True
+            if allow_capture and picked:
+                self.minimum_pick_angle = (
+                    measured_angle
+                    if self.minimum_pick_angle is None
+                    else min(self.minimum_pick_angle, measured_angle)
+                )
+                safe_angle = self._safe_angle(self.minimum_pick_angle, nominal_angle)
+                if safe_angle < self.held_angle:
+                    self.held_angle = safe_angle
+                    tightened = True
+            if track_loss:
+                self.loss_streak = 0 if picked else min(self.loss_streak + 1, self.loss_clear_steps)
             else:
                 self.loss_streak = 0
 
@@ -74,5 +116,5 @@ class GripperPickLatch:
         return GripperPickLatchUpdate(
             command_angle=command_angle,
             captured=captured,
-            released=released,
+            tightened=tightened,
         )

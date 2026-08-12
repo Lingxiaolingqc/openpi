@@ -831,6 +831,9 @@ def main() -> int:
                         f"posture_target_rad="
                         f"{None if state_machine.posture_target is None else _rounded_row(state_machine.posture_target, digits=7)}:"
                         f"temp_jaw_angle_rad={state_machine.held_gripper_angle}:"
+                        f"candidate_min_pick_angle_rad={state_machine.candidate_min_pick_angle}:"
+                        f"minimum_pick_angle_rad={state_machine.minimum_pick_angle}:"
+                        f"measured_gripper_angle_rad={robot.data.joint_pos[0, -1].item():.7f}:"
                         f"temp_jaw_capture_step={state_machine.held_gripper_angle_capture_step}:"
                         f"temp_jaw_release_step={state_machine.held_gripper_angle_release_step}:"
                         f"pick_hold_confirmation_streak={state_machine.pick_hold_confirmation_streak}:"
@@ -1356,15 +1359,30 @@ def main() -> int:
                 unexpected_reset = unexpected_reset or bool(step_result[2].any()) or bool(step_result[3].any())
                 pick_cube_after = bool(observations["subtask_terms"]["pick_cube"][0].item())
                 observe_pick_cube = getattr(state_machine, "observe_pick_cube", None)
-                if callable(observe_pick_cube) and observe_pick_cube(pick_cube_after, env):
+                captured_pick_hold = callable(observe_pick_cube) and observe_pick_cube(pick_cube_after, env)
+                consume_pick_hold_event = getattr(state_machine, "consume_pick_hold_event", None)
+                pick_hold_event = consume_pick_hold_event() if callable(consume_pick_hold_event) else None
+                if captured_pick_hold:
                     print(
                         f"expert_temp_jaw_angle_captured:phase={state_machine.phase_name}:"
                         f"control_step={completed_steps + 1}:"
                         f"angle_rad={state_machine.held_gripper_angle:.7f}:"
+                        f"minimum_pick_angle_rad={state_machine.minimum_pick_angle:.7f}:"
+                        f"nominal_angle_rad={state_machine.nominal_gripper_angle:.7f}:"
+                        f"measured_angle_rad={robot.data.joint_pos[0, -1].item():.7f}:"
                         f"gripper_velocity_rad_s={abs(robot.data.joint_vel[0, -1].item()):.7f}",
                         flush=True,
                     )
-                if getattr(state_machine, "last_pick_hold_event", None) == "released":
+                if pick_hold_event == "tightened":
+                    print(
+                        f"expert_temp_jaw_angle_tightened:phase={state_machine.phase_name}:"
+                        f"control_step={completed_steps + 1}:"
+                        f"angle_rad={state_machine.held_gripper_angle:.7f}:"
+                        f"minimum_pick_angle_rad={state_machine.minimum_pick_angle:.7f}:"
+                        f"measured_angle_rad={robot.data.joint_pos[0, -1].item():.7f}",
+                        flush=True,
+                    )
+                if pick_hold_event == "released":
                     print(
                         f"expert_temp_jaw_angle_released:phase={state_machine.phase_name}:"
                         f"control_step={completed_steps + 1}:"

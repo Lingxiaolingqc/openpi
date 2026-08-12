@@ -57,8 +57,9 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     PICK_HOLD_CONFIRM_STEPS = 20
     PICK_HOLD_VELOCITY_TOLERANCE = GRIPPER_STALL_VELOCITY_TOLERANCE
     PICK_HOLD_LOSS_CLEAR_STEPS = 3
+    PICK_HOLD_SAFETY_CLOSURE = 0.0
     PICK_HOLD_CAPTURE_PHASES = frozenset({"grasp_settle", "ik_handoff"})
-    PICK_HOLD_RELEASE_PHASES = frozenset({"grasp_settle", "ik_handoff"})
+    PICK_HOLD_LOSS_TRACKING_PHASES = frozenset({"grasp_settle", "ik_handoff"})
     RELEASE_DURATION_STEPS = 180
 
     GRIPPER_OPEN_POSITION = 1.74533
@@ -105,6 +106,8 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             confirmation_steps=self.PICK_HOLD_CONFIRM_STEPS,
             velocity_tolerance=self.PICK_HOLD_VELOCITY_TOLERANCE,
             loss_clear_steps=self.PICK_HOLD_LOSS_CLEAR_STEPS,
+            minimum_angle=self.GRIPPER_CLOSED_POSITION,
+            safety_closure=self.PICK_HOLD_SAFETY_CLOSURE,
         )
         self.reset()
 
@@ -265,18 +268,16 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             measured_velocity=float(measured_velocity.item()),
             nominal_angle=self._grasp_end_position,
             allow_capture=self._state in self.PICK_HOLD_CAPTURE_PHASES,
-            allow_release=self._state in self.PICK_HOLD_RELEASE_PHASES,
+            track_loss=self._state in self.PICK_HOLD_LOSS_TRACKING_PHASES,
         )
-        self._last_pick_hold_event = None
         if update.captured:
             self._held_gripper_angle_capture_step = self._step_count
             self._held_gripper_angle_release_step = None
             self._last_pick_hold_event = "captured"
             self._gripper_command = update.command_angle
-        elif update.released:
-            self._held_gripper_angle_release_step = self._step_count
-            self._last_pick_hold_event = "released"
-            self._gripper_command = self._grasp_end_position
+        elif update.tightened:
+            self._last_pick_hold_event = "tightened"
+            self._gripper_command = update.command_angle
         return update.captured
 
     def advance(self) -> None:
@@ -489,6 +490,9 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             self.transport_target_b = target.detach().clone()
             self._start_move(target, self.TRAVEL_STEP)
         elif state == "release":
+            if self._gripper_pick_latch.release():
+                self._held_gripper_angle_release_step = self._step_count
+                self._last_pick_hold_event = "released"
             self._gripper_command = self.GRIPPER_OPEN_POSITION
         elif state == "return_home":
             assert self._command_pos_b is not None
@@ -797,6 +801,10 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         return self._gripper_pick_latch.held_angle
 
     @property
+    def nominal_gripper_angle(self) -> float:
+        return self._grasp_end_position
+
+    @property
     def held_gripper_angle_capture_step(self) -> int | None:
         return self._held_gripper_angle_capture_step
 
@@ -813,8 +821,21 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         return self._gripper_pick_latch.loss_streak
 
     @property
+    def minimum_pick_angle(self) -> float | None:
+        return self._gripper_pick_latch.minimum_pick_angle
+
+    @property
+    def candidate_min_pick_angle(self) -> float | None:
+        return self._gripper_pick_latch.candidate_min_angle
+
+    @property
     def last_pick_hold_event(self) -> str | None:
         return self._last_pick_hold_event
+
+    def consume_pick_hold_event(self) -> str | None:
+        event = self._last_pick_hold_event
+        self._last_pick_hold_event = None
+        return event
 
     @property
     def servo_parameters(self) -> dict[str, object]:
@@ -831,11 +852,14 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "gripper_target_reached_requires_low_velocity": True,
             "gripper_hold_trigger": "consecutive_pick_cube_true_with_low_velocity_on_confirmation_frame",
             "gripper_hold_capture_phases": ",".join(sorted(self.PICK_HOLD_CAPTURE_PHASES)),
-            "gripper_hold_release_phases": ",".join(sorted(self.PICK_HOLD_RELEASE_PHASES)),
+            "gripper_hold_loss_tracking_phases": ",".join(sorted(self.PICK_HOLD_LOSS_TRACKING_PHASES)),
             "gripper_hold_confirmation_steps": self.PICK_HOLD_CONFIRM_STEPS,
             "gripper_hold_velocity_tolerance_rad_s": self.PICK_HOLD_VELOCITY_TOLERANCE,
             "gripper_hold_loss_clear_steps": self.PICK_HOLD_LOSS_CLEAR_STEPS,
-            "gripper_hold_value": "measured_gripper_joint_angle_at_trigger",
+            "gripper_hold_safety_closure_rad": self.PICK_HOLD_SAFETY_CLOSURE,
+            "gripper_hold_value": "minimum_measured_angle_during_continuous_pick_streak",
+            "gripper_hold_monotonic_direction": "non_increasing_until_explicit_release",
+            "gripper_hold_pick_loss_policy": "diagnostic_only_no_reopen",
             "gripper_hold_until": "release",
             "gripper_nominal_target_preserved": True,
             "minimum_confirmed_lift": self.MIN_CONFIRMED_LIFT,

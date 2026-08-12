@@ -1,4 +1,4 @@
-"""Behavioral regression tests for debounced gripper-angle holding."""
+"""Behavioral regression tests for monotonic gripper-angle holding."""
 
 from __future__ import annotations
 
@@ -19,9 +19,9 @@ MODULE_SPEC.loader.exec_module(latch_module)
 GripperPickLatch = latch_module.GripperPickLatch
 
 NOMINAL_ANGLE = 0.238561
-MEASURED_ANGLE = 0.259811
-CONFIRMATION_STEPS = 8
+CONFIRMATION_STEPS = 20
 LOSS_CLEAR_STEPS = 3
+MINIMUM_ANGLE = -0.174533
 
 
 @pytest.fixture
@@ -30,23 +30,31 @@ def latch():
         confirmation_steps=CONFIRMATION_STEPS,
         velocity_tolerance=0.01,
         loss_clear_steps=LOSS_CLEAR_STEPS,
+        minimum_angle=MINIMUM_ANGLE,
     )
 
 
-def _update(latch, *, picked: bool, velocity: float = 0.0):
+def _update(
+    latch,
+    *,
+    picked: bool,
+    measured_angle: float = 0.259811,
+    velocity: float = 0.0,
+    nominal_angle: float = NOMINAL_ANGLE,
+):
     return latch.update(
         picked=picked,
-        measured_angle=MEASURED_ANGLE,
+        measured_angle=measured_angle,
         measured_velocity=velocity,
-        nominal_angle=NOMINAL_ANGLE,
+        nominal_angle=nominal_angle,
         allow_capture=True,
-        allow_release=True,
+        track_loss=True,
     )
 
 
-def _capture(latch) -> None:
+def _capture(latch, *, measured_angle: float = 0.259811, nominal_angle: float = NOMINAL_ANGLE) -> None:
     for _ in range(CONFIRMATION_STEPS):
-        update = _update(latch, picked=True)
+        update = _update(latch, picked=True, measured_angle=measured_angle, nominal_angle=nominal_angle)
     assert update.captured
 
 
@@ -58,80 +66,82 @@ def test_single_frame_pick_does_not_latch(latch) -> None:
     assert not first.captured
     assert latch.held_angle is None
     assert latch.confirmation_streak == 0
+    assert latch.candidate_min_angle is None
     assert lost.command_angle == NOMINAL_ANGLE
 
 
-def test_fast_pick_signal_does_not_latch(latch) -> None:
+def test_fast_pick_signal_does_not_latch_until_confirmation_frame_is_slow(latch) -> None:
     for _ in range(CONFIRMATION_STEPS + 2):
         update = _update(latch, picked=True, velocity=0.290102)
 
     assert not update.captured
     assert update.command_angle == NOMINAL_ANGLE
     assert latch.held_angle is None
-    assert latch.confirmation_streak == CONFIRMATION_STEPS + 2
 
-    captured_after_settling = _update(latch, picked=True)
-    assert captured_after_settling.captured
-    assert captured_after_settling.command_angle == MEASURED_ANGLE
-
-
-def test_consecutive_low_speed_pick_latches_on_final_frame(latch) -> None:
-    for _ in range(CONFIRMATION_STEPS - 1):
-        update = _update(latch, picked=True)
-        assert not update.captured
-        assert update.command_angle == NOMINAL_ANGLE
-
-    captured = _update(latch, picked=True)
-    repeated = _update(latch, picked=True)
-
+    captured = _update(latch, picked=True, measured_angle=0.2439685)
     assert captured.captured
-    assert captured.command_angle == MEASURED_ANGLE
-    assert latch.held_angle == MEASURED_ANGLE
-    assert not repeated.captured
+    assert captured.command_angle == NOMINAL_ANGLE
 
 
-def test_pick_loss_before_confirmation_restores_nominal_target(latch) -> None:
-    for _ in range(CONFIRMATION_STEPS - 1):
-        _update(latch, picked=True)
+def test_confirmation_uses_streak_minimum_instead_of_rebound_angle(latch) -> None:
+    measurements = [0.259811] * (CONFIRMATION_STEPS - 2) + [0.232, 0.2439685]
+    for measured_angle in measurements:
+        update = _update(latch, picked=True, measured_angle=measured_angle, nominal_angle=0.30)
 
-    lost = _update(latch, picked=False)
-
-    assert latch.confirmation_streak == 0
-    assert latch.held_angle is None
-    assert not lost.released
-    assert lost.command_angle == NOMINAL_ANGLE
+    assert update.captured
+    assert latch.minimum_pick_angle == 0.232
+    assert update.command_angle == 0.232
 
 
-def test_pick_loss_after_latch_is_debounced_then_restores_nominal_target(latch) -> None:
-    _capture(latch)
+def test_capture_never_opens_beyond_nominal_target(latch) -> None:
+    _capture(latch, measured_angle=0.2439685)
 
-    for expected_loss_streak in range(1, LOSS_CLEAR_STEPS):
-        update = _update(latch, picked=False)
-        assert not update.released
-        assert update.command_angle == MEASURED_ANGLE
-        assert latch.loss_streak == expected_loss_streak
-
-    released = _update(latch, picked=False)
-
-    assert released.released
-    assert released.command_angle == NOMINAL_ANGLE
-    assert latch.held_angle is None
-    assert latch.loss_streak == 0
+    assert latch.minimum_pick_angle == 0.2439685
+    assert latch.held_angle == NOMINAL_ANGLE
 
 
-def test_latch_does_not_clear_after_capture_when_release_is_not_allowed(latch) -> None:
-    _capture(latch)
+def test_confirmed_hold_can_only_tighten(latch) -> None:
+    _capture(latch, measured_angle=0.24, nominal_angle=0.30)
+    commands = [latch.held_angle]
+    for measured_angle in (0.27, 0.22, 0.28, 0.21, 0.40):
+        update = _update(latch, picked=True, measured_angle=measured_angle, nominal_angle=0.30)
+        commands.append(update.command_angle)
+
+    assert commands == sorted(commands, reverse=True)
+    assert commands[-1] == 0.21
+
+
+def test_pick_loss_never_reopens_confirmed_hold(latch) -> None:
+    _capture(latch, measured_angle=0.22)
 
     for _ in range(LOSS_CLEAR_STEPS + 2):
-        update = latch.update(
-            picked=False,
-            measured_angle=MEASURED_ANGLE,
-            measured_velocity=0.0,
-            nominal_angle=NOMINAL_ANGLE,
-            allow_capture=False,
-            allow_release=False,
-        )
+        update = _update(latch, picked=False, measured_angle=0.45)
 
-    assert not update.released
-    assert update.command_angle == MEASURED_ANGLE
-    assert latch.held_angle == MEASURED_ANGLE
+    assert update.command_angle == 0.22
+    assert latch.held_angle == 0.22
+    assert latch.loss_streak >= LOSS_CLEAR_STEPS
+
+
+def test_only_explicit_release_clears_monotonic_hold(latch) -> None:
+    _capture(latch, measured_angle=0.22)
+
+    assert latch.release()
+    assert latch.held_angle is None
+    assert latch.minimum_pick_angle is None
+    assert not latch.release()
+
+
+def test_safety_closure_and_joint_limit_are_applied() -> None:
+    latch = GripperPickLatch(
+        confirmation_steps=1,
+        velocity_tolerance=0.01,
+        loss_clear_steps=LOSS_CLEAR_STEPS,
+        minimum_angle=MINIMUM_ANGLE,
+        safety_closure=0.01,
+    )
+
+    first = _update(latch, picked=True, measured_angle=0.25, nominal_angle=0.30)
+    assert first.command_angle == pytest.approx(0.24)
+
+    tighter = _update(latch, picked=True, measured_angle=-0.20, nominal_angle=0.30)
+    assert tighter.command_angle == MINIMUM_ANGLE

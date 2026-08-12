@@ -6,7 +6,6 @@ import math
 from typing import ClassVar
 
 from isaaclab.utils.math import quat_apply
-from isaaclab.utils.math import quat_from_euler_xyz
 from isaaclab.utils.math import quat_inv
 from isaaclab.utils.math import quat_mul
 import torch
@@ -88,7 +87,6 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         self._arc_start_bearing: torch.Tensor | None = None
         self._arc_target_bearing: torch.Tensor | None = None
         self._transport_height: torch.Tensor | None = None
-        self._arc_start_quat_w: torch.Tensor | None = None
         self._placement_quat_w: torch.Tensor | None = None
         self._current_target_quat_w: torch.Tensor | None = None
         self._bearing_error: float | None = None
@@ -115,7 +113,8 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
 
     def get_action(self, env) -> torch.Tensor:
         phase = self.phase_name
-        if self._arm_action_term is not None and phase != "retreat_to_safe":
+        wrist_position_only_phases = {"retreat_to_safe", "arc_transfer"}
+        if self._arm_action_term is not None and phase not in wrist_position_only_phases:
             self._arm_action_term.restore_configured_control_body()
         if phase in {"approach_cube", "descend_to_cube", "close_gripper"}:
             action = super().get_action(env)
@@ -125,7 +124,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
 
         if self._arm_action_term is None:
             raise RuntimeError("Call setup(env) before requesting a polar AutoGen expert action")
-        if phase != "retreat_to_safe":
+        if phase not in wrist_position_only_phases:
             self._arm_action_term.set_orientation_weight(weight=1.0)
         self._initialize_anchors(env)
 
@@ -142,9 +141,11 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             gripper = _GRIPPER_CLOSE
         elif phase == "arc_transfer":
             self._initialize_arc_transfer(env)
+            self._arm_action_term.set_control_body(body_name="wrist")
+            self._arm_action_term.set_position_only(enabled=True)
             if self._detect_polar_grasp_loss(env, phase):
-                target_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :].detach().clone()
-                target_quat_w = env.scene["ee_frame"].data.target_quat_w[:, 0, :].detach().clone()
+                target_w = self._retreat_control_position_w(env).detach().clone()
+                target_quat_w = self._retreat_control_quaternion_w(env).detach().clone()
             else:
                 target_w, target_quat_w = self._arc_reference(env)
             gripper = _GRIPPER_CLOSE
@@ -375,8 +376,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         if self._motion_start_w is not None:
             return
         assert self._floor_anchor_w is not None
-        start_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :].detach().clone()
-        start_quat_w = env.scene["ee_frame"].data.target_quat_w[:, 0, :].detach().clone()
+        start_w = self._retreat_control_position_w(env).detach().clone()
         robot_root_w = env.scene["robot"].data.root_pos_w
         start_delta_xy = start_w[:, :2] - robot_root_w[:, :2]
         box_delta_xy = self._floor_anchor_w[:, :2] - robot_root_w[:, :2]
@@ -389,15 +389,14 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         target_w[:, 0] = robot_root_w[:, 0] + radius * torch.sin(target_bearing)
         target_w[:, 1] = robot_root_w[:, 1] + radius * torch.cos(target_bearing)
         target_w[:, 2] = start_w[:, 2]
-        zero = torch.zeros_like(bearing_delta)
-        target_quat_w = quat_mul(quat_from_euler_xyz(zero, zero, bearing_delta), start_quat_w)
 
         self._arc_radius = radius.detach().clone()
         self._arc_start_bearing = start_bearing.detach().clone()
         self._arc_target_bearing = target_bearing.detach().clone()
-        self._transport_height = start_w[:, 2].detach().clone()
-        self._arc_start_quat_w = start_quat_w
-        self._placement_quat_w = target_quat_w.detach().clone()
+        # Radial transfer returns to gripper control, so it captures the actual
+        # gripper height at that handoff instead of reusing the wrist height.
+        self._transport_height = None
+        self._placement_quat_w = None
         self._retreat_subphase = "root_centered_arc"
         self._reference_finished = False
         self._set_motion(start_w, target_w)
@@ -431,7 +430,6 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         assert self._arc_radius is not None
         assert self._arc_start_bearing is not None
         assert self._arc_target_bearing is not None
-        assert self._arc_start_quat_w is not None
         assert self._motion_start_w is not None
         assert self._motion_target_w is not None
         robot_root_w = env.scene["robot"].data.root_pos_w
@@ -450,17 +448,18 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         target_w[:, 0] = robot_root_w[:, 0] + self._arc_radius * torch.sin(bearing)
         target_w[:, 1] = robot_root_w[:, 1] + self._arc_radius * torch.cos(bearing)
         target_w[:, 2] = self._motion_start_w[:, 2]
-        zero = torch.zeros_like(bearing_delta)
-        target_quat_w = quat_mul(
-            quat_from_euler_xyz(zero, zero, progress * bearing_delta),
-            self._arc_start_quat_w,
-        )
+        # Arc orientation is deliberately unconstrained.  Keep the unused pose
+        # command aligned with the current wrist orientation for clear logging.
+        target_quat_w = self._retreat_control_quaternion_w(env).detach().clone()
         self._reference_finished = bool(torch.all(normalized_time >= 1.0).item())
         return target_w, target_quat_w
 
     def _update_polar_convergence(self, env, phase: str) -> None:
         assert self._motion_target_w is not None
-        actual_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :]
+        if phase == "arc_transfer":
+            actual_w = self._retreat_control_position_w(env)
+        else:
+            actual_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :]
         robot_root_xy = env.scene["robot"].data.root_pos_w[:, :2]
         target_bearing = self._bearing(self._motion_target_w[:, :2] - robot_root_xy)
         actual_bearing = self._bearing(actual_w[:, :2] - robot_root_xy)
@@ -582,6 +581,9 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             "retreat_wrist_flex_policy": "unconstrained",
             "retreat_y_policy": "constrained_during_lift_and_root_relative_retreat",
             "retreat_path": "wrist_vertical_lift_then_root_relative_xy_scaled_to_5_over_7",
+            "arc_control_body": "wrist",
+            "arc_ik_mode": "wrist_xyz_position_only(no_world_orientation)",
+            "arc_path": "root_centered_constant_radius_wrist_arc",
             "pre_retreat_gripper_gate": "half_closed_and_near_cube_stable",
             "gripper_close_minimum_steps": _GRIPPER_CLOSE_MINIMUM_STEPS,
             "gripper_close_maximum_steps": _GRIPPER_CLOSE_MAXIMUM_STEPS,
@@ -590,7 +592,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             "retreat_z_overshoot_limit": _RETREAT_Z_OVERSHOOT_LIMIT,
             "retreat_error_worsening_margin": _RETREAT_ERROR_WORSENING_MARGIN,
             "retreat_error_worsening_steps": _RETREAT_ERROR_WORSENING_STEPS,
-            "orientation_policy": "retreat_has_no_world_orientation_task_then_arc_entry_pose_yaw_co_rotation",
+            "orientation_policy": "retreat_and_arc_have_no_world_orientation_task",
             "completion_policy": (
                 "vertical_lift_actual_wrist_z_only_then_"
                 "radial_retreat_actual_wrist_radius_and_z_only"

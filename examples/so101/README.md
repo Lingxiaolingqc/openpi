@@ -552,7 +552,7 @@ fi
 echo "autogen_reference_semantic_exit=$autogen_reference_semantic_status"
 
 grep -nE \
-  'expert_variant|servo_parameters|expert_phase|expert_state|expert_autogen_reference|expert_temp_jaw_angle_captured|expert_ik_runtime_mode|expert_grasp_event|expert_abort|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
+  'expert_variant|servo_parameters|expert_phase|expert_state|expert_autogen_reference|expert_temp_jaw_angle_(captured|tightened|released)|expert_ik_runtime_mode|expert_grasp_event|expert_abort|completed_steps|cube_final|cube_offset|cube_final_speed|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \
   "$AUTOGEN_REFERENCE_LOG" |
 tail -n 520
 ```
@@ -570,11 +570,13 @@ It times out after 180 steps instead of beginning lift with a still-moving
 gripper. Lift confirmation is first evaluated after 30 actual lift steps and then requires the cube to be at least
 5 mm above its per-episode initial height; it no longer uses the incompatible fixed `gripper < 0.26 rad` threshold.
 The smoke and batch runners feed the environment's actual `subtask_terms.pick_cube` observation back to this expert.
-That geometric flag is debounced only during the final pre-lift phases: it must remain true for eight consecutive
-observations and the gripper speed on the confirmation frame must be no greater than `0.01 rad/s`. Only then does the
-controller store the measured joint angle as `temp_jaw_angle_rad`. A candidate false frame clears the streak; after a
-capture, three consecutive false pre-lift frames cancel the hold and restore the untouched nominal close target. Once
-lift starts, a confirmed angle is held through retreat and transport and is opened only by the normal `release` phase.
+That geometric flag is debounced only during the final pre-lift phases: it must remain true for 20 consecutive
+observations and the gripper speed on the confirmation frame must be no greater than `0.01 rad/s`. During that continuous
+streak the controller remembers the smallest measured joint angle. Because smaller SO-101 gripper angles mean tighter
+closure, the confirmed `temp_jaw_angle_rad` is `min(nominal_close_target, streak_minimum)` and can subsequently only stay
+unchanged or decrease. A false candidate frame clears an unconfirmed streak, but after confirmation even a transient or
+persistent false `pick_cube` value is diagnostic only and cannot reopen the gripper. The hold is cleared only on the
+explicit normal `release` transition.
 
 The diagnostic recording renders the selected ray and all six gripper-frame axes as USD sphere markers in headless RTX
 video. The long selected ray is yellow while missing and green while intersecting the cube OBB. The six short axes are
@@ -722,9 +724,10 @@ for log_path in "$AUTOGEN_SLOW_LOG" "$AUTOGEN_AXIS_LOG"; do
 done
 ```
 
-The decisive comparison is whether `pick_hold_confirmation_streak` reaches eight only after the gripper slows, whether a
-later `expert_temp_jaw_angle_released` restores the nominal command before lift, the cube XY displacement during grasp, and
-final success. Before alignment,
+The decisive comparison is whether `pick_hold_confirmation_streak` reaches 20 only after the gripper slows, whether
+`expert_temp_jaw_angle_captured` is no larger than the nominal close target, whether later
+`expert_temp_jaw_angle_tightened` events are monotonically non-increasing, the cube XY displacement during grasp, and final
+success. `expert_temp_jaw_angle_released` should appear only at the explicit release phase. Before alignment,
 the axis-aligned run reports the frozen ray-hit target in base and world frames, measured wrist world position, wrist delta
 and residual descent since ray hit, tracking error, maximum arm-joint velocity, stable streak, and ray-miss streak. It then
 reports the selected signed cube axis, measured local-X and cube X/Y directions, signed/absolute alignment error, direct
