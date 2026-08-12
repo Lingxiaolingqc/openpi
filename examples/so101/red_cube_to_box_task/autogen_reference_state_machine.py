@@ -420,7 +420,13 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             if self._gripper_settle_streak >= self.GRASP_SETTLE_STABLE_STEPS:
                 self._transition("lift")
             elif self._state_step > self.GRASP_SETTLE_MAX_STEPS:
-                self._fail("gripper did not settle before the Autogen lift")
+                self._fail(
+                    "gripper did not settle before the Autogen lift:"
+                    f"target_error_rad={float(target_error.item()):.7f}:"
+                    f"angle_span_rad={self._gripper_settle_angle_span}:"
+                    f"cube_max_speed_m_s={self._cube_settle_max_speed}:"
+                    f"stable_streak={self._gripper_settle_streak}"
+                )
         elif self._state == "lift":
             if self._state_step >= self.GRASP_CHECK_INTERVAL and self._state_step % self.GRASP_CHECK_INTERVAL == 0:
                 if not self._object_grasped(env):

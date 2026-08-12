@@ -585,6 +585,9 @@ uses a 12-step contact window: the measured gripper-angle span must be at most `
 the same window must be at most `0.02 m/s`, and the gripper must remain within `0.03 rad` of its captured hold. All three
 conditions must then remain true for eight control steps. This admits small contact-velocity noise while still rejecting a
 cube that is bouncing or being ejected.
+After the hold is captured, smoke logging samples this contact window every five control steps. A settle timeout includes
+the final target error, gripper-angle span, maximum cube speed, and stable streak directly in `expert_abort_before_step`,
+so the failing gate can be identified without lowering any threshold speculatively.
 
 The diagnostic recording renders the selected ray and all six gripper-frame axes as USD sphere markers in headless RTX
 video. The long selected ray is yellow while missing and green while intersecting the cube OBB. The six short axes are

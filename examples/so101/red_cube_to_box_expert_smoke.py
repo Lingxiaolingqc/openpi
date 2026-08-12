@@ -795,7 +795,14 @@ def main() -> int:
                             f"gripper_target_w={_rounded_row(gripper_target[0])}",
                             flush=True,
                         )
-                if args.expert in AUTOGEN_REFERENCE_EXPERTS and (phase_changed or completed_steps % 30 == 0):
+                autogen_contact_window_trace = (
+                    phase == "grasp_settle"
+                    and state_machine.held_gripper_angle is not None
+                    and state_machine.phase_step % 5 == 0
+                )
+                if args.expert in AUTOGEN_REFERENCE_EXPERTS and (
+                    phase_changed or completed_steps % 30 == 0 or autogen_contact_window_trace
+                ):
                     print(
                         f"expert_autogen_reference:{phase}:"
                         f"phase_step={state_machine.phase_step}:"
