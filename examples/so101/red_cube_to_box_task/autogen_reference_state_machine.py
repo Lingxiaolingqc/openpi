@@ -27,6 +27,8 @@ import torch
 
 from . import mdp
 from .env_cfg import CUBE_HALF_HEIGHT
+from .env_cfg import TARGET_BOX_FLOOR_THICKNESS
+from .env_cfg import TARGET_BOX_WALL_HEIGHT
 from .gripper_pick_latch import GripperPickLatch
 from .phase_aware_ik_action import PhaseAwareDifferentialInverseKinematicsAction
 from .phase_aware_ik_action import resolve_action_term
@@ -43,11 +45,18 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     INITIAL_POSITION = (0.25, 0.0, 0.25)
 
     TRAVEL_STEP = 0.003
+    TRANSPORT_STEP = TRAVEL_STEP
+    SAFE_OVERHEAD_TRANSPORT = False
+    RELEASE_FROM_SAFE_OVERHEAD = False
+    OVERHEAD_CUBE_XY_TOLERANCE = 0.008
+    OVERHEAD_ALIGNMENT_STABLE_STEPS = 5
+    OVERHEAD_WALL_CLEARANCE = 0.01
     DESCEND_STEP = 0.001
     LIFT_STEP = 0.002
     MAX_DESCEND_STEPS = 600
     MAX_LIFT_STEPS = 300
     GRASP_CHECK_INTERVAL = 30
+    LIFT_GRASP_CHECK_START_STEPS = GRASP_CHECK_INTERVAL
     GRASP_DURATION_STEPS = 80
     GRASP_SETTLE_STEPS = 21
     GRASP_SETTLE_MAX_STEPS = 180
@@ -64,6 +73,9 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
     PICK_HOLD_CAPTURE_PHASES = frozenset({"grasp_settle", "ik_handoff"})
     PICK_HOLD_LOSS_TRACKING_PHASES = frozenset({"grasp_settle", "ik_handoff"})
     RELEASE_DURATION_STEPS = 180
+    TRANSPORT_TRACKING_TOLERANCE = 0.01
+    TRANSPORT_TRACKING_STABLE_STEPS = 10
+    TRANSPORT_SETTLE_TIMEOUT_STEPS = 240
 
     GRIPPER_OPEN_POSITION = 1.74533
     GRIPPER_CLOSED_POSITION = -0.174533
@@ -180,6 +192,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self._episode_done = False
         self._initialized = False
         self._command_pos_b: torch.Tensor | None = None
+        self._transport_command_quat_b: torch.Tensor | None = None
         self._move_start_b: torch.Tensor | None = None
         self._move_end_b: torch.Tensor | None = None
         self._move_duration = 1
@@ -201,6 +214,13 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self._held_gripper_angle_release_step: int | None = None
         self._last_pick_hold_event: str | None = None
         self._wrist_position_w: torch.Tensor | None = None
+        self._live_gripper_position_w: torch.Tensor | None = None
+        self._live_jaw_position_w: torch.Tensor | None = None
+        self._live_cube_position_w: torch.Tensor | None = None
+        self._live_cube_lift_w: torch.Tensor | None = None
+        self._live_wrist_cube_offset_w: torch.Tensor | None = None
+        self._live_gripper_cube_offset_w: torch.Tensor | None = None
+        self._live_jaw_cube_offset_w: torch.Tensor | None = None
         self._approach_tracking_error: torch.Tensor | None = None
         self._descent_wrist_xy_error: torch.Tensor | None = None
         self._descent_ray_xy_error: torch.Tensor | None = None
@@ -224,6 +244,11 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         self.jaw_height_above_cube: torch.Tensor | None = None
         self.retreat_target_b: torch.Tensor | None = None
         self.transport_target_b: torch.Tensor | None = None
+        self._placement_wrist_cube_offset_w: torch.Tensor | None = None
+        self._transport_tracking_error: torch.Tensor | None = None
+        self._transport_tracking_streak = 0
+        self._overhead_cube_xy_error: torch.Tensor | None = None
+        self._overhead_alignment_streak = 0
         self.grasp_confirmed = False
         self.grasp_lost_before_release = False
         self.retry_used = False
@@ -238,13 +263,15 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         if not self._initialized:
             self._initialize_episode(env)
 
+        self._update_live_diagnostics(env)
         self._update_posture_target(env)
         self._update_state(env)
 
         assert self._command_pos_b is not None
         robot = env.scene["robot"]
         wrist_quat_w = robot.data.body_quat_w[:, self._wrist_body_index]
-        target_quat_b = quat_mul(quat_inv(robot.data.root_quat_w), wrist_quat_w)
+        live_quat_b = quat_mul(quat_inv(robot.data.root_quat_w), wrist_quat_w)
+        target_quat_b = live_quat_b if self._transport_command_quat_b is None else self._transport_command_quat_b
         held_gripper_angle = self._gripper_pick_latch.held_angle
         if held_gripper_angle is not None and self._state not in {"release", "return_home", "success"}:
             self._gripper_command = held_gripper_angle
@@ -255,6 +282,29 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             dtype=self._command_pos_b.dtype,
         )
         return torch.cat((self._command_pos_b, target_quat_b, gripper), dim=-1)
+
+    def _update_live_diagnostics(self, env) -> None:
+        """Snapshot the physical grasp geometry before issuing this step's command."""
+
+        assert self._wrist_body_index is not None
+        robot = env.scene["robot"]
+        wrist_pos_w = robot.data.body_pos_w[:, self._wrist_body_index]
+        ee_frame = env.scene["ee_frame"]
+        gripper_pos_w = ee_frame.data.target_pos_w[:, 0]
+        jaw_pos_w = ee_frame.data.target_pos_w[:, 1]
+        cube_pos_w = env.scene["cube"].data.root_pos_w
+
+        self._wrist_position_w = wrist_pos_w.detach().clone()
+        self._live_gripper_position_w = gripper_pos_w.detach().clone()
+        self._live_jaw_position_w = jaw_pos_w.detach().clone()
+        self._live_cube_position_w = cube_pos_w.detach().clone()
+        if self._initial_cube_z_w is None:
+            self._live_cube_lift_w = None
+        else:
+            self._live_cube_lift_w = (cube_pos_w[:, 2] - self._initial_cube_z_w).detach()
+        self._live_wrist_cube_offset_w = (wrist_pos_w - cube_pos_w).detach()
+        self._live_gripper_cube_offset_w = (gripper_pos_w - cube_pos_w).detach()
+        self._live_jaw_cube_offset_w = (jaw_pos_w - cube_pos_w).detach()
 
     def observe_pick_cube(self, pick_cube: bool | torch.Tensor, env) -> bool:
         """Debounce geometric pick feedback before holding the measured gripper angle."""
@@ -427,7 +477,10 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
                     f"stable_streak={self._gripper_settle_streak}"
                 )
         elif self._state == "lift":
-            if self._state_step >= self.GRASP_CHECK_INTERVAL and self._state_step % self.GRASP_CHECK_INTERVAL == 0:
+            if (
+                self._state_step >= self.LIFT_GRASP_CHECK_START_STEPS
+                and self._state_step % self.GRASP_CHECK_INTERVAL == 0
+            ):
                 if not self._object_grasped(env):
                     self._fail("Autogen grasp check failed during lift")
                     return
@@ -453,9 +506,44 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
                 self.grasp_lost_before_release = True
                 self._fail("object lost during Autogen transport")
                 return
-            if self._update_move():
-                self.box_aligned_before_release = True
-                self._transition("release")
+            reference_complete = self._update_move()
+            assert self._command_pos_b is not None
+            robot = env.scene["robot"]
+            command_pos_w = self._base_position_to_world(robot, self._command_pos_b)
+            wrist_pos_w = robot.data.body_pos_w[:, self._wrist_body_index]
+            self._transport_tracking_error = torch.linalg.vector_norm(
+                wrist_pos_w - command_pos_w,
+                dim=-1,
+            ).detach()
+            if self.RELEASE_FROM_SAFE_OVERHEAD:
+                cube_pos_w = env.scene["cube"].data.root_pos_w
+                floor_pos_w = env.scene["target_box_floor"].data.root_pos_w
+                cube_xy_error = torch.linalg.vector_norm(cube_pos_w[:, :2] - floor_pos_w[:, :2], dim=-1)
+                self._overhead_cube_xy_error = cube_xy_error.detach()
+                wall_top_w = floor_pos_w[:, 2] + TARGET_BOX_FLOOR_THICKNESS / 2.0 + TARGET_BOX_WALL_HEIGHT
+                cube_bottom_w = cube_pos_w[:, 2] - CUBE_HALF_HEIGHT
+                safely_above_walls = cube_bottom_w >= wall_top_w + self.OVERHEAD_WALL_CLEARANCE
+                aligned = bool(((cube_xy_error <= self.OVERHEAD_CUBE_XY_TOLERANCE) & safely_above_walls).all().item())
+                self._overhead_alignment_streak = self._overhead_alignment_streak + 1 if aligned else 0
+                if self._overhead_alignment_streak >= self.OVERHEAD_ALIGNMENT_STABLE_STEPS:
+                    self.box_aligned_before_release = True
+                    self._transition("release")
+                    return
+            tracked = reference_complete and bool(
+                (self._transport_tracking_error <= self.TRANSPORT_TRACKING_TOLERANCE).all().item()
+            )
+            self._transport_tracking_streak = self._transport_tracking_streak + 1 if tracked else 0
+            if self._transport_tracking_streak >= self.TRANSPORT_TRACKING_STABLE_STEPS:
+                if self.RELEASE_FROM_SAFE_OVERHEAD:
+                    self._fail("cube never reached the safe overhead release gate during Autogen transport")
+                else:
+                    self.box_aligned_before_release = True
+                    self._transition("release")
+            elif self._state_step > self._move_duration + self.TRANSPORT_SETTLE_TIMEOUT_STEPS:
+                self._fail(
+                    "actual wrist did not settle at the Autogen transport target:"
+                    f"tracking_error_m={float(self._transport_tracking_error.max().item()):.7f}"
+                )
         elif self._state == "release":
             if self.check_success(env):
                 self._transition("return_home")
@@ -510,13 +598,29 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             if env is None:
                 raise RuntimeError("transport initialization requires the environment")
             robot = env.scene["robot"]
-            target = self._world_position_to_base(robot, env.scene["target_box_floor"].data.root_pos_w)
-            # The original _start_transport first creates a 0.25 m target, but
-            # _update_transport replaces it on the next frame with release_height.
-            # Preserve the target that is actually executed by that implementation.
-            target = self._set_world_height(robot, target, self.RELEASE_HEIGHT)
+            box_pos_w = env.scene["target_box_floor"].data.root_pos_w
+            if self.SAFE_OVERHEAD_TRANSPORT:
+                wrist_pos_w = robot.data.body_pos_w[:, self._wrist_body_index]
+                wrist_quat_w = robot.data.body_quat_w[:, self._wrist_body_index]
+                cube_pos_w = env.scene["cube"].data.root_pos_w
+                self._placement_wrist_cube_offset_w = (wrist_pos_w - cube_pos_w).detach().clone()
+                self._transport_command_quat_b = (
+                    quat_mul(quat_inv(robot.data.root_quat_w), wrist_quat_w).detach().clone()
+                )
+                target_w = box_pos_w + self._placement_wrist_cube_offset_w
+                target = self._world_position_to_base(robot, target_w)
+                target = self._set_world_height(robot, target, self.SAFE_HEIGHT)
+            else:
+                target = self._world_position_to_base(robot, box_pos_w)
+                # The original _start_transport first creates a 0.25 m target,
+                # then replaces it with release_height on the next frame.
+                target = self._set_world_height(robot, target, self.RELEASE_HEIGHT)
             self.transport_target_b = target.detach().clone()
-            self._start_move(target, self.TRAVEL_STEP)
+            self._transport_tracking_error = None
+            self._transport_tracking_streak = 0
+            self._overhead_cube_xy_error = None
+            self._overhead_alignment_streak = 0
+            self._start_move(target, self.TRANSPORT_STEP)
         elif state == "release":
             if self._gripper_pick_latch.release():
                 self._held_gripper_angle_release_step = self._step_count
@@ -775,6 +879,42 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
         return self._wrist_position_w
 
     @property
+    def live_gripper_position_w(self) -> torch.Tensor | None:
+        return self._live_gripper_position_w
+
+    @property
+    def live_jaw_position_w(self) -> torch.Tensor | None:
+        return self._live_jaw_position_w
+
+    @property
+    def live_cube_position_w(self) -> torch.Tensor | None:
+        return self._live_cube_position_w
+
+    @property
+    def live_cube_lift_w(self) -> torch.Tensor | None:
+        return self._live_cube_lift_w
+
+    @property
+    def live_wrist_cube_offset_w(self) -> torch.Tensor | None:
+        return self._live_wrist_cube_offset_w
+
+    @property
+    def live_gripper_cube_offset_w(self) -> torch.Tensor | None:
+        return self._live_gripper_cube_offset_w
+
+    @property
+    def live_jaw_cube_offset_w(self) -> torch.Tensor | None:
+        return self._live_jaw_cube_offset_w
+
+    @property
+    def transport_tracking_error(self) -> torch.Tensor | None:
+        return self._transport_tracking_error
+
+    @property
+    def overhead_cube_xy_error(self) -> torch.Tensor | None:
+        return self._overhead_cube_xy_error
+
+    @property
     def descent_wrist_xy_error(self) -> torch.Tensor | None:
         return self._descent_wrist_xy_error
 
@@ -899,6 +1039,7 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "gripper_hold_until": "release",
             "gripper_nominal_target_preserved": True,
             "minimum_confirmed_lift": self.MIN_CONFIRMED_LIFT,
+            "lift_grasp_check_start_steps": self.LIFT_GRASP_CHECK_START_STEPS,
             "gripper_settle_min_steps": self.GRASP_SETTLE_STEPS,
             "gripper_settle_max_steps": self.GRASP_SETTLE_MAX_STEPS,
             "gripper_settle_stable_steps": self.GRASP_SETTLE_STABLE_STEPS,
@@ -913,8 +1054,17 @@ class RedCubeToBoxAutogenReferenceStateMachine(StateMachineBase):
             "transport_height": self.TRANSPORT_HEIGHT,
             "effective_transport_target_height": self.RELEASE_HEIGHT,
             "travel_step": self.TRAVEL_STEP,
+            "transport_step": self.TRANSPORT_STEP,
+            "safe_overhead_transport": self.SAFE_OVERHEAD_TRANSPORT,
+            "release_from_safe_overhead": self.RELEASE_FROM_SAFE_OVERHEAD,
+            "overhead_cube_xy_tolerance": self.OVERHEAD_CUBE_XY_TOLERANCE,
+            "overhead_alignment_stable_steps": self.OVERHEAD_ALIGNMENT_STABLE_STEPS,
+            "overhead_wall_clearance": self.OVERHEAD_WALL_CLEARANCE,
             "descend_step": self.DESCEND_STEP,
             "lift_step": self.LIFT_STEP,
+            "transport_tracking_tolerance": self.TRANSPORT_TRACKING_TOLERANCE,
+            "transport_tracking_stable_steps": self.TRANSPORT_TRACKING_STABLE_STEPS,
+            "transport_settle_timeout_steps": self.TRANSPORT_SETTLE_TIMEOUT_STEPS,
             "close_openness_range": self.CLOSE_OPENNESS_RANGE,
             "height_coordinate": "world_z",
             "descent_wrist_xy_guard": self.MAX_DESCENT_WRIST_XY_ERROR,

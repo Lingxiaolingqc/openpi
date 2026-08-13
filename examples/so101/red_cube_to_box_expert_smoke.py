@@ -436,11 +436,11 @@ def main() -> int:
     import leisaac.tasks  # noqa: F401
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
     import red_cube_to_box_task
-    from red_cube_to_box_task.adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
-    from red_cube_to_box_task.autogen_retreat_transport_state_machine import (
+    from red_cube_to_box_task.failed.adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
+    from red_cube_to_box_task.failed.autogen_retreat_transport_state_machine import (
         RedCubeToBoxAutogenRetreatTransportStateMachine,
     )
-    from red_cube_to_box_task.autogen_independent_retreat_transport_state_machine import (
+    from red_cube_to_box_task.failed.autogen_independent_retreat_transport_state_machine import (
         RedCubeToBoxAutogenIndependentRetreatTransportStateMachine,
     )
     from red_cube_to_box_task.autogen_polar_retreat_transport_state_machine import (
@@ -457,59 +457,59 @@ def main() -> int:
         RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine,
     )
     from red_cube_to_box_task.env_cfg import configure_planar_safety_sensors
-    from red_cube_to_box_task.legacy_gripper_anchor_state_machine import (
+    from red_cube_to_box_task.failed.legacy_gripper_anchor_state_machine import (
         RedCubeToBoxLegacyGripperAnchorStateMachine,
     )
-    from red_cube_to_box_task.legacy_gripper_anchor_relaxed_ik_state_machine import (
+    from red_cube_to_box_task.failed.legacy_gripper_anchor_relaxed_ik_state_machine import (
         RedCubeToBoxLegacyGripperAnchorRelaxedIkStateMachine,
     )
-    from red_cube_to_box_task.legacy_gripper_anchor_planar_ik_state_machine import (
+    from red_cube_to_box_task.failed.legacy_gripper_anchor_planar_ik_state_machine import (
         RedCubeToBoxLegacyGripperAnchorPlanarIkStateMachine,
     )
-    from red_cube_to_box_task.legacy_gripper_anchor_align_then_lower_state_machine import (
+    from red_cube_to_box_task.failed.legacy_gripper_anchor_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine,
     )
-    from red_cube_to_box_task.legacy_gripper_anchor_position_align_then_lower_state_machine import (
+    from red_cube_to_box_task.failed.legacy_gripper_anchor_position_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorPositionAlignThenLowerStateMachine,
     )
-    from red_cube_to_box_task.legacy_gripper_anchor_weighted_position_align_then_lower_state_machine import (
+    from red_cube_to_box_task.failed.legacy_gripper_anchor_weighted_position_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorWeightedPositionAlignThenLowerStateMachine,
     )
-    from red_cube_to_box_task.legacy_gripper_anchor_safe_planar_align_then_lower_state_machine import (
+    from red_cube_to_box_task.failed.legacy_gripper_anchor_safe_planar_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorSafePlanarAlignThenLowerStateMachine,
     )
-    from red_cube_to_box_task.legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower_state_machine import (
+    from red_cube_to_box_task.failed.legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorSafeDirectJawXyzPanNullspaceAlignThenLowerStateMachine,
     )
-    from red_cube_to_box_task.legacy_gripper_anchor_safe_jaw_trajectory_direct_xyz_pan_nullspace_align_then_lower_state_machine import (
+    from red_cube_to_box_task.failed.legacy_gripper_anchor_safe_jaw_trajectory_direct_xyz_pan_nullspace_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorSafeJawTrajectoryDirectXyzPanNullspaceAlignThenLowerStateMachine,
     )
-    from red_cube_to_box_task.legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower_state_machine import (
+    from red_cube_to_box_task.failed.legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorSafeXyzPanNullspaceAlignThenLowerStateMachine,
     )
-    from red_cube_to_box_task.legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower_state_machine import (
+    from red_cube_to_box_task.failed.legacy_gripper_anchor_safe_xyz_pitch_pan_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorSafeXyzPitchPanAlignThenLowerStateMachine,
     )
-    from red_cube_to_box_task.legacy_gripper_anchor_safe_xyz_tilt_align_then_lower_state_machine import (
+    from red_cube_to_box_task.failed.legacy_gripper_anchor_safe_xyz_tilt_align_then_lower_state_machine import (
         RedCubeToBoxLegacyGripperAnchorSafeXyzTiltAlignThenLowerStateMachine,
     )
-    from red_cube_to_box_task.jaw_frame_xyz_tilt_state_machine import RedCubeToBoxJawFrameXyzTiltStateMachine
-    from red_cube_to_box_task.legacy_dynamic_grasp_offset_state_machine import (
+    from red_cube_to_box_task.failed.jaw_frame_xyz_tilt_state_machine import RedCubeToBoxJawFrameXyzTiltStateMachine
+    from red_cube_to_box_task.failed.legacy_dynamic_grasp_offset_state_machine import (
         RedCubeToBoxLegacyDynamicGraspOffsetStateMachine,
     )
-    from red_cube_to_box_task.legacy_dynamic_grasp_offset_residual_corrected_state_machine import (
+    from red_cube_to_box_task.failed.legacy_dynamic_grasp_offset_residual_corrected_state_machine import (
         RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine,
     )
-    from red_cube_to_box_task.legacy_weighted_servo_state_machine import (
+    from red_cube_to_box_task.failed.legacy_weighted_servo_state_machine import (
         RedCubeToBoxLegacyWeightedServoStateMachine,
     )
-    from red_cube_to_box_task.legacy_position_servo_state_machine import (
+    from red_cube_to_box_task.failed.legacy_position_servo_state_machine import (
         RedCubeToBoxLegacyPositionServoStateMachine,
     )
-    from red_cube_to_box_task.legacy_pd_position_servo_state_machine import (
+    from red_cube_to_box_task.failed.legacy_pd_position_servo_state_machine import (
         RedCubeToBoxLegacyPdPositionServoStateMachine,
     )
-    from red_cube_to_box_task.legacy_trajectory_pd_servo_state_machine import (
+    from red_cube_to_box_task.failed.legacy_trajectory_pd_servo_state_machine import (
         RedCubeToBoxLegacyTrajectoryPdServoStateMachine,
     )
     from red_cube_to_box_task.phase_aware_ik_action import (
@@ -517,9 +517,9 @@ def main() -> int:
         configure_servo_ik_action,
         resolve_action_term,
     )
-    from red_cube_to_box_task.servo_state_machine import RedCubeToBoxServoStateMachine
+    from red_cube_to_box_task.failed.servo_state_machine import RedCubeToBoxServoStateMachine
     from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
-    from red_cube_to_box_task.weighted_servo_state_machine import RedCubeToBoxWeightedServoStateMachine
+    from red_cube_to_box_task.failed.weighted_servo_state_machine import RedCubeToBoxWeightedServoStateMachine
     # isort: on
 
     status = 1
@@ -847,6 +847,20 @@ def main() -> int:
                         f"pick_hold_loss_streak={state_machine.pick_hold_loss_streak}:"
                         f"wrist_position_w="
                         f"{None if state_machine.wrist_position_w is None else _rounded_row(state_machine.wrist_position_w[0], digits=7)}:"
+                        f"live_gripper_position_w="
+                        f"{None if state_machine.live_gripper_position_w is None else _rounded_row(state_machine.live_gripper_position_w[0], digits=7)}:"
+                        f"live_jaw_position_w="
+                        f"{None if state_machine.live_jaw_position_w is None else _rounded_row(state_machine.live_jaw_position_w[0], digits=7)}:"
+                        f"live_cube_position_w="
+                        f"{None if state_machine.live_cube_position_w is None else _rounded_row(state_machine.live_cube_position_w[0], digits=7)}:"
+                        f"live_cube_lift_w="
+                        f"{None if state_machine.live_cube_lift_w is None else _rounded_row(state_machine.live_cube_lift_w, digits=7)}:"
+                        f"live_wrist_cube_offset_w="
+                        f"{None if state_machine.live_wrist_cube_offset_w is None else _rounded_row(state_machine.live_wrist_cube_offset_w[0], digits=7)}:"
+                        f"live_gripper_cube_offset_w="
+                        f"{None if state_machine.live_gripper_cube_offset_w is None else _rounded_row(state_machine.live_gripper_cube_offset_w[0], digits=7)}:"
+                        f"live_jaw_cube_offset_w="
+                        f"{None if state_machine.live_jaw_cube_offset_w is None else _rounded_row(state_machine.live_jaw_cube_offset_w[0], digits=7)}:"
                         f"descent_wrist_xy_error="
                         f"{None if state_machine.descent_wrist_xy_error is None else _rounded_row(state_machine.descent_wrist_xy_error, digits=7)}:"
                         f"approach_tracking_error="
@@ -927,7 +941,11 @@ def main() -> int:
                         f"retreat_target_b="
                         f"{None if state_machine.retreat_target_b is None else _rounded_row(state_machine.retreat_target_b[0], digits=7)}:"
                         f"transport_target_b="
-                        f"{None if state_machine.transport_target_b is None else _rounded_row(state_machine.transport_target_b[0], digits=7)}",
+                        f"{None if state_machine.transport_target_b is None else _rounded_row(state_machine.transport_target_b[0], digits=7)}:"
+                        f"transport_tracking_error_m="
+                        f"{None if state_machine.transport_tracking_error is None else _rounded_row(state_machine.transport_tracking_error, digits=7)}:"
+                        f"overhead_cube_xy_error_m="
+                        f"{None if state_machine.overhead_cube_xy_error is None else _rounded_row(state_machine.overhead_cube_xy_error, digits=7)}",
                         flush=True,
                     )
                 if (
@@ -1156,9 +1174,7 @@ def main() -> int:
                                 "joint_target_accumulation_step": (
                                     None
                                     if arm_action_term.last_joint_target_accumulation_step is None
-                                    else _rounded_row(
-                                        arm_action_term.last_joint_target_accumulation_step[0], digits=7
-                                    )
+                                    else _rounded_row(arm_action_term.last_joint_target_accumulation_step[0], digits=7)
                                 ),
                                 "controlled_joint_names": controlled_joint_names,
                                 "last_joint_position_target": (

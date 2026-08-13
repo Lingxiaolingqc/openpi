@@ -15,6 +15,29 @@ from .cube_axis_alignment import select_nearest_cube_axis_alignment
 class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAutogenReferenceSlowGraspStateMachine):
     """Freeze four arm joints and align cube edges with wrist_roll before closing."""
 
+    # Contact impulses keep the simulated gripper joint's instantaneous
+    # velocity near 0.2 rad/s even after its aperture has effectively stopped
+    # changing.  Permit the pick latch to capture that contact equilibrium;
+    # grasp_settle still requires a stable multi-frame aperture window before
+    # releasing the direct arm hold and lifting.
+    PICK_HOLD_VELOCITY_TOLERANCE = 0.25
+    # The 0.01 rad margin used in the first Windows smoke was effectively
+    # identical to the random nominal close target and produced contact
+    # without enough normal force to carry the cube.  Keep commanding below
+    # the minimum aperture observed throughout the confirmed pick window.
+    PICK_HOLD_SAFETY_CLOSURE = 0.04
+
+    # This port controls the wrist frame, whose grasp pose is already about
+    # 0.212 m above the table.  The bundled 0.20 m lift height would therefore
+    # command a downward step.  Lift to the existing safe/retreat height so
+    # the first post-grasp motion is strictly upward and Z stays continuous.
+    LIFT_HEIGHT = 0.30
+    LIFT_STEP = 0.0005
+    LIFT_GRASP_CHECK_START_STEPS = 90
+    TRANSPORT_STEP = 0.0005
+    SAFE_OVERHEAD_TRANSPORT = True
+    RELEASE_FROM_SAFE_OVERHEAD = True
+
     AXIS_ALIGNMENT_TOLERANCE = math.radians(5.0)
     AXIS_ALIGNMENT_STABLE_STEPS = 10
     AXIS_ALIGNMENT_HOLD_SETTLE_STEPS = 8
@@ -231,6 +254,10 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
 
     def _update_posture_target(self, env) -> None:
         assert self._arm_action_term is not None
+        if self._state == "transport":
+            self._arm_action_term.clear_direct_joint_position_target()
+            self._arm_action_term.set_xyz_tilt(enabled=True)
+            return
         if self._state == "ray_hit_tracking_settle":
             assert self._ray_hit_tracking_target_b is not None
             self._command_pos_b = self._ray_hit_tracking_target_b.detach().clone()
@@ -550,4 +577,8 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
             "pick_cube_semantics": "jaw_distance_and_gripper_angle_only;not_used_to_release_arm_hold",
             "post_alignment_gate": "direct_to_slow_grasp_without_cartesian_redescent",
             "post_grasp_transition": "direct_hold_to_lift_without_stationary_contact_wait",
+            "transport_ik_mode": "xyz_tilt(xyz+world_roll_pitch,yaw_free)",
+            "transport_orientation_target": "wrist_roll_pitch_frozen_at_transport_entry",
+            "placement_anchor": "measured_wrist_minus_cube_at_transport_entry",
+            "placement_release_gate": "measured_cube_xy_centered_and_bottom_above_walls",
         }
