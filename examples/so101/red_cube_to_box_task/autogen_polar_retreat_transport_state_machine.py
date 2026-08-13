@@ -22,6 +22,7 @@ _WRIST_SAFE_HEIGHT_ABOVE_FLOOR_CENTER = 0.255
 _RETREAT_REFERENCE_STEP = 0.0004
 _ARC_REFERENCE_STEP = 0.0010
 _RADIAL_REFERENCE_STEP = 0.0010
+_BOX_HOVER_HEIGHT_ABOVE_FLOOR_CENTER = 0.22
 _BEARING_TOLERANCE = math.radians(3.0)
 _RETREAT_BEARING_TOLERANCE = math.radians(10.0)
 _WRIST_POSTURE_DAMPING = 0.04
@@ -214,6 +215,8 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             self._update_polar_convergence(env, phase)
         elif phase == "lower_into_box" and not self._episode_done:
             self._update_lower_convergence(env)
+        elif phase == "retract_gripper" and not self._episode_done:
+            self._update_vertical_convergence(env, phase)
         elif phase in self._MOTION_PHASE_LIMITS and not self._episode_done:
             self._update_motion_convergence(env, phase)
         return self._compose_pose_action_with_quaternion(env, target_w, target_quat_w, gripper)
@@ -484,6 +487,9 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         assert self._floor_anchor_w is not None
         start_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :].detach().clone()
         target_w = self._floor_anchor_w.clone()
+        jaw_w = env.scene["ee_frame"].data.target_pos_w[:, 1, :].detach()
+        jaw_from_gripper_xy = jaw_w[:, :2] - start_w[:, :2]
+        target_w[:, :2] -= jaw_from_gripper_xy
         if self._transport_height is None:
             self._transport_height = start_w[:, 2].detach().clone()
         target_w[:, 2] = self._transport_height
@@ -505,6 +511,12 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         if self._motion_start_w is not None:
             return
         super()._initialize_lower(env)
+        assert self._motion_start_w is not None
+        assert self._motion_target_w is not None
+        # Radial transfer aligned the jaw/cube with the box. Descend from the
+        # achieved gripper XY instead of moving the gripper origin to the box
+        # center and undoing that alignment.
+        self._motion_target_w[:, :2] = self._motion_start_w[:, :2]
         assert self._arm_action_term is not None
         robot = env.scene["robot"]
         controlled_joint_indices = [
@@ -513,6 +525,21 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
         self._lower_posture_target = robot.data.joint_pos[:, controlled_joint_indices].detach().clone()
         self._enable_position_joint_target_accumulation()
         self._arm_action_term.reset_joint_target_accumulation_reference()
+
+    def _initialize_release(self, env) -> None:
+        if self._motion_target_w is not None:
+            return
+        actual_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :].detach().clone()
+        self._set_motion(actual_w, actual_w)
+
+    def _initialize_retract(self, env) -> None:
+        if self._motion_start_w is not None:
+            return
+        assert self._floor_anchor_w is not None
+        start_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :].detach().clone()
+        target_w = start_w.clone()
+        target_w[:, 2] = self._floor_anchor_w[:, 2] + _BOX_HOVER_HEIGHT_ABOVE_FLOOR_CENTER
+        self._set_motion(start_w, target_w)
 
     def _polar_linear_reference(self, maximum_step: float) -> torch.Tensor:
         assert self._motion_start_w is not None
@@ -579,11 +606,16 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
     def _update_lower_convergence(self, env) -> None:
         """Accept the safe release height without blocking on an IK-induced XY compromise."""
 
+        self._update_vertical_convergence(env, "lower_into_box")
+
+    def _update_vertical_convergence(self, env, phase: str) -> None:
+        """Complete a vertical placement motion from its actual handoff XY."""
+
         assert self._motion_target_w is not None
         actual_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :]
         z_error = torch.abs(self._motion_target_w[:, 2] - actual_w[:, 2])
         self._target_error = float(z_error.max().item())
-        _, _, tolerance, stable_steps = self._MOTION_PHASE_LIMITS["lower_into_box"]
+        _, _, tolerance, stable_steps = self._MOTION_PHASE_LIMITS[phase]
         if self._target_error <= tolerance:
             self._target_stable_streak += 1
         else:
@@ -706,9 +738,13 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIn
             "arc_path": "root_centered_constant_radius_wrist_arc",
             "radial_control_body": "gripper",
             "radial_ik_mode": "gripper_xyz_plus_soft_handoff_joint_posture_in_nullspace",
+            "radial_target_policy": "box_center_minus_live_jaw_from_gripper_xy_offset",
             "lower_control_body": "gripper",
             "lower_ik_mode": "gripper_xyz_plus_soft_lower_entry_joint_posture_in_nullspace",
+            "lower_path": "vertical_from_actual_jaw_aligned_gripper_xy",
             "lower_completion_policy": "actual_gripper_z_within_tolerance",
+            "release_policy": "open_at_actual_lower_handoff_pose",
+            "retract_path": "vertical_from_actual_release_xy",
             "pre_retreat_gripper_gate": "half_closed_and_near_cube_stable",
             "gripper_close_minimum_steps": _GRIPPER_CLOSE_MINIMUM_STEPS,
             "gripper_close_maximum_steps": _GRIPPER_CLOSE_MAXIMUM_STEPS,

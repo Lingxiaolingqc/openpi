@@ -144,6 +144,8 @@ def test_radial_transfer_rebases_accumulator_and_uses_gripper_position_only() ->
     assert "self._radial_posture_target" in initialize_source
     assert "self._enable_position_joint_target_accumulation()" in initialize_source
     assert "reset_joint_target_accumulation_reference" in initialize_source
+    assert "jaw_from_gripper_xy = jaw_w[:, :2] - start_w[:, :2]" in initialize_source
+    assert "target_w[:, :2] -= jaw_from_gripper_xy" in initialize_source
     assert "set_control_body(body_name='gripper')" in configure_source
     assert "set_position_only_nullspace_posture_target" in configure_source
 
@@ -153,16 +155,30 @@ def test_lower_rebases_position_only_accumulator_and_completes_on_z() -> None:
     initialize_source = ast.unparse(_method("_initialize_lower"))
     configure_source = ast.unparse(_method("_configure_lower_position_posture_mode"))
     convergence_source = ast.unparse(_method("_update_lower_convergence"))
+    vertical_convergence_source = ast.unparse(_method("_update_vertical_convergence"))
 
     assert "self._configure_lower_position_posture_mode()" in get_action_source
     assert "self._update_lower_convergence(env)" in get_action_source
     assert "self._lower_posture_target" in initialize_source
     assert "self._enable_position_joint_target_accumulation()" in initialize_source
     assert "reset_joint_target_accumulation_reference" in initialize_source
+    assert "self._motion_target_w[:, :2] = self._motion_start_w[:, :2]" in initialize_source
     assert "set_control_body(body_name='gripper')" in configure_source
     assert "set_position_only_nullspace_posture_target" in configure_source
-    assert "torch.abs(self._motion_target_w[:, 2] - actual_w[:, 2])" in convergence_source
-    assert "vector_norm" not in convergence_source
+    assert "self._update_vertical_convergence(env, 'lower_into_box')" in convergence_source
+    assert "torch.abs(self._motion_target_w[:, 2] - actual_w[:, 2])" in vertical_convergence_source
+    assert "vector_norm" not in vertical_convergence_source
+
+
+def test_release_holds_actual_pose_and_retracts_vertically() -> None:
+    release_source = ast.unparse(_method("_initialize_release"))
+    retract_source = ast.unparse(_method("_initialize_retract"))
+    get_action_source = ast.unparse(_method("get_action"))
+
+    assert "self._set_motion(actual_w, actual_w)" in release_source
+    assert "target_w = start_w.clone()" in retract_source
+    assert "target_w[:, 2] = self._floor_anchor_w[:, 2] + _BOX_HOVER_HEIGHT_ABOVE_FLOOR_CENTER" in retract_source
+    assert "self._update_vertical_convergence(env, phase)" in get_action_source
 
 
 def test_xz_joint_mode_omits_y_position_and_jacobian_rows() -> None:
