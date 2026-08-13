@@ -11,6 +11,7 @@ SOURCE_PATH = (
 IK_ACTION_PATH = Path(__file__).resolve().parent / "red_cube_to_box_task" / "phase_aware_ik_action.py"
 POLAR_BASE_PATH = Path(__file__).resolve().parent / "red_cube_to_box_task" / "polar_base_state_machine.py"
 FAILED_ROOT = Path(__file__).resolve().parent / "red_cube_to_box_task" / "failed"
+BATCH_PATH = Path(__file__).resolve().parent / "red_cube_to_box_expert_batch.py"
 CLASS_NAME = "RedCubeToBoxAutogenPolarRetreatTransportStateMachine"
 
 
@@ -46,6 +47,18 @@ def test_polar_uses_active_base_while_independent_remains_an_archived_compatibil
     compatibility_class = next(node for node in compatibility_tree.body if isinstance(node, ast.ClassDef))
     assert compatibility_class.name == "RedCubeToBoxAutogenIndependentRetreatTransportStateMachine"
     assert [ast.unparse(base) for base in compatibility_class.bases] == ["RedCubeToBoxPolarBaseStateMachine"]
+
+
+def test_max_steps_does_not_use_a_class_scope_comprehension() -> None:
+    class_node = _class_node()
+    max_steps = next(
+        statement
+        for statement in class_node.body
+        if isinstance(statement, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "MAX_STEPS" for target in statement.targets)
+    )
+
+    assert not any(isinstance(node, (ast.GeneratorExp, ast.ListComp)) for node in ast.walk(max_steps.value))
 
 
 def test_failed_experts_keep_their_existing_smoke_and_batch_cli_registrations() -> None:
@@ -270,5 +283,44 @@ def test_close_phase_has_feedback_settle_gate() -> None:
 
     settle_source = ast.unparse(_method("_update_gripper_settle"))
     assert "_GRASP_CONFIRM_DISTANCE" in settle_source
-    assert "halfway_closed & close_enough_to_cube" in settle_source
+    assert "_GRIPPER_SETTLE_WINDOW_STEPS" in settle_source
+    assert "_GRIPPER_SETTLE_ANGLE_SPAN_TOLERANCE" in settle_source
+    assert "halfway_closed & grasp_geometry_confirmed & aperture_stable" in settle_source
     assert "_GRIPPER_SETTLE_VELOCITY_TOLERANCE" not in settle_source
+
+
+def test_randomized_pickup_preserves_known_full_pose_fixed_keyframes() -> None:
+    get_action_source = ast.unparse(_method("get_action"))
+    retreat_source = ast.unparse(_method("_initialize_polar_retreat"))
+
+    pickup_branch = get_action_source.split("if phase in {'approach_cube', 'descend_to_cube', 'close_gripper'}:", 1)[1]
+    pickup_branch = pickup_branch.split("if self._arm_action_term is None:", 1)[0]
+    assert "_configure_pickup_position_posture_mode" not in pickup_branch
+    assert "_update_pickup_convergence" not in pickup_branch
+    assert "reset_joint_target_accumulation_reference" in retreat_source
+
+
+def test_close_gate_debounces_pick_feedback_without_bypassing_aperture_stability() -> None:
+    observe_source = ast.unparse(_method("observe_pick_cube"))
+    settle_source = ast.unparse(_method("_update_gripper_settle"))
+    retreat_source = ast.unparse(_method("_initialize_polar_retreat"))
+
+    assert "_PICK_FEEDBACK_STABLE_STEPS" in observe_source
+    assert "self._pick_feedback_streak = 0" in observe_source
+    assert "self._grasp_geometry_latched = True" in settle_source
+    assert "self._grasp_geometry_latched or self._pick_feedback_confirmed" in settle_source
+    assert "aperture_stable" in settle_source
+    assert "self._grasp_geometry_latched" in retreat_source
+
+
+def test_batch_can_record_each_randomized_episode_under_one_root() -> None:
+    source = BATCH_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(BATCH_PATH))
+    main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
+    main_source = ast.unparse(main)
+
+    assert '"--record_dir"' in source
+    assert '"--record_every"' in source
+    assert "_DiagnosticRecorder" in main_source
+    assert "episode{episode_index:03d}" in main_source
+    assert "recorder.finish" in main_source

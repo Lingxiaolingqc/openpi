@@ -34,17 +34,20 @@ _RETREAT_SEGMENT_STABLE_STEPS = 15
 _GRASP_CONFIRM_DISTANCE = 0.015
 _GRASP_LOSS_DISTANCE = 0.025
 _GRIPPER_CLOSE_MINIMUM_STEPS = 80
-_GRIPPER_CLOSE_MAXIMUM_STEPS = 200
+_GRIPPER_CLOSE_MAXIMUM_STEPS = 320
 _GRIPPER_SETTLE_STABLE_STEPS = 8
+_GRIPPER_SETTLE_WINDOW_STEPS = 12
+_GRIPPER_SETTLE_ANGLE_SPAN_TOLERANCE = 0.01
+_PICK_FEEDBACK_STABLE_STEPS = 3
 _SMOOTHERSTEP_MAX_DERIVATIVE = 1.875
 
 
 class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBaseStateMachine):
     """Use a short retreat, root-centered arc, and radial box approach.
 
-    Pickup and placement behavior intentionally reuse the independent expert.
-    Only the grasped-object path is replaced, making this a controlled
-    comparison against its single-line retreat and transfer trajectory.
+    Placement retains the shared polar-base geometry. Pickup adds measured XYZ
+    handoffs and feedback-settled closing so domain-randomized poses cannot
+    enter retreat merely because a fixed keyframe duration elapsed.
     """
 
     _FIXED_PHASE_STEPS: ClassVar[dict[str, int]] = {
@@ -74,8 +77,15 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
     )
     MAX_STEPS = (
         _GRIPPER_CLOSE_MAXIMUM_STEPS
-        + sum(_FIXED_PHASE_STEPS.values())
-        + sum(maximum_steps for _, maximum_steps, _, _ in _MOTION_PHASE_LIMITS.values())
+        + _FIXED_PHASE_STEPS["approach_cube"]
+        + _FIXED_PHASE_STEPS["descend_to_cube"]
+        + _FIXED_PHASE_STEPS["release_cube"]
+        + _FIXED_PHASE_STEPS["settle"]
+        + _MOTION_PHASE_LIMITS["retreat_to_safe"][1]
+        + _MOTION_PHASE_LIMITS["arc_transfer"][1]
+        + _MOTION_PHASE_LIMITS["radial_transfer"][1]
+        + _MOTION_PHASE_LIMITS["lower_into_box"][1]
+        + _MOTION_PHASE_LIMITS["retract_gripper"][1]
     )
 
     def __init__(self) -> None:
@@ -106,8 +116,14 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         self._gripper_open_position: torch.Tensor | None = None
         self._gripper_target_error: float | None = None
         self._gripper_joint_velocity: float | None = None
+        self._gripper_settle_angle_window: list[float] = []
+        self._gripper_settle_angle_span: float | None = None
         self._gripper_settle_streak = 0
         self._gripper_settle_reason: str | None = None
+        self._pick_feedback_streak = 0
+        self._pick_feedback_confirmed = False
+        self._grasp_geometry_latched = False
+        self._minimum_jaw_cube_distance: float | None = None
         self._position_joint_target_accumulation_enabled = False
 
     def setup(self, env) -> None:
@@ -224,7 +240,8 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
 
         if self._episode_done:
             return
-        if self.phase_name != "close_gripper":
+        phase = self.phase_name
+        if phase != "close_gripper":
             super().advance()
             return
 
@@ -241,6 +258,10 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
                 f"target_error={self._gripper_target_error}:"
                 f"velocity={self._gripper_joint_velocity}:"
                 f"jaw_cube_distance={self._jaw_cube_distance}:"
+                f"minimum_jaw_cube_distance={self._minimum_jaw_cube_distance}:"
+                f"grasp_geometry_latched={self._grasp_geometry_latched}:"
+                f"angle_span={self._gripper_settle_angle_span}:"
+                f"pick_feedback_streak={self._pick_feedback_streak}:"
                 f"stable_streak={self._gripper_settle_streak}"
             )
             self._servo_abort_reason = reason
@@ -256,6 +277,24 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         self._current_target_quat_w = None
         self._bearing_error = None
         self._reference_finished = False
+
+    def observe_pick_cube(self, pick_cube: bool | torch.Tensor, env) -> bool:
+        """Debounce the task's geometric grasp signal during the close phase."""
+
+        del env
+        picked = bool(pick_cube.all().item()) if isinstance(pick_cube, torch.Tensor) else bool(pick_cube)
+        if self.phase_name != "close_gripper":
+            self._pick_feedback_streak = 0
+            return False
+        if picked:
+            self._pick_feedback_streak += 1
+        else:
+            self._pick_feedback_streak = 0
+        if self._pick_feedback_streak >= _PICK_FEEDBACK_STABLE_STEPS:
+            self._pick_feedback_confirmed = True
+        # The runner interprets True as "captured a held gripper angle". Polar
+        # only consumes the debounced Boolean and keeps commanding nominal close.
+        return False
 
     def _retreat_control_position_w(self, env) -> torch.Tensor:
         assert self._wrist_body_index is not None
@@ -326,14 +365,35 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         target_error = torch.abs(gripper_position - STATE_MACHINE_GRIPPER_CLOSE_POSITION)
         halfway_closed = gripper_position <= 0.5 * (self._gripper_open_position + STATE_MACHINE_GRIPPER_CLOSE_POSITION)
         close_enough_to_cube = jaw_cube_distance <= _GRASP_CONFIRM_DISTANCE
-        settled = halfway_closed & close_enough_to_cube
+        current_distance = float(jaw_cube_distance.max().item())
+        if self._minimum_jaw_cube_distance is None:
+            self._minimum_jaw_cube_distance = current_distance
+        else:
+            self._minimum_jaw_cube_distance = min(self._minimum_jaw_cube_distance, current_distance)
+        if bool(close_enough_to_cube.all().item()):
+            self._grasp_geometry_latched = True
+        self._gripper_settle_angle_window.append(float(gripper_position.max().item()))
+        del self._gripper_settle_angle_window[: -_GRIPPER_SETTLE_WINDOW_STEPS]
+        window_ready = len(self._gripper_settle_angle_window) >= _GRIPPER_SETTLE_WINDOW_STEPS
+        if window_ready:
+            self._gripper_settle_angle_span = max(self._gripper_settle_angle_window) - min(
+                self._gripper_settle_angle_window
+            )
+        else:
+            self._gripper_settle_angle_span = None
+        grasp_geometry_confirmed = self._grasp_geometry_latched or self._pick_feedback_confirmed
+        aperture_stable = window_ready and (
+            self._gripper_settle_angle_span is not None
+            and self._gripper_settle_angle_span <= _GRIPPER_SETTLE_ANGLE_SPAN_TOLERANCE
+        )
+        settled = halfway_closed & grasp_geometry_confirmed & aperture_stable
 
         self._jaw_cube_distance = float(jaw_cube_distance.max().item())
         self._gripper_target_error = float(target_error.max().item())
         self._gripper_joint_velocity = float(gripper_velocity.max().item())
         if self._phase_step >= _GRIPPER_CLOSE_MINIMUM_STEPS and bool(settled.all().item()):
             self._gripper_settle_streak += 1
-            self._gripper_settle_reason = "half_closed_near_cube"
+            self._gripper_settle_reason = "confirmed_grasp_and_stable_aperture_window"
         else:
             self._gripper_settle_streak = 0
             self._gripper_settle_reason = None
@@ -352,7 +412,11 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         jaw_w = env.scene["ee_frame"].data.target_pos_w[:, 1, :]
         cube_w = env.scene["cube"].data.root_pos_w
         self._jaw_cube_distance = float(torch.linalg.vector_norm(jaw_w - cube_w, dim=-1).max().item())
-        self._grasp_confirmed = self._jaw_cube_distance <= _GRASP_CONFIRM_DISTANCE
+        self._grasp_confirmed = (
+            self._grasp_geometry_latched
+            or self._pick_feedback_confirmed
+            or self._jaw_cube_distance <= _GRASP_CONFIRM_DISTANCE
+        )
         assert self._arm_action_term is not None
         robot = env.scene["robot"]
         controlled_joint_indices = [
@@ -360,6 +424,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         ]
         self._wrist_posture_target = robot.data.joint_pos[:, controlled_joint_indices].detach().clone()
         self._enable_position_joint_target_accumulation()
+        self._arm_action_term.reset_joint_target_accumulation_reference()
         self._retreat_subphase = "vertical_lift"
         self._retreat_safe_z = lift_target_w[:, 2].detach().clone()
         self._retreat_bearing = None
@@ -743,10 +808,15 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
             "lower_completion_policy": "actual_gripper_z_within_tolerance",
             "release_policy": "open_at_actual_lower_handoff_pose",
             "retract_path": "vertical_from_actual_release_xy",
-            "pre_retreat_gripper_gate": "half_closed_and_near_cube_stable",
+            "pre_retreat_gripper_gate": "confirmed_grasp_and_stable_aperture_window",
+            "pickup_ik_mode": "full_6d_pose_preserving_known_grasp_geometry",
+            "pickup_completion_policy": "known_fixed_keyframe_timing",
             "gripper_close_minimum_steps": _GRIPPER_CLOSE_MINIMUM_STEPS,
             "gripper_close_maximum_steps": _GRIPPER_CLOSE_MAXIMUM_STEPS,
             "gripper_settle_stable_steps": _GRIPPER_SETTLE_STABLE_STEPS,
+            "gripper_settle_window_steps": _GRIPPER_SETTLE_WINDOW_STEPS,
+            "gripper_settle_angle_span_tolerance_rad": _GRIPPER_SETTLE_ANGLE_SPAN_TOLERANCE,
+            "pick_feedback_stable_steps": _PICK_FEEDBACK_STABLE_STEPS,
             "retreat_bearing_policy": "preserved_by_xy_scaling_and_checked_with_relaxed_10deg_gate",
             "retreat_z_overshoot_limit": _RETREAT_Z_OVERSHOOT_LIMIT,
             "retreat_error_worsening_margin": _RETREAT_ERROR_WORSENING_MARGIN,
@@ -821,9 +891,25 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         return self._gripper_joint_velocity
 
     @property
+    def gripper_settle_angle_span(self) -> float | None:
+        return self._gripper_settle_angle_span
+
+    @property
     def gripper_settle_streak(self) -> int:
         return self._gripper_settle_streak
 
     @property
     def gripper_settle_reason(self) -> str | None:
         return self._gripper_settle_reason
+
+    @property
+    def pick_feedback_streak(self) -> int:
+        return self._pick_feedback_streak
+
+    @property
+    def grasp_geometry_latched(self) -> bool:
+        return self._grasp_geometry_latched
+
+    @property
+    def minimum_jaw_cube_distance(self) -> float | None:
+        return self._minimum_jaw_cube_distance

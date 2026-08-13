@@ -56,6 +56,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--minimum_success_rate", type=float, default=0.9)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--record_dir",
+        default=os.environ.get("RED_CUBE_TO_BOX_RECORD_DIR"),
+        help="Optional root for one diagnostic recording directory per batch episode.",
+    )
+    parser.add_argument("--record_every", type=int, default=4)
+    parser.add_argument("--record_fps", type=float, default=15.0)
+    parser.add_argument("--jpeg_quality", type=int, default=85)
     AppLauncher.add_app_launcher_args(parser)
     return parser
 
@@ -68,10 +76,21 @@ def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
 
+    # Do not let off-screen cameras inherit a persistent Isaac Sim user setting
+    # with all RTX modes disabled: the sensor remains present but returns zeros.
+    if args.enable_cameras and args.rendering_mode is None:
+        args.rendering_mode = "performance"
+
     if args.episodes < 1:
         parser.error("--episodes must be at least 1")
     if not 0.0 <= args.minimum_success_rate <= 1.0:
         parser.error("--minimum_success_rate must be between 0 and 1")
+    if args.record_every <= 0:
+        parser.error("--record_every must be positive")
+    if args.record_fps <= 0:
+        parser.error("--record_fps must be positive")
+    if not 1 <= args.jpeg_quality <= 100:
+        parser.error("--jpeg_quality must be between 1 and 100")
     if not args.headless:
         parser.error("This batch test requires --headless")
     if not args.enable_cameras:
@@ -83,13 +102,16 @@ def main() -> int:
     if not assets_root.is_dir():
         parser.error(f"Assets root does not exist: {assets_root}")
     os.environ["LEISAAC_ASSETS_ROOT"] = str(assets_root)
+    record_root = Path(args.record_dir).expanduser().resolve() if args.record_dir else None
 
     print("RED_CUBE_TO_BOX_BATCH_PHASE=before_launcher", flush=True)
     print(f"assets_root: {assets_root}", flush=True)
     print(f"requested_device: {args.device}", flush=True)
+    print(f"requested_rendering_mode: {args.rendering_mode}", flush=True)
     print(f"requested_episodes: {args.episodes}", flush=True)
     print(f"minimum_success_rate: {args.minimum_success_rate:.3f}", flush=True)
     print(f"seed: {args.seed}", flush=True)
+    print(f"record_root: {record_root}", flush=True)
 
     app_launcher = AppLauncher(args)
     simulation_app = app_launcher.app
@@ -98,6 +120,7 @@ def main() -> int:
     # isort: off
     import gymnasium as gym
     import torch
+    from PIL import Image
     from isaaclab_tasks.utils import parse_env_cfg
     import leisaac.tasks  # noqa: F401
     from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
@@ -182,6 +205,7 @@ def main() -> int:
     from red_cube_to_box_task.failed.servo_state_machine import RedCubeToBoxServoStateMachine
     from red_cube_to_box_task.state_machine import RedCubeToBoxStateMachine
     from red_cube_to_box_task.failed.weighted_servo_state_machine import RedCubeToBoxWeightedServoStateMachine
+    from red_cube_to_box_expert_smoke import _DiagnosticRecorder
     # isort: on
 
     status = 1
@@ -389,6 +413,19 @@ def main() -> int:
             for episode_index in range(args.episodes):
                 observations, _ = env.reset()
                 state_machine.reset()
+                recorder = None
+                if record_root is not None:
+                    recorder = _DiagnosticRecorder(
+                        root=record_root,
+                        expert=f"{args.expert}-episode{episode_index:03d}",
+                        seed=args.seed,
+                        record_every=args.record_every,
+                        playback_fps=args.record_fps,
+                        jpeg_quality=args.jpeg_quality,
+                        image_class=Image,
+                    )
+                    recorder.capture(0, state_machine.phase_name, observations, env, state_machine, force=True)
+                    print(f"episode_record_dir:{episode_index}:{recorder.run_dir}", flush=True)
                 initial_cube_position = cube.data.root_pos_w[0].clone()
                 initial_cube_positions.append(initial_cube_position)
 
@@ -399,6 +436,7 @@ def main() -> int:
                 transfer_phase_seen = False
                 rewards_finite = True
                 unexpected_reset = False
+                completed_steps = 0
 
                 while not state_machine.is_episode_done:
                     phase_name = state_machine.phase_name
@@ -430,6 +468,16 @@ def main() -> int:
                         transfer_phase_seen = True
                         grasped_at_transfer = pick_cube
                     state_machine.advance()
+                    completed_steps += 1
+                    if recorder is not None:
+                        recorder.capture(
+                            completed_steps,
+                            phase_name,
+                            observations,
+                            env,
+                            state_machine,
+                            force=state_machine.phase_name != phase_name,
+                        )
 
                 success = state_machine.check_success(env)
                 final_offset = cube.data.root_pos_w[0] - floor.data.root_pos_w[0]
@@ -469,6 +517,29 @@ def main() -> int:
                     successful_episodes += 1
                 else:
                     failed_episodes.append(episode_index)
+
+                if recorder is not None:
+                    recorder.capture(
+                        completed_steps,
+                        state_machine.phase_name,
+                        observations,
+                        env,
+                        state_machine,
+                        force=True,
+                    )
+                    recorder.finish(
+                        {
+                            "episode": episode_index,
+                            "seed": args.seed,
+                            "completed_steps": completed_steps,
+                            "success": success,
+                            "ever_grasped": ever_grasped,
+                            "servo_timeout_phase": servo_timeout_phase,
+                            "servo_abort_reason": servo_abort_reason,
+                            "final_offset": _rounded_row(final_offset),
+                            "final_speed": float(final_speed.item()),
+                        }
+                    )
 
                 print(
                     f"episode:{episode_index}:"

@@ -145,6 +145,21 @@ class _DiagnosticRecorder:
 
         relative_path = Path("frames") / f"frame_{len(self._frames):06d}.jpg"
         image = front[0].detach().cpu().numpy()
+        if not self._frames:
+            image_min = int(image.min())
+            image_max = int(image.max())
+            image_mean = float(image.mean())
+            print(
+                "camera_frame_stats:"
+                f"dtype={image.dtype}:shape={tuple(image.shape)}:"
+                f"min={image_min}:max={image_max}:mean={image_mean:.6f}",
+                flush=True,
+            )
+            if image_max == 0:
+                raise RuntimeError(
+                    "Front camera returned an all-zero frame. Pass --rendering_mode performance "
+                    "or inspect persistent Isaac Sim RTX settings."
+                )
         self._image_class.fromarray(image).save(
             self.run_dir / relative_path,
             format="JPEG",
@@ -397,6 +412,12 @@ def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
 
+    # AppLauncher otherwise stores an empty rendering-mode override when cameras
+    # are enabled.  That can inherit a persistent Isaac Sim user setting with
+    # every RTX mode disabled and silently produce all-zero camera tensors.
+    if args.enable_cameras and args.rendering_mode is None:
+        args.rendering_mode = "performance"
+
     if not args.headless:
         parser.error("This expert smoke requires --headless")
     if not args.enable_cameras:
@@ -419,6 +440,7 @@ def main() -> int:
     print("RED_CUBE_TO_BOX_EXPERT_PHASE=before_launcher", flush=True)
     print(f"assets_root: {assets_root}", flush=True)
     print(f"requested_device: {args.device}", flush=True)
+    print(f"requested_rendering_mode: {args.rendering_mode}", flush=True)
 
     app_launcher = AppLauncher(args)
     simulation_app = app_launcher.app
@@ -1045,9 +1067,13 @@ def main() -> int:
                         actual_focus_w=_rounded_row(ee_frame.data.target_pos_w[0, 0], digits=7),
                         gripper_target_error=state_machine.gripper_target_error,
                         gripper_joint_velocity=state_machine.gripper_joint_velocity,
+                        gripper_settle_angle_span=state_machine.gripper_settle_angle_span,
                         gripper_settle_streak=state_machine.gripper_settle_streak,
                         gripper_settle_reason=state_machine.gripper_settle_reason,
+                        pick_feedback_streak=state_machine.pick_feedback_streak,
                         jaw_cube_distance=state_machine.jaw_cube_distance,
+                        minimum_jaw_cube_distance=state_machine.minimum_jaw_cube_distance,
+                        grasp_geometry_latched=state_machine.grasp_geometry_latched,
                         pick_cube=bool(observations["subtask_terms"]["pick_cube"][0].item()),
                     )
                 if (
