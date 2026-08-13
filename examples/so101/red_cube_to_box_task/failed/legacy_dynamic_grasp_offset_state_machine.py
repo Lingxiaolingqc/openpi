@@ -8,8 +8,8 @@ from isaaclab.utils.math import quat_inv
 from isaaclab.utils.math import quat_mul
 import torch
 
-from .env_cfg import TARGET_BOX_FLOOR_THICKNESS
-from .state_machine import RedCubeToBoxStateMachine
+from ..env_cfg import TARGET_BOX_FLOOR_THICKNESS
+from ..state_machine import RedCubeToBoxStateMachine
 
 _GRIPPER_OPEN = 1.0
 _GRIPPER_CLOSE = -1.0

@@ -5,8 +5,8 @@ from __future__ import annotations
 from isaaclab.utils.math import quat_from_euler_xyz
 import torch
 
+from ..phase_aware_ik_action import resolve_action_term
 from .adaptive_state_machine import RedCubeToBoxAdaptiveStateMachine
-from .phase_aware_ik_action import resolve_action_term
 
 _SERVO_KP = 0.25
 _SERVO_MAX_STEP = 0.003

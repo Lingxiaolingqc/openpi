@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import torch
 
-from .env_cfg import CUBE_HALF_HEIGHT
-from .env_cfg import TARGET_BOX_OUTER_SIZE
-from .env_cfg import TARGET_BOX_WALL_TOP_Z
+from ..env_cfg import CUBE_HALF_HEIGHT
+from ..env_cfg import TARGET_BOX_OUTER_SIZE
+from ..env_cfg import TARGET_BOX_WALL_TOP_Z
+from ..phase_aware_ik_action import PhaseAwareDifferentialInverseKinematicsAction
+from ..phase_aware_ik_action import resolve_action_term
 from .legacy_gripper_anchor_align_then_lower_state_machine import (
     RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine,
 )
-from .phase_aware_ik_action import PhaseAwareDifferentialInverseKinematicsAction
-from .phase_aware_ik_action import resolve_action_term
 
 _GRIPPER_CLOSE = -1.0
 _MIN_CUBE_CLEARANCE = 0.015

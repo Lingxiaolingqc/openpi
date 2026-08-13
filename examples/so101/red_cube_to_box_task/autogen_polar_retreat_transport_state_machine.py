@@ -10,10 +10,8 @@ from isaaclab.utils.math import quat_inv
 from isaaclab.utils.math import quat_mul
 import torch
 
-from .autogen_independent_retreat_transport_state_machine import (
-    RedCubeToBoxAutogenIndependentRetreatTransportStateMachine,
-)
 from .env_cfg import STATE_MACHINE_GRIPPER_CLOSE_POSITION
+from .polar_base_state_machine import RedCubeToBoxPolarBaseStateMachine
 
 _GRIPPER_OPEN = 1.0
 _GRIPPER_CLOSE = -1.0
@@ -41,7 +39,7 @@ _GRIPPER_SETTLE_STABLE_STEPS = 8
 _SMOOTHERSTEP_MAX_DERIVATIVE = 1.875
 
 
-class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxAutogenIndependentRetreatTransportStateMachine):
+class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBaseStateMachine):
     """Use a short retreat, root-centered arc, and radial box approach.
 
     Pickup and placement behavior intentionally reuse the independent expert.

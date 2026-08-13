@@ -1,4 +1,4 @@
-"""Independent retreat-then-transport expert for RedCubeToBox."""
+"""Shared pickup and Cartesian transport base for the successful polar expert."""
 
 from __future__ import annotations
 
@@ -33,8 +33,8 @@ _GRASP_CONFIRM_DISTANCE = 0.015
 _GRASP_LOSS_DISTANCE = 0.025
 
 
-class RedCubeToBoxAutogenIndependentRetreatTransportStateMachine(StateMachineBase):
-    """Pick, retreat-and-lift, transport, lower, and release.
+class RedCubeToBoxPolarBaseStateMachine(StateMachineBase):
+    """Provide the pickup, guarded motion, placement, and diagnostics used by polar.
 
     This class deliberately does not inherit any legacy RedCubeToBox expert.
     The known-good pickup keyframes are repeated locally, then one slow

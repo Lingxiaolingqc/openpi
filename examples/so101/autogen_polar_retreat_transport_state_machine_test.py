@@ -9,6 +9,8 @@ SOURCE_PATH = (
     Path(__file__).resolve().parent / "red_cube_to_box_task" / ("autogen_polar_retreat_transport_state_machine.py")
 )
 IK_ACTION_PATH = Path(__file__).resolve().parent / "red_cube_to_box_task" / "phase_aware_ik_action.py"
+POLAR_BASE_PATH = Path(__file__).resolve().parent / "red_cube_to_box_task" / "polar_base_state_machine.py"
+FAILED_ROOT = Path(__file__).resolve().parent / "red_cube_to_box_task" / "failed"
 CLASS_NAME = "RedCubeToBoxAutogenPolarRetreatTransportStateMachine"
 
 
@@ -25,6 +27,35 @@ def _call_names(node: ast.AST) -> set[str]:
     return {
         call.func.attr for call in ast.walk(node) if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
     }
+
+
+def test_polar_uses_active_base_while_independent_remains_an_archived_compatibility_expert() -> None:
+    polar_class = _class_node()
+    assert [ast.unparse(base) for base in polar_class.bases] == ["RedCubeToBoxPolarBaseStateMachine"]
+
+    base_tree = ast.parse(POLAR_BASE_PATH.read_text(encoding="utf-8"), filename=str(POLAR_BASE_PATH))
+    base_classes = {node.name for node in base_tree.body if isinstance(node, ast.ClassDef)}
+    assert "RedCubeToBoxPolarBaseStateMachine" in base_classes
+    assert "RedCubeToBoxAutogenIndependentRetreatTransportStateMachine" not in base_classes
+
+    compatibility_path = FAILED_ROOT / "autogen_independent_retreat_transport_state_machine.py"
+    compatibility_tree = ast.parse(
+        compatibility_path.read_text(encoding="utf-8"),
+        filename=str(compatibility_path),
+    )
+    compatibility_class = next(node for node in compatibility_tree.body if isinstance(node, ast.ClassDef))
+    assert compatibility_class.name == "RedCubeToBoxAutogenIndependentRetreatTransportStateMachine"
+    assert [ast.unparse(base) for base in compatibility_class.bases] == ["RedCubeToBoxPolarBaseStateMachine"]
+
+
+def test_failed_experts_keep_their_existing_smoke_and_batch_cli_registrations() -> None:
+    root = Path(__file__).resolve().parent
+    for runner_name in ("red_cube_to_box_expert_smoke.py", "red_cube_to_box_expert_batch.py"):
+        source = (root / runner_name).read_text(encoding="utf-8")
+        assert "red_cube_to_box_task.failed.autogen_independent_retreat_transport_state_machine" in source
+        assert '"autogen_independent_retreat_transport"' in source
+        assert "red_cube_to_box_task.failed.servo_state_machine" in source
+        assert '"servo"' in source
 
 
 def test_retreat_controls_wrist_with_position_only_xyz() -> None:

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import torch
 
-from .env_cfg import CUBE_HALF_HEIGHT
-from .env_cfg import TARGET_BOX_OUTER_SIZE
-from .env_cfg import TARGET_BOX_WALL_TOP_Z
+from ..env_cfg import CUBE_HALF_HEIGHT
+from ..env_cfg import TARGET_BOX_OUTER_SIZE
+from ..env_cfg import TARGET_BOX_WALL_TOP_Z
+from ..phase_aware_ik_action import PhaseAwareDifferentialInverseKinematicsAction
+from ..phase_aware_ik_action import resolve_action_term
 from .legacy_gripper_anchor_state_machine import RedCubeToBoxLegacyGripperAnchorStateMachine
-from .phase_aware_ik_action import PhaseAwareDifferentialInverseKinematicsAction
-from .phase_aware_ik_action import resolve_action_term
 
 _GRIPPER_OPEN = 1.0
 _GRIPPER_CLOSE = -1.0
@@ -62,10 +62,7 @@ class RedCubeToBoxLegacyGripperAnchorPlanarIkStateMachine(RedCubeToBoxLegacyGrip
         super().setup(env)
         arm_action_term = resolve_action_term(env.action_manager, "arm_action")
         if not isinstance(arm_action_term, PhaseAwareDifferentialInverseKinematicsAction):
-            raise TypeError(
-                "legacy_gripper_anchor_planar_ik requires "
-                "PhaseAwareDifferentialInverseKinematicsAction"
-            )
+            raise TypeError("legacy_gripper_anchor_planar_ik requires PhaseAwareDifferentialInverseKinematicsAction")
         self._arm_action_term = arm_action_term
 
     def get_action(self, env) -> torch.Tensor:
@@ -197,9 +194,7 @@ class RedCubeToBoxLegacyGripperAnchorPlanarIkStateMachine(RedCubeToBoxLegacyGrip
     def _update_safety_state(self, env) -> None:
         cube = env.scene["cube"]
         floor = env.scene["target_box_floor"]
-        self._cube_clearance = float(
-            (cube.data.root_pos_w[0, 2] - CUBE_HALF_HEIGHT - TARGET_BOX_WALL_TOP_Z).item()
-        )
+        self._cube_clearance = float((cube.data.root_pos_w[0, 2] - CUBE_HALF_HEIGHT - TARGET_BOX_WALL_TOP_Z).item())
         self._minimum_robot_clearance = self._robot_geometry_clearance(env, floor.data.root_pos_w[0, :2])
         self._maximum_box_contact_force = self._box_contact_force(env)
         if self._maximum_box_contact_force > _CONTACT_FORCE_THRESHOLD:

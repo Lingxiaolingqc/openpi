@@ -9,7 +9,7 @@ from isaaclab.utils.math import quat_mul
 from leisaac.datagen.state_machine.base import StateMachineBase
 import torch
 
-from . import mdp
+from .. import mdp
 
 _GRIPPER_OPEN = 1.0
 _GRIPPER_CLOSE = -1.0

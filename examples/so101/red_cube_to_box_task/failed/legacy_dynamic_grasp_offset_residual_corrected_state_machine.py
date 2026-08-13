@@ -7,8 +7,8 @@ from isaaclab.markers import VisualizationMarkersCfg
 import isaaclab.sim as sim_utils
 import torch
 
-from .env_cfg import TABLE_SURFACE_Z
-from .env_cfg import TARGET_BOX_WALL_TOP_Z
+from ..env_cfg import TABLE_SURFACE_Z
+from ..env_cfg import TARGET_BOX_WALL_TOP_Z
 from .legacy_dynamic_grasp_offset_state_machine import RedCubeToBoxLegacyDynamicGraspOffsetStateMachine
 
 _MAXIMUM_RESIDUAL_CORRECTION = 0.10

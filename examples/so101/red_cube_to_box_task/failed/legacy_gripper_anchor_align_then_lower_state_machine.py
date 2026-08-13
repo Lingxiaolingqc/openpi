@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import torch
 
+from ..state_machine import RedCubeToBoxStateMachine
 from .legacy_gripper_anchor_state_machine import RedCubeToBoxLegacyGripperAnchorStateMachine
-from .state_machine import RedCubeToBoxStateMachine
 
 _GRIPPER_OPEN = 1.0
 _GRIPPER_CLOSE = -1.0
@@ -16,9 +16,7 @@ _DESCENT_STEPS = 120
 _DESCENT_CONFIRMATION_STEPS = 60
 
 
-class RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine(
-    RedCubeToBoxLegacyGripperAnchorStateMachine
-):
+class RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine(RedCubeToBoxLegacyGripperAnchorStateMachine):
     """Preserve legacy pose IK while swapping horizontal alignment and descent."""
 
     _PHASES = (

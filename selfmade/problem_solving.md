@@ -604,3 +604,14 @@ autogen_polar_retreat_transport-seed42-20260813-040256-pid4072\index.html
 3. 失败时先判断 grasp loss、IK timeout、placement offset 还是 success predicate，不直接放宽阈值。
 4. 8GB 显存仍优先单环境、headless、performance；OOM 时先降低录制频率或关闭不必要录像，不改变物理逻辑。
 5. 保留 legacy、independent 和 polar 三条路线，避免用新实验覆盖可比较基线。
+
+## 22. State machine 目录整理
+
+最终成功路线与仍在开发的 Autogen reference 路线保留在
+`examples/so101/red_cube_to_box_task/`。失败、被取代或尚未证明成功的消融专家移动到同级
+`failed/` 包，但 smoke 与 batch 的 `--expert` 名称保持不变，因此历史对照仍可直接运行。
+
+`autogen_independent_retreat_transport` 是一个特殊情况：它自身属于失败对照，但成功的 polar 原先直接继承
+它。为避免成功实现依赖 `failed` 包，原实现抽成当前目录的 `polar_base_state_machine.py`，类名改为
+`RedCubeToBoxPolarBaseStateMachine`；polar 继承该活动基类，而 `failed/` 中保留使用旧类名的薄兼容子类。
+这只改变代码组织和导入路径，不改变原 independent 专家的状态、动作或参数。

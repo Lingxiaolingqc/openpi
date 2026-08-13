@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import torch
 
+from ..phase_aware_ik_action import PhaseAwareDifferentialInverseKinematicsAction
+from ..phase_aware_ik_action import resolve_action_term
 from .legacy_gripper_anchor_state_machine import RedCubeToBoxLegacyGripperAnchorStateMachine
-from .phase_aware_ik_action import PhaseAwareDifferentialInverseKinematicsAction
-from .phase_aware_ik_action import resolve_action_term
 
 _WEAK_ORIENTATION_WEIGHT = 0.1
 _WEAK_ORIENTATION_STEPS = 120
@@ -35,10 +35,7 @@ class RedCubeToBoxLegacyGripperAnchorRelaxedIkStateMachine(RedCubeToBoxLegacyGri
         super().setup(env)
         arm_action_term = resolve_action_term(env.action_manager, "arm_action")
         if not isinstance(arm_action_term, PhaseAwareDifferentialInverseKinematicsAction):
-            raise TypeError(
-                "legacy_gripper_anchor_relaxed_ik requires "
-                "PhaseAwareDifferentialInverseKinematicsAction"
-            )
+            raise TypeError("legacy_gripper_anchor_relaxed_ik requires PhaseAwareDifferentialInverseKinematicsAction")
         self._arm_action_term = arm_action_term
 
     def get_action(self, env) -> torch.Tensor:

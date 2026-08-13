@@ -9,10 +9,10 @@ from isaaclab.utils.math import quat_mul
 from isaaclab.utils.math import subtract_frame_transforms
 import torch
 
+from ..state_machine import RedCubeToBoxStateMachine
 from .legacy_gripper_anchor_safe_direct_jaw_xyz_pan_nullspace_align_then_lower_state_machine import (
     RedCubeToBoxLegacyGripperAnchorSafeDirectJawXyzPanNullspaceAlignThenLowerStateMachine,
 )
-from .state_machine import RedCubeToBoxStateMachine
 
 _GRIPPER_OPEN = 1.0
 _GRIPPER_CLOSE = -1.0

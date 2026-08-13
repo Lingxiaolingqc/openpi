@@ -10,7 +10,7 @@ from isaaclab.utils.math import quat_inv
 from isaaclab.utils.math import subtract_frame_transforms
 import torch
 
-from .env_cfg import TABLE_SURFACE_Z
+from ..env_cfg import TABLE_SURFACE_Z
 from .legacy_gripper_anchor_safe_xyz_pan_nullspace_align_then_lower_state_machine import (
     RedCubeToBoxLegacyGripperAnchorSafeXyzPanNullspaceAlignThenLowerStateMachine,
 )

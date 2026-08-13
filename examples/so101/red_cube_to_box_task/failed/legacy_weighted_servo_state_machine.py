@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import torch
 
+from ..state_machine import RedCubeToBoxStateMachine
 from .servo_state_machine import TRANSPORT_IK_PHASES
-from .state_machine import RedCubeToBoxStateMachine
 from .weighted_servo_state_machine import RedCubeToBoxWeightedServoStateMachine
 
 _LEGACY_PICKUP_PHASES = {

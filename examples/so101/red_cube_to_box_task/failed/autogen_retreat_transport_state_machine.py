@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import torch
 
+from ..phase_aware_ik_action import PhaseAwareDifferentialInverseKinematicsAction
+from ..phase_aware_ik_action import resolve_action_term
 from .legacy_dynamic_grasp_offset_residual_corrected_state_machine import (
     RedCubeToBoxLegacyDynamicGraspOffsetResidualCorrectedStateMachine,
 )
-from .phase_aware_ik_action import PhaseAwareDifferentialInverseKinematicsAction
-from .phase_aware_ik_action import resolve_action_term
 
 _GRIPPER_CLOSE = -1.0
 _RETREAT_RADIAL_SCALE = 5.0 / 7.0
