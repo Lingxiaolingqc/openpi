@@ -35,6 +35,10 @@ _RETREAT_ERROR_WORSENING_STEPS = 20
 _RETREAT_SEGMENT_STABLE_STEPS = 15
 _GRASP_CONFIRM_DISTANCE = 0.015
 _GRASP_LOSS_DISTANCE = 0.025
+_GRASP_LOSS_CLEAR_DISTANCE = 0.022
+_GRASP_RELATIVE_POSITION_LOSS_DISTANCE = 0.012
+_GRASP_RELATIVE_POSITION_CLEAR_DISTANCE = 0.008
+_GRASP_LOSS_STABLE_STEPS = 5
 _GRIPPER_CLOSE_MINIMUM_STEPS = 80
 _GRIPPER_CLOSE_MAXIMUM_STEPS = 320
 _GRIPPER_SETTLE_STABLE_STEPS = 8
@@ -148,6 +152,10 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         self._pick_feedback_confirmed = False
         self._grasp_geometry_latched = False
         self._minimum_jaw_cube_distance: float | None = None
+        self._grasp_relative_position_reference: torch.Tensor | None = None
+        self._grasp_relative_position_error: float | None = None
+        self._grasp_relative_position_max_error: float | None = None
+        self._grasp_loss_streak = 0
         self._position_joint_target_accumulation_enabled = False
         self._axis_alignment_selected_index: torch.Tensor | None = None
         self._axis_alignment_selected_sign: torch.Tensor | None = None
@@ -188,6 +196,10 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         self._wrist_posture_target = None
         self._radial_posture_target = None
         self._lower_posture_target = None
+        self._grasp_relative_position_reference = None
+        self._grasp_relative_position_error = None
+        self._grasp_relative_position_max_error = None
+        self._grasp_loss_streak = 0
 
     def get_action(self, env) -> torch.Tensor:
         phase = self.phase_name
@@ -716,6 +728,14 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
             or self._pick_feedback_confirmed
             or self._jaw_cube_distance <= _GRASP_CONFIRM_DISTANCE
         )
+        gripper_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :]
+        gripper_quat_w = env.scene["ee_frame"].data.target_quat_w[:, 0, :]
+        self._grasp_relative_position_reference = (
+            quat_apply(quat_inv(gripper_quat_w), cube_w - gripper_w).detach().clone()
+        )
+        self._grasp_relative_position_error = 0.0
+        self._grasp_relative_position_max_error = 0.0
+        self._grasp_loss_streak = 0
         assert self._arm_action_term is not None
         robot = env.scene["robot"]
         controlled_joint_indices = [
@@ -985,6 +1005,8 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         self._motion_ready = self._target_stable_streak >= stable_steps
 
     def _detect_polar_grasp_loss(self, env, phase: str) -> bool:
+        gripper_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :]
+        gripper_quat_w = env.scene["ee_frame"].data.target_quat_w[:, 0, :]
         jaw_w = env.scene["ee_frame"].data.target_pos_w[:, 1, :]
         cube_w = env.scene["cube"].data.root_pos_w
         self._jaw_cube_distance = float(torch.linalg.vector_norm(jaw_w - cube_w, dim=-1).max().item())
@@ -995,11 +1017,41 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
             )
             self._episode_done = True
             return True
-        if self._grasp_confirmed and self._jaw_cube_distance > _GRASP_LOSS_DISTANCE:
+
+        current_relative_position = quat_apply(quat_inv(gripper_quat_w), cube_w - gripper_w)
+        if self._grasp_relative_position_reference is None:
+            self._grasp_relative_position_reference = current_relative_position.detach().clone()
+        relative_position_error = torch.linalg.vector_norm(
+            current_relative_position - self._grasp_relative_position_reference, dim=-1
+        )
+        self._grasp_relative_position_error = float(relative_position_error.max().item())
+        if self._grasp_relative_position_max_error is None:
+            self._grasp_relative_position_max_error = self._grasp_relative_position_error
+        else:
+            self._grasp_relative_position_max_error = max(
+                self._grasp_relative_position_max_error, self._grasp_relative_position_error
+            )
+        loss_evidence = (
+            self._jaw_cube_distance > _GRASP_LOSS_DISTANCE
+            and self._grasp_relative_position_error > _GRASP_RELATIVE_POSITION_LOSS_DISTANCE
+        )
+        clear_evidence = (
+            self._jaw_cube_distance <= _GRASP_LOSS_CLEAR_DISTANCE
+            or self._grasp_relative_position_error <= _GRASP_RELATIVE_POSITION_CLEAR_DISTANCE
+        )
+        if loss_evidence:
+            self._grasp_loss_streak += 1
+        elif clear_evidence:
+            self._grasp_loss_streak = 0
+
+        if self._grasp_confirmed and self._grasp_loss_streak >= _GRASP_LOSS_STABLE_STEPS:
             self._grasp_lost_before_release = True
             self._servo_abort_reason = (
                 f"grasp_lost_during_{phase}:"
-                f"jaw_cube_distance={self._jaw_cube_distance}:threshold={_GRASP_LOSS_DISTANCE}"
+                f"relative_position_error={self._grasp_relative_position_error}:"
+                f"relative_position_threshold={_GRASP_RELATIVE_POSITION_LOSS_DISTANCE}:"
+                f"loss_streak={self._grasp_loss_streak}:"
+                f"jaw_cube_distance={self._jaw_cube_distance}:jaw_diagnostic_threshold={_GRASP_LOSS_DISTANCE}"
             )
             self._episode_done = True
             return True
@@ -1131,6 +1183,11 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
                 "vertical_lift_actual_wrist_z_only_then_radial_retreat_actual_wrist_radius_z_and_relaxed_bearing"
             ),
             "grasp_loss_distance": _GRASP_LOSS_DISTANCE,
+            "grasp_loss_clear_distance": _GRASP_LOSS_CLEAR_DISTANCE,
+            "grasp_loss_policy": "sustained_gripper_frame_cube_drift_correlated_with_jaw_distance",
+            "grasp_relative_position_loss_distance": _GRASP_RELATIVE_POSITION_LOSS_DISTANCE,
+            "grasp_relative_position_clear_distance": _GRASP_RELATIVE_POSITION_CLEAR_DISTANCE,
+            "grasp_loss_stable_steps": _GRASP_LOSS_STABLE_STEPS,
         }
 
     @property
@@ -1278,3 +1335,15 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
     @property
     def minimum_jaw_cube_distance(self) -> float | None:
         return self._minimum_jaw_cube_distance
+
+    @property
+    def grasp_relative_position_error(self) -> float | None:
+        return self._grasp_relative_position_error
+
+    @property
+    def grasp_relative_position_max_error(self) -> float | None:
+        return self._grasp_relative_position_max_error
+
+    @property
+    def grasp_loss_streak(self) -> int:
+        return self._grasp_loss_streak

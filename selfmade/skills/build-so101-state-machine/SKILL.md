@@ -134,7 +134,8 @@ Lower and release from the actual achieved XY. Avoid adding a new low-height hor
 Require:
 
 - grasp confirmation before lift;
-- continuous jaw-to-cube or task-specific grasp monitoring until release;
+- continuous task-specific grasp monitoring until release. A moving-jaw detection endpoint is diagnostic only unless
+  it has been verified as a grasp-invariant control point;
 - actual safe Z before horizontal motion;
 - reference completion plus actual position/bearing convergence for path handoffs;
 - multiple stable frames rather than a single-frame hit;
@@ -144,6 +145,12 @@ Require:
   release.
 
 Never continue issuing transport actions after confirmed grasp loss.
+
+For a rigidly held object, combine drift of the object position expressed in the gripper frame with an independent
+distance/contact signal. Capture the relative position at the grasped handoff, then require both signals to indicate
+loss for consecutive frames, with smaller clear thresholds for hysteresis. This removes whole-arm translation and
+rotation without letting contact-compliance motion alone stop a known-good trajectory. Do not abort a confirmed grasp
+from a single frame barely beyond a jaw-endpoint distance threshold.
 
 Keep close feedback concepts separate: contact geometry may be sticky once established, task `pick_cube` feedback must
 be debounced, and gripper aperture still needs its own stable multi-frame window. A longer bounded timeout can absorb

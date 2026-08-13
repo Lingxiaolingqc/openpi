@@ -502,6 +502,9 @@ def main() -> int:
                 servo_abort_reason = getattr(state_machine, "servo_abort_reason", None)
                 if servo_abort_reason is not None:
                     servo_abort_episodes.append(episode_index)
+                grasp_relative_position_error = getattr(state_machine, "grasp_relative_position_error", None)
+                grasp_relative_position_max_error = getattr(state_machine, "grasp_relative_position_max_error", None)
+                grasp_loss_streak = getattr(state_machine, "grasp_loss_streak", None)
                 if not rewards_finite:
                     non_finite_episodes.append(episode_index)
                 if unexpected_reset:
@@ -536,6 +539,9 @@ def main() -> int:
                             "ever_grasped": ever_grasped,
                             "servo_timeout_phase": servo_timeout_phase,
                             "servo_abort_reason": servo_abort_reason,
+                            "grasp_relative_position_error": grasp_relative_position_error,
+                            "grasp_relative_position_max_error": grasp_relative_position_max_error,
+                            "grasp_loss_streak": grasp_loss_streak,
                             "final_offset": _rounded_row(final_offset),
                             "final_speed": float(final_speed.item()),
                         }
@@ -551,6 +557,9 @@ def main() -> int:
                     f"box_aligned_before_release={box_aligned}:"
                     f"servo_timeout_phase={servo_timeout_phase}:"
                     f"servo_abort_reason={servo_abort_reason}:"
+                    f"grasp_relative_position_error={grasp_relative_position_error}:"
+                    f"grasp_relative_position_max_error={grasp_relative_position_max_error}:"
+                    f"grasp_loss_streak={grasp_loss_streak}:"
                     f"final_offset={_rounded_row(final_offset)}:"
                     f"final_speed={final_speed.item():.6f}:"
                     f"success={success}:"

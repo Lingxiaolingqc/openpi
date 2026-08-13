@@ -769,3 +769,27 @@ target_gripper_xy = live_cube_xy - 0.020 * closing_axis_xy
 
 核心教训：先确认一个 frame 是 IK 原点、刚体原点、接触点、检测端点还是夹持中心。经过姿态对齐后，
 局部标定向量必须随末端姿态旋转；不能继续把它当作世界系固定 XY，也不能用单个可动爪端点替代夹持中心。
+
+## 28. 服务器 50 回合把 jaw 端点阈值误当成抓取丢失（2026-08-14）
+
+服务器 scene audit、非黑 polar smoke 均通过；相同进程的 50 回合 batch 为 `44/50`。六个失败全部在
+`retreat_to_safe`，旧原因都是 `jaw_cube_distance > 0.025 m`。其中 episode 33 仅为 `0.025043 m`，episode 43
+仅为 `0.025007 m`，分别只越界 `0.043 mm` 和 `0.007 mm`。batch 又在 abort 瞬间结束回合，所以较高的最终
+Z/速度只表示正在上抬，不能证明 cube 已经从夹爪脱落。
+
+更根本的问题是：该 jaw frame 位于可动爪远端，会随夹爪闭合、接触受力和腕部姿态改变；单帧世界距离既没有
+滞回，也不是抓取不变量。修复后在 retreat 入口锁存 cube 在 gripper 局部坐标系中的位置：
+
+```text
+p_cube_in_gripper = R_gripper_world^-1 * (p_cube_world - p_gripper_world)
+relative_position_error = norm(p_cube_in_gripper_live - p_cube_in_gripper_at_retreat_entry)
+```
+
+初版曾仅用相对位置漂移超过 `12 mm` 连续 5 帧确认丢失。Windows seed-42 动态 smoke 给出反证：局部漂移
+达到 `15.18 mm` 且 `pick_cube` 瞬时为假时，jaw 距离仍只有 `20.56 mm`；新门过早中止了旧版能够继续的已知
+成功轨迹。因此最终采用双证据：相对位置漂移超过 `12 mm` 且 jaw 距离超过 `25 mm`，连续 5 帧才确认丢失；
+相对漂移回落到 `8 mm` 内或 jaw 距离回落到 `22 mm` 内即清零 streak，形成滞回。未确认抓取时的入口保护仍
+保留。真正确认丢失后仍立即安全终止，不会继续运输。
+
+最终双证据版本需重新通过 polar 静态回归和 Windows seed-42 smoke；是否把服务器 `44/50` 提高到目标门槛，
+仍需用同一 seed 的 50 回合 batch 动态验证，静态检查不能替代动力学结论。

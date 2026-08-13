@@ -338,10 +338,10 @@ def test_post_alignment_recenter_rotates_calibrated_gripper_offset_without_jaw_d
     get_action_source = ast.unparse(_method("get_action"))
     recenter_source = ast.unparse(_method("_capture_postalign_recenter_target"))
     assert "self._capture_postalign_recenter_target(env, pick_grasp_w)" in get_action_source
-    assert 'env.scene[\'cube\'].data.root_pos_w' in recenter_source
+    assert "env.scene['cube'].data.root_pos_w" in recenter_source
     assert "self._axis_alignment_closing_axis_w[:, :2]" in recenter_source
     assert "cube_w[:, :2] - _PICK_GRIPPER_OFFSET_ALONG_CLOSING_AXIS * closing_axis_xy" in recenter_source
-    assert 'env.scene[\'ee_frame\'].data.target_pos_w[:, 1' not in recenter_source
+    assert "env.scene['ee_frame'].data.target_pos_w[:, 1" not in recenter_source
     assert "target_w[:, 2]" not in recenter_source
 
 
@@ -364,6 +364,19 @@ def test_close_gate_debounces_pick_feedback_without_bypassing_aperture_stability
     assert "self._grasp_geometry_latched or self._pick_feedback_confirmed" in settle_source
     assert "aperture_stable" in settle_source
     assert "self._grasp_geometry_latched" in retreat_source
+
+
+def test_grasp_loss_uses_sustained_cube_drift_in_gripper_frame() -> None:
+    initialize_source = ast.unparse(_method("_initialize_polar_retreat"))
+    detect_source = ast.unparse(_method("_detect_polar_grasp_loss"))
+
+    assert "quat_apply(quat_inv(gripper_quat_w), cube_w - gripper_w)" in initialize_source
+    assert "current_relative_position - self._grasp_relative_position_reference" in detect_source
+    assert "_GRASP_RELATIVE_POSITION_LOSS_DISTANCE" in detect_source
+    assert "_GRASP_RELATIVE_POSITION_CLEAR_DISTANCE" in detect_source
+    assert "self._jaw_cube_distance > _GRASP_LOSS_DISTANCE" in detect_source
+    assert "self._jaw_cube_distance <= _GRASP_LOSS_CLEAR_DISTANCE" in detect_source
+    assert "self._grasp_loss_streak >= _GRASP_LOSS_STABLE_STEPS" in detect_source
 
 
 def test_batch_can_record_each_randomized_episode_under_one_root() -> None:

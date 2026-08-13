@@ -1136,6 +1136,9 @@ def main() -> int:
                         "target_error": state_machine.target_error,
                         "stable_streak": state_machine.target_stable_streak,
                         "jaw_cube_distance": state_machine.jaw_cube_distance,
+                        "grasp_relative_position_error": state_machine.grasp_relative_position_error,
+                        "grasp_relative_position_max_error": state_machine.grasp_relative_position_max_error,
+                        "grasp_loss_streak": state_machine.grasp_loss_streak,
                         "grasp_confirmed": state_machine.grasp_confirmed,
                     }
                     if focus_is_wrist:
