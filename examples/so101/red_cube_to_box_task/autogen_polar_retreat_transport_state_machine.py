@@ -10,6 +10,8 @@ from isaaclab.utils.math import quat_inv
 from isaaclab.utils.math import quat_mul
 import torch
 
+from .cube_axis_alignment import measure_cube_axis_alignment
+from .cube_axis_alignment import select_nearest_cube_axis_alignment
 from .env_cfg import STATE_MACHINE_GRIPPER_CLOSE_POSITION
 from .polar_base_state_machine import RedCubeToBoxPolarBaseStateMachine
 
@@ -39,6 +41,21 @@ _GRIPPER_SETTLE_STABLE_STEPS = 8
 _GRIPPER_SETTLE_WINDOW_STEPS = 12
 _GRIPPER_SETTLE_ANGLE_SPAN_TOLERANCE = 0.01
 _PICK_FEEDBACK_STABLE_STEPS = 3
+_AXIS_ALIGNMENT_TOLERANCE = math.radians(5.0)
+_AXIS_ALIGNMENT_STABLE_STEPS = 10
+_AXIS_ALIGNMENT_HOLD_SETTLE_STEPS = 8
+_AXIS_ALIGNMENT_TIMEOUT_STEPS = 700
+_AXIS_ALIGNMENT_MAX_TARGET_STEP = math.radians(1.0)
+_AXIS_ALIGNMENT_MAX_TARGET_LEAD = math.radians(4.0)
+_AXIS_ALIGNMENT_TARGET_KP = 0.5
+_AXIS_ALIGNMENT_JOINT_LIMIT_MARGIN = 0.02
+_AXIS_ALIGNMENT_WRIST_ROLL_VELOCITY_TOLERANCE = 0.03
+_AXIS_ALIGNMENT_MAX_ARM_VELOCITY = 0.05
+_PREALIGN_SETTLE_TIMEOUT_STEPS = 240
+_PREALIGN_POSITION_TOLERANCE = 0.006
+_POSTALIGN_RECENTER_TIMEOUT_STEPS = 240
+_POSTALIGN_POSITION_TOLERANCE = 0.006
+_PICKUP_SETTLE_STABLE_STEPS = 8
 _SMOOTHERSTEP_MAX_DERIVATIVE = 1.875
 
 
@@ -66,6 +83,9 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
     _PHASES = (
         "approach_cube",
         "descend_to_cube",
+        "settle_at_grasp_target",
+        "align_gripper_to_cube",
+        "recenter_after_alignment",
         "close_gripper",
         "retreat_to_safe",
         "arc_transfer",
@@ -76,7 +96,10 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         "settle",
     )
     MAX_STEPS = (
-        _GRIPPER_CLOSE_MAXIMUM_STEPS
+        _AXIS_ALIGNMENT_TIMEOUT_STEPS
+        + _PREALIGN_SETTLE_TIMEOUT_STEPS
+        + _POSTALIGN_RECENTER_TIMEOUT_STEPS
+        + _GRIPPER_CLOSE_MAXIMUM_STEPS
         + _FIXED_PHASE_STEPS["approach_cube"]
         + _FIXED_PHASE_STEPS["descend_to_cube"]
         + _FIXED_PHASE_STEPS["release_cube"]
@@ -125,6 +148,28 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         self._grasp_geometry_latched = False
         self._minimum_jaw_cube_distance: float | None = None
         self._position_joint_target_accumulation_enabled = False
+        self._axis_alignment_selected_index: torch.Tensor | None = None
+        self._axis_alignment_selected_sign: torch.Tensor | None = None
+        self._axis_alignment_selected_cube_axis: tuple[str, ...] | None = None
+        self._axis_alignment_closing_axis_w: torch.Tensor | None = None
+        self._axis_alignment_cube_x_axis_w: torch.Tensor | None = None
+        self._axis_alignment_cube_y_axis_w: torch.Tensor | None = None
+        self._axis_alignment_desired_axis_w: torch.Tensor | None = None
+        self._axis_alignment_signed_error: torch.Tensor | None = None
+        self._axis_alignment_error: torch.Tensor | None = None
+        self._axis_alignment_direct_joint_target: torch.Tensor | None = None
+        self._axis_alignment_wrist_roll_control_index: int | None = None
+        self._axis_alignment_controlled_joint_indices: tuple[int, ...] | None = None
+        self._axis_alignment_hold_settle_streak = 0
+        self._axis_alignment_streak = 0
+        self._axis_alignment_complete = False
+        self._axis_alignment_wrist_roll_target: torch.Tensor | None = None
+        self._axis_alignment_wrist_roll_position: torch.Tensor | None = None
+        self._axis_alignment_wrist_roll_velocity: torch.Tensor | None = None
+        self._axis_alignment_max_arm_joint_velocity: torch.Tensor | None = None
+        self._pickup_settle_streak = 0
+        self._pickup_position_error: float | None = None
+        self._aligned_gripper_quat_w: torch.Tensor | None = None
 
     def setup(self, env) -> None:
         super().setup(env)
@@ -134,6 +179,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         wrist_body_index = self._wrist_body_index
         if self._arm_action_term is not None:
             self._disable_position_joint_target_accumulation()
+            self._arm_action_term.clear_direct_joint_position_target()
             self._arm_action_term.restore_configured_control_body()
         super().reset()
         self._wrist_body_index = wrist_body_index
@@ -152,10 +198,35 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         if self._arm_action_term is not None and phase not in position_only_accumulation_phases:
             self._disable_position_joint_target_accumulation()
             self._arm_action_term.restore_configured_control_body()
+        if self._arm_action_term is not None and phase not in {"align_gripper_to_cube", "close_gripper"}:
+            self._arm_action_term.clear_direct_joint_position_target()
         if phase in {"approach_cube", "descend_to_cube", "close_gripper"}:
             action = super().get_action(env)
             if phase == "close_gripper":
+                if self._axis_alignment_direct_joint_target is None:
+                    self._capture_axis_alignment_hold(env)
+                self._hold_axis_alignment_target()
+            if phase == "close_gripper":
                 self._update_gripper_settle(env)
+            return action
+
+        if phase == "align_gripper_to_cube":
+            self._update_axis_alignment(env)
+            _, pick_grasp_w = self._pickup_targets()
+            self._current_target_w = pick_grasp_w.detach().clone()
+            return self._compose_pose_action(env, pick_grasp_w, _GRIPPER_OPEN)
+
+        if phase in {"settle_at_grasp_target", "recenter_after_alignment"}:
+            _, pick_grasp_w = self._pickup_targets()
+            if phase == "settle_at_grasp_target":
+                action = self._compose_pose_action(env, pick_grasp_w, _GRIPPER_OPEN)
+            else:
+                if self._aligned_gripper_quat_w is None:
+                    raise RuntimeError("Aligned gripper quaternion was not captured before recenter")
+                action = self._compose_pose_action_with_quaternion(
+                    env, pick_grasp_w, self._aligned_gripper_quat_w, _GRIPPER_OPEN
+                )
+            self._update_pickup_position_settle(env, pick_grasp_w)
             return action
 
         if self._arm_action_term is None:
@@ -241,6 +312,40 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         if self._episode_done:
             return
         phase = self.phase_name
+        if phase in {"settle_at_grasp_target", "recenter_after_alignment"}:
+            self._step_count += 1
+            self._phase_step += 1
+            if self._pickup_settle_streak >= _PICKUP_SETTLE_STABLE_STEPS:
+                self._pickup_settle_streak = 0
+                self._advance_phase()
+            else:
+                timeout = (
+                    _PREALIGN_SETTLE_TIMEOUT_STEPS
+                    if phase == "settle_at_grasp_target"
+                    else _POSTALIGN_RECENTER_TIMEOUT_STEPS
+                )
+                if self._phase_step >= timeout:
+                    reason = f"{phase}_timeout:position_error={self._pickup_position_error}"
+                    self._servo_abort_reason = reason
+                    self._release_block_reason = reason
+                    self._episode_done = True
+            return
+        if phase == "align_gripper_to_cube":
+            self._step_count += 1
+            self._phase_step += 1
+            if self._axis_alignment_complete:
+                self._axis_alignment_direct_joint_target = None
+                self._advance_phase()
+            elif self._phase_step >= _AXIS_ALIGNMENT_TIMEOUT_STEPS:
+                reason = (
+                    "gripper_axis_alignment_timeout:"
+                    f"error={self.axis_alignment_error}:"
+                    f"stable_streak={self._axis_alignment_streak}"
+                )
+                self._servo_abort_reason = reason
+                self._release_block_reason = reason
+                self._episode_done = True
+            return
         if phase != "close_gripper":
             super().advance()
             return
@@ -295,6 +400,173 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         # The runner interprets True as "captured a held gripper angle". Polar
         # only consumes the debounced Boolean and keeps commanding nominal close.
         return False
+
+    def _capture_axis_alignment_hold(self, env) -> None:
+        assert self._arm_action_term is not None
+        robot = env.scene["robot"]
+        robot_joint_names = list(robot.data.joint_names)
+        controlled_joint_names = self._arm_action_term.controlled_joint_names
+        if "wrist_roll" not in controlled_joint_names:
+            raise RuntimeError(f"wrist_roll is not controlled by the arm action: {controlled_joint_names}")
+        controlled_joint_indices = tuple(robot_joint_names.index(name) for name in controlled_joint_names)
+        wrist_roll_control_index = controlled_joint_names.index("wrist_roll")
+        direct_target = robot.data.joint_pos[:, list(controlled_joint_indices)].detach().clone()
+        self._axis_alignment_controlled_joint_indices = controlled_joint_indices
+        self._axis_alignment_wrist_roll_control_index = wrist_roll_control_index
+        self._arm_action_term.set_direct_joint_position_target(direct_target)
+        applied_target = self._arm_action_term.direct_joint_position_target
+        if applied_target is None:
+            raise RuntimeError("The arm action did not retain the axis-alignment joint target")
+        self._axis_alignment_direct_joint_target = applied_target.detach().clone()
+        self._axis_alignment_wrist_roll_target = applied_target[:, wrist_roll_control_index].detach().clone()
+
+    def _hold_axis_alignment_target(self) -> None:
+        assert self._arm_action_term is not None
+        if self._axis_alignment_direct_joint_target is None:
+            raise RuntimeError("Close phase entered without a completed wrist-roll alignment target")
+        self._arm_action_term.set_direct_joint_position_target(self._axis_alignment_direct_joint_target)
+
+    def _update_axis_alignment(self, env) -> None:
+        assert self._arm_action_term is not None
+        if self._axis_alignment_direct_joint_target is None:
+            self._capture_axis_alignment_hold(env)
+        assert self._axis_alignment_direct_joint_target is not None
+        assert self._axis_alignment_controlled_joint_indices is not None
+        assert self._axis_alignment_wrist_roll_control_index is not None
+
+        robot = env.scene["robot"]
+        joint_indices = list(self._axis_alignment_controlled_joint_indices)
+        joint_pos = robot.data.joint_pos[:, joint_indices]
+        joint_vel = torch.abs(robot.data.joint_vel[:, joint_indices])
+        wrist_roll_position = joint_pos[:, self._axis_alignment_wrist_roll_control_index]
+        self._axis_alignment_wrist_roll_position = wrist_roll_position.detach().clone()
+        self._axis_alignment_wrist_roll_velocity = joint_vel[:, self._axis_alignment_wrist_roll_control_index].detach()
+        self._axis_alignment_max_arm_joint_velocity = torch.amax(joint_vel, dim=-1).detach()
+
+        if self._axis_alignment_selected_index is None:
+            hold_stable = bool(
+                (
+                    (self._axis_alignment_wrist_roll_velocity <= _AXIS_ALIGNMENT_WRIST_ROLL_VELOCITY_TOLERANCE)
+                    & (self._axis_alignment_max_arm_joint_velocity <= _AXIS_ALIGNMENT_MAX_ARM_VELOCITY)
+                )
+                .all()
+                .item()
+            )
+            self._axis_alignment_hold_settle_streak = self._axis_alignment_hold_settle_streak + 1 if hold_stable else 0
+            if self._axis_alignment_hold_settle_streak >= _AXIS_ALIGNMENT_HOLD_SETTLE_STEPS:
+                alignment = self._measure_axis_alignment(env, select_axis=True)
+                if not bool(alignment.selection_feasible.all().item()):
+                    reason = "no_cube_xy_axis_reachable_with_wrist_roll"
+                    self._servo_abort_reason = reason
+                    self._release_block_reason = reason
+                    self._episode_done = True
+            self._hold_axis_alignment_target()
+            return
+
+        alignment = self._measure_axis_alignment(env, select_axis=False)
+        target_step = torch.clamp(
+            _AXIS_ALIGNMENT_TARGET_KP * alignment.signed_error,
+            min=-_AXIS_ALIGNMENT_MAX_TARGET_STEP,
+            max=_AXIS_ALIGNMENT_MAX_TARGET_STEP,
+        )
+        previous_target = self._axis_alignment_direct_joint_target[:, self._axis_alignment_wrist_roll_control_index]
+        wrist_roll_target = torch.clamp(
+            previous_target + target_step,
+            min=wrist_roll_position - _AXIS_ALIGNMENT_MAX_TARGET_LEAD,
+            max=wrist_roll_position + _AXIS_ALIGNMENT_MAX_TARGET_LEAD,
+        )
+        wrist_roll_robot_index = joint_indices[self._axis_alignment_wrist_roll_control_index]
+        wrist_roll_limits = robot.data.soft_joint_pos_limits[:, wrist_roll_robot_index]
+        wrist_roll_target = torch.clamp(
+            wrist_roll_target,
+            min=wrist_roll_limits[:, 0] + _AXIS_ALIGNMENT_JOINT_LIMIT_MARGIN,
+            max=wrist_roll_limits[:, 1] - _AXIS_ALIGNMENT_JOINT_LIMIT_MARGIN,
+        )
+        self._axis_alignment_direct_joint_target[:, self._axis_alignment_wrist_roll_control_index] = wrist_roll_target
+        self._axis_alignment_wrist_roll_target = wrist_roll_target.detach().clone()
+        self._hold_axis_alignment_target()
+
+        aligned = bool((alignment.absolute_error <= _AXIS_ALIGNMENT_TOLERANCE).all().item())
+        slow = bool(
+            (
+                (self._axis_alignment_wrist_roll_velocity <= _AXIS_ALIGNMENT_WRIST_ROLL_VELOCITY_TOLERANCE)
+                & (self._axis_alignment_max_arm_joint_velocity <= _AXIS_ALIGNMENT_MAX_ARM_VELOCITY)
+            )
+            .all()
+            .item()
+        )
+        self._axis_alignment_streak = self._axis_alignment_streak + 1 if aligned and slow else 0
+        self._axis_alignment_complete = self._axis_alignment_streak >= _AXIS_ALIGNMENT_STABLE_STEPS
+        if self._axis_alignment_complete:
+            self._aligned_gripper_quat_w = env.scene["ee_frame"].data.target_quat_w[:, 0].detach().clone()
+
+    def _update_pickup_position_settle(self, env, target_w: torch.Tensor) -> None:
+        actual_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :]
+        error = torch.linalg.vector_norm(actual_w - target_w, dim=-1)
+        self._pickup_position_error = float(error.max().item())
+        tolerance = (
+            _PREALIGN_POSITION_TOLERANCE
+            if self.phase_name == "settle_at_grasp_target"
+            else _POSTALIGN_POSITION_TOLERANCE
+        )
+        stable = bool((error <= tolerance).all().item())
+        self._pickup_settle_streak = self._pickup_settle_streak + 1 if stable else 0
+
+    def _measure_axis_alignment(self, env, *, select_axis: bool):
+        gripper_quat_w = env.scene["ee_frame"].data.target_quat_w[:, 0]
+        cube_quat_w = env.scene["cube"].data.root_quat_w
+        basis = torch.eye(3, device=env.device, dtype=gripper_quat_w.dtype)
+        local_x = basis[0].repeat(env.num_envs, 1)
+        local_y = basis[1].repeat(env.num_envs, 1)
+        local_z = basis[2].repeat(env.num_envs, 1)
+        closing_axis_w = quat_apply(gripper_quat_w, local_x)
+        roll_axis_w = quat_apply(gripper_quat_w, local_z)
+        cube_x_axis_w = quat_apply(cube_quat_w, local_x)
+        cube_y_axis_w = quat_apply(cube_quat_w, local_y)
+        if select_axis:
+            assert self._axis_alignment_controlled_joint_indices is not None
+            assert self._axis_alignment_wrist_roll_control_index is not None
+            robot = env.scene["robot"]
+            wrist_roll_robot_index = self._axis_alignment_controlled_joint_indices[
+                self._axis_alignment_wrist_roll_control_index
+            ]
+            alignment = select_nearest_cube_axis_alignment(
+                closing_axis_w,
+                roll_axis_w,
+                cube_x_axis_w,
+                cube_y_axis_w,
+                joint_position=robot.data.joint_pos[:, wrist_roll_robot_index],
+                joint_limits=robot.data.soft_joint_pos_limits[:, wrist_roll_robot_index],
+                joint_limit_margin=_AXIS_ALIGNMENT_JOINT_LIMIT_MARGIN,
+            )
+            self._axis_alignment_selected_index = alignment.selected_axis_index.detach().clone()
+            self._axis_alignment_selected_sign = alignment.selected_axis_sign.detach().clone()
+            self._axis_alignment_selected_cube_axis = tuple(
+                f"{'+' if sign >= 0.0 else '-'}cube_local_{'x' if index == 0 else 'y'}"
+                for index, sign in zip(
+                    self._axis_alignment_selected_index.cpu().tolist(),
+                    self._axis_alignment_selected_sign.cpu().tolist(),
+                    strict=True,
+                )
+            )
+        else:
+            assert self._axis_alignment_selected_index is not None
+            assert self._axis_alignment_selected_sign is not None
+            alignment = measure_cube_axis_alignment(
+                closing_axis_w,
+                roll_axis_w,
+                cube_x_axis_w,
+                cube_y_axis_w,
+                self._axis_alignment_selected_index,
+                self._axis_alignment_selected_sign,
+            )
+        self._axis_alignment_closing_axis_w = closing_axis_w.detach().clone()
+        self._axis_alignment_cube_x_axis_w = cube_x_axis_w.detach().clone()
+        self._axis_alignment_cube_y_axis_w = cube_y_axis_w.detach().clone()
+        self._axis_alignment_desired_axis_w = alignment.desired_axis_w.detach().clone()
+        self._axis_alignment_signed_error = alignment.signed_error.detach().clone()
+        self._axis_alignment_error = alignment.absolute_error.detach().clone()
+        return alignment
 
     def _retreat_control_position_w(self, env) -> torch.Tensor:
         assert self._wrist_body_index is not None
@@ -373,7 +645,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         if bool(close_enough_to_cube.all().item()):
             self._grasp_geometry_latched = True
         self._gripper_settle_angle_window.append(float(gripper_position.max().item()))
-        del self._gripper_settle_angle_window[: -_GRIPPER_SETTLE_WINDOW_STEPS]
+        del self._gripper_settle_angle_window[:-_GRIPPER_SETTLE_WINDOW_STEPS]
         window_ready = len(self._gripper_settle_angle_window) >= _GRIPPER_SETTLE_WINDOW_STEPS
         if window_ready:
             self._gripper_settle_angle_span = max(self._gripper_settle_angle_window) - min(
@@ -773,7 +1045,8 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         return {
             "implementation": "polar_path_subclass_of_independent_expert",
             "phase_sequence": (
-                "approach,descend,close,vertical_lift,root_relative_5_over_7_retreat,"
+                "approach,descend,measured_grasp_settle,wrist_roll_cube_axis_align,recenter,close,"
+                "vertical_lift,root_relative_5_over_7_retreat,"
                 "arc_transfer,radial_transfer,lower,release,retract,settle"
             ),
             "retreat_radial_scale": _RETREAT_RADIAL_SCALE,
@@ -811,6 +1084,9 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
             "pre_retreat_gripper_gate": "confirmed_grasp_and_stable_aperture_window",
             "pickup_ik_mode": "full_6d_pose_preserving_known_grasp_geometry",
             "pickup_completion_policy": "known_fixed_keyframe_timing",
+            "pickup_axis_alignment": "direct_wrist_roll_to_nearest_signed_cube_xy_axis",
+            "pickup_axis_alignment_tolerance_rad": _AXIS_ALIGNMENT_TOLERANCE,
+            "pickup_axis_alignment_max_target_step_rad": _AXIS_ALIGNMENT_MAX_TARGET_STEP,
             "gripper_close_minimum_steps": _GRIPPER_CLOSE_MINIMUM_STEPS,
             "gripper_close_maximum_steps": _GRIPPER_CLOSE_MAXIMUM_STEPS,
             "gripper_settle_stable_steps": _GRIPPER_SETTLE_STABLE_STEPS,
@@ -905,6 +1181,66 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
     @property
     def pick_feedback_streak(self) -> int:
         return self._pick_feedback_streak
+
+    @property
+    def axis_alignment_complete(self) -> bool:
+        return self._axis_alignment_complete
+
+    @property
+    def axis_alignment_streak(self) -> int:
+        return self._axis_alignment_streak
+
+    @property
+    def axis_alignment_final_gate_streak(self) -> int:
+        return self._axis_alignment_streak
+
+    @property
+    def axis_alignment_selected_cube_axis(self) -> tuple[str, ...] | None:
+        return self._axis_alignment_selected_cube_axis
+
+    @property
+    def axis_alignment_closing_axis_w(self) -> torch.Tensor | None:
+        return self._axis_alignment_closing_axis_w
+
+    @property
+    def axis_alignment_cube_x_axis_w(self) -> torch.Tensor | None:
+        return self._axis_alignment_cube_x_axis_w
+
+    @property
+    def axis_alignment_cube_y_axis_w(self) -> torch.Tensor | None:
+        return self._axis_alignment_cube_y_axis_w
+
+    @property
+    def axis_alignment_desired_axis_w(self) -> torch.Tensor | None:
+        return self._axis_alignment_desired_axis_w
+
+    @property
+    def axis_alignment_signed_error(self) -> torch.Tensor | None:
+        return self._axis_alignment_signed_error
+
+    @property
+    def axis_alignment_error(self) -> torch.Tensor | None:
+        return self._axis_alignment_error
+
+    @property
+    def axis_alignment_wrist_roll_target(self) -> torch.Tensor | None:
+        return self._axis_alignment_wrist_roll_target
+
+    @property
+    def axis_alignment_wrist_roll_position(self) -> torch.Tensor | None:
+        return self._axis_alignment_wrist_roll_position
+
+    @property
+    def axis_alignment_wrist_roll_velocity(self) -> torch.Tensor | None:
+        return self._axis_alignment_wrist_roll_velocity
+
+    @property
+    def axis_alignment_max_arm_joint_velocity(self) -> torch.Tensor | None:
+        return self._axis_alignment_max_arm_joint_velocity
+
+    @property
+    def axis_alignment_direct_joint_target(self) -> torch.Tensor | None:
+        return self._axis_alignment_direct_joint_target
 
     @property
     def grasp_geometry_latched(self) -> bool:

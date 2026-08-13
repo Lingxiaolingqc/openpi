@@ -12,6 +12,7 @@ IK_ACTION_PATH = Path(__file__).resolve().parent / "red_cube_to_box_task" / "pha
 POLAR_BASE_PATH = Path(__file__).resolve().parent / "red_cube_to_box_task" / "polar_base_state_machine.py"
 FAILED_ROOT = Path(__file__).resolve().parent / "red_cube_to_box_task" / "failed"
 BATCH_PATH = Path(__file__).resolve().parent / "red_cube_to_box_expert_batch.py"
+ENV_CFG_PATH = Path(__file__).resolve().parent / "red_cube_to_box_task" / "env_cfg.py"
 CLASS_NAME = "RedCubeToBoxAutogenPolarRetreatTransportStateMachine"
 
 
@@ -58,7 +59,7 @@ def test_max_steps_does_not_use_a_class_scope_comprehension() -> None:
         and any(isinstance(target, ast.Name) and target.id == "MAX_STEPS" for target in statement.targets)
     )
 
-    assert not any(isinstance(node, (ast.GeneratorExp, ast.ListComp)) for node in ast.walk(max_steps.value))
+    assert not any(isinstance(node, ast.GeneratorExp | ast.ListComp) for node in ast.walk(max_steps.value))
 
 
 def test_failed_experts_keep_their_existing_smoke_and_batch_cli_registrations() -> None:
@@ -298,6 +299,47 @@ def test_randomized_pickup_preserves_known_full_pose_fixed_keyframes() -> None:
     assert "_configure_pickup_position_posture_mode" not in pickup_branch
     assert "_update_pickup_convergence" not in pickup_branch
     assert "reset_joint_target_accumulation_reference" in retreat_source
+
+
+def test_pickup_aligns_closing_axis_with_cube_before_close() -> None:
+    class_node = _class_node()
+    phases = next(
+        ast.literal_eval(statement.value)
+        for statement in class_node.body
+        if isinstance(statement, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "_PHASES" for target in statement.targets)
+    )
+    assert phases.index("descend_to_cube") < phases.index("settle_at_grasp_target")
+    assert phases.index("settle_at_grasp_target") < phases.index("align_gripper_to_cube")
+    assert phases.index("align_gripper_to_cube") < phases.index("recenter_after_alignment")
+    assert phases.index("recenter_after_alignment") < phases.index("close_gripper")
+
+    align_source = ast.unparse(_method("_update_axis_alignment"))
+    geometry_source = ast.unparse(_method("_measure_axis_alignment"))
+    close_hold_source = ast.unparse(_method("_hold_axis_alignment_target"))
+    assert "set_direct_joint_position_target" in close_hold_source
+    assert "_AXIS_ALIGNMENT_MAX_TARGET_STEP" in align_source
+    assert "_AXIS_ALIGNMENT_MAX_TARGET_LEAD" in align_source
+    assert "_AXIS_ALIGNMENT_TOLERANCE" in align_source
+    assert "select_nearest_cube_axis_alignment" in geometry_source
+    assert "measure_cube_axis_alignment" in geometry_source
+    assert "self._aligned_gripper_quat_w" in align_source
+
+
+def test_axis_alignment_speedup_keeps_closed_loop_accuracy_gate() -> None:
+    source = SOURCE_PATH.read_text(encoding="utf-8")
+    assert "_AXIS_ALIGNMENT_MAX_TARGET_LEAD = math.radians(4.0)" in source
+    assert "_AXIS_ALIGNMENT_TOLERANCE = math.radians(5.0)" in source
+    assert "_AXIS_ALIGNMENT_STABLE_STEPS = 10" in source
+    assert "_AXIS_ALIGNMENT_MAX_TARGET_STEP = math.radians(1.0)" in source
+
+
+def test_scene_keeps_box_clear_of_reachable_cube_randomization() -> None:
+    source = ENV_CFG_PATH.read_text(encoding="utf-8")
+    assert "TARGET_BOX_CENTER_XY = (0.18, -0.43)" in source
+    assert "CUBE_RANDOMIZATION_X_RANGE = (-0.02, 0.05)" in source
+    assert "CUBE_RANDOMIZATION_Y_RANGE = (-0.06, -0.04)" in source
+    assert 'self.events.domain_randomize_0.params["pose_range"]' in source
 
 
 def test_close_gate_debounces_pick_feedback_without_bypassing_aperture_stability() -> None:

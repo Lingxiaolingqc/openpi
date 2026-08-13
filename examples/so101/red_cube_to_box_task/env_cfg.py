@@ -9,12 +9,18 @@ from isaaclab.utils import configclass
 from leisaac.tasks.lift_cube.lift_cube_env_cfg import LiftCubeEnvCfg
 from leisaac.tasks.lift_cube.lift_cube_env_cfg import LiftCubeSceneCfg
 from leisaac.tasks.lift_cube.lift_cube_env_cfg import TerminationsCfg as LiftCubeTerminationsCfg
+import torch
 
 from . import mdp
 
-# Keep the same forward (+Y) reach as (0.49394, -0.40428), while
-# mirroring the complete tray across the robot's x=0.35 sagittal line.
-TARGET_BOX_CENTER_XY = (0.20606, -0.40428)
+# Keep the tray on the robot's left, but outside the complete randomized cube
+# pickup region.  The previous x=0.20606 placement left as little as 31 mm
+# between the tray exterior and sampled cube centers, so the non-moving jaw
+# could contact a wall before the gripper was centered on the cube.
+TARGET_BOX_CENTER_XY = (0.18, -0.43)
+CUBE_RANDOMIZATION_X_RANGE = (-0.02, 0.05)
+CUBE_RANDOMIZATION_Y_RANGE = (-0.06, -0.04)
+CUBE_RANDOMIZATION_YAW_RANGE = (-30.0 * torch.pi / 180.0, 30.0 * torch.pi / 180.0)
 TABLE_SURFACE_Z = 0.04146
 TARGET_BOX_INNER_SIZE = 0.110
 TARGET_BOX_WALL_THICKNESS = 0.012
@@ -142,6 +148,20 @@ class RedCubeToBoxEnvCfg(LiftCubeEnvCfg):
     scene: RedCubeToBoxSceneCfg = RedCubeToBoxSceneCfg(env_spacing=8.0)
     terminations: RedCubeToBoxTerminationsCfg = RedCubeToBoxTerminationsCfg()
     task_description: str = "Pick up the red cube and place it inside the green box."
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        # The upstream LiftCube range reaches 335 mm forward from the SO-101
+        # root.  With the fixed pickup orientation, those samples drive lift,
+        # elbow, and wrist-flex into a folded IK compromise that cannot align
+        # the jaw with the cube.  Retain useful XY/yaw variation inside the
+        # empirically reachable pickup workspace.
+        self.events.domain_randomize_0.params["pose_range"] = {
+            "x": CUBE_RANDOMIZATION_X_RANGE,
+            "y": CUBE_RANDOMIZATION_Y_RANGE,
+            "z": (0.0, 0.0),
+            "yaw": CUBE_RANDOMIZATION_YAW_RANGE,
+        }
 
     def use_teleop_device(self, teleop_device) -> None:
         super().use_teleop_device(teleop_device)
