@@ -599,28 +599,28 @@ autogen_polar_retreat_transport-seed42-20260813-040256-pid4072\index.html
 
 ## 20. 关键提交索引
 
-| Commit | 作用 |
-| --- | --- |
-| `c285d9d` | 新增 independent retreat/transport 专家 |
-| `b450c9d` | 增加 independent retreat 安全判据、抓取丢失保护和诊断 |
-| `9cf63bf` | independent retreat 两段式实验 |
-| `cc40169` | 回退单段 retreat，保留为受控速度对照 |
-| `07652a6` | 新增 polar 圆弧/径向路径专家 |
-| `c605bd3` | retreat 降维到 `xyz_tilt` 并增加安全停止保护 |
-| `cc226bf` | 垂直 + 短径向 retreat 与 shoulder-pan 硬任务实验 |
-| `0c76320` | 移除硬 pan，加入 close feedback settle gate |
-| `380d9a5` | 调整 polar 抓取闭合门控 |
-| `8c5aae2` | retreat 改用 wrist 控制，扩展 phase-aware IK |
-| `d4382b5` | retreat 放开 Y 的消融实验 |
-| `45bd712` | 根据日志恢复 Y 约束 |
-| `4dfaa0f` | 调整 polar 阶段完成门 |
-| `351cdb7` | wrist/gripper XYZ position-only 与软姿态路线完善 |
-| `0356394` | 增加逐关节 IK target/actual/velocity 诊断 |
-| `45b1255` | 增加独立累计关节目标 |
-| `0bd8b68` | radial 切回 gripper position-only 并在 handoff rebase |
-| `750c746` | tracking-gap anti-windup 冻结实验 |
-| `6e0d548` | 移除 anti-windup，恢复持续累计纠偏 |
-| `0bc130f` | lower position-only，并以实际 Z 完成 |
+| Commit      | 作用                                                             |
+| ----------- | ---------------------------------------------------------------- |
+| `c285d9d` | 新增 independent retreat/transport 专家                          |
+| `b450c9d` | 增加 independent retreat 安全判据、抓取丢失保护和诊断            |
+| `9cf63bf` | independent retreat 两段式实验                                   |
+| `cc40169` | 回退单段 retreat，保留为受控速度对照                             |
+| `07652a6` | 新增 polar 圆弧/径向路径专家                                     |
+| `c605bd3` | retreat 降维到`xyz_tilt` 并增加安全停止保护                    |
+| `cc226bf` | 垂直 + 短径向 retreat 与 shoulder-pan 硬任务实验                 |
+| `0c76320` | 移除硬 pan，加入 close feedback settle gate                      |
+| `380d9a5` | 调整 polar 抓取闭合门控                                          |
+| `8c5aae2` | retreat 改用 wrist 控制，扩展 phase-aware IK                     |
+| `d4382b5` | retreat 放开 Y 的消融实验                                        |
+| `45bd712` | 根据日志恢复 Y 约束                                              |
+| `4dfaa0f` | 调整 polar 阶段完成门                                            |
+| `351cdb7` | wrist/gripper XYZ position-only 与软姿态路线完善                 |
+| `0356394` | 增加逐关节 IK target/actual/velocity 诊断                        |
+| `45b1255` | 增加独立累计关节目标                                             |
+| `0bd8b68` | radial 切回 gripper position-only 并在 handoff rebase            |
+| `750c746` | tracking-gap anti-windup 冻结实验                                |
+| `6e0d548` | 移除 anti-windup，恢复持续累计纠偏                               |
+| `0bc130f` | lower position-only，并以实际 Z 完成                             |
 | `85d19d8` | jaw/gripper 偏置反算、垂直 lower/retract、原地 release；最终成功 |
 
 ## 21. 后续复测建议
