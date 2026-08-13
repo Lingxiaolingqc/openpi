@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build SO-101 State Machine"
+  short_description: "Build and validate a robust SO-101 task state machine"
+  default_prompt: "Use $build-so101-state-machine to build a validated SO-101 task state machine from scratch."
