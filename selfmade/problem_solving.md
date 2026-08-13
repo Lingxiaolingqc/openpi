@@ -644,3 +644,128 @@ autogen_polar_retreat_transport-seed42-20260813-040256-pid4072\index.html
 它。为避免成功实现依赖 `failed` 包，原实现抽成当前目录的 `polar_base_state_machine.py`，类名改为
 `RedCubeToBoxPolarBaseStateMachine`；polar 继承该活动基类，而 `failed/` 中保留使用旧类名的薄兼容子类。
 这只改变代码组织和导入路径，不改变原 independent 专家的状态、动作或参数。
+
+## 23. 随机 batch 的 close gate 集中失败（2026-08-13）
+
+初次成功率验证中，polar 明显优于其他路线，但 7 个失败全部集中为
+`gripper_not_settled_before_retreat`。这说明当时应先处理抓取后的物理判定，而不是修改已经能工作的运输路线。
+
+逐帧日志显示两个旧假设不可靠：jaw detection 会在继续闭合时移动，因此已经建立的接触几何可能随后暂时
+离开 `15 mm` 阈值；任务的 `pick_cube` 也可能只是短暂为真。最终保留方案是：
+
+- jaw 进入确认距离后锁存“曾建立抓取几何”，不因随后 jaw frame 移动而清除；
+- `pick_cube` 必须连续 3 帧才锁存，单帧反馈不直接放行；
+- 仍要求 12 帧夹爪角窗口的跨度不超过 `0.01 rad`，连续稳定 8 帧；
+- close 最长等待从 200 增至 320 步，但超时仍明确失败，不靠无限等待掩盖 miss；
+- 把 target error、速度、角窗口、jaw 距离、feedback streak 和 stable streak 一并写入失败原因。
+
+核心教训：接触成立、任务 proxy 为真和执行器孔径稳定是三个不同事实。可以锁存前两者，但进入运动前仍须
+等待第三者；不能只放宽 jaw 距离或只延长阶段时间。
+
+## 24. Batch 录像全黑但物理仿真仍在运行（2026-08-13）
+
+录制目录和 JPEG 正常生成，但 batch 帧全部为黑。对比已验证的非 batch smoke 后确认，问题不在图片编码：
+问题运行的原始 `policy.front` 张量本身就是全零。根因是启用离屏相机但未显式指定 rendering mode，
+AppLauncher 的空覆盖继承了本机禁用 RTX 的持久设置。
+
+解决方式：
+
+- smoke/batch 在启用相机且用户未指定时自动选择 `performance`；
+- 用户显式指定 `balanced/quality` 时不覆盖；
+- 不添加 `--renderer_device`；
+- 首帧打印 dtype/shape/min/max/mean，若 `max=0` 立即失败，不继续生成整批黑录像。
+
+修复后首帧恢复到 `max=240`、均值约 `153.79`，非 batch smoke 同时保持成功。核心教训：录像 QA 必须检查
+传感器原始像素，文件存在和相机 tensor shape 正常都不能证明 renderer 真正在输出图像。
+
+## 25. 随机位置暴露盒子遮挡和远端不可达（2026-08-13）
+
+录像显示部分失败并非 state machine 控制器本身：cube 离盒子太近时，固定爪会先被盒壁挡住；cube 离 robot
+root 太远时，五关节机械臂无法让 gripper 与 cube 在 XY 对齐，只能进入折中 IK 构型。
+
+原随机 batch 的 cube 中心距托盘外沿最小约 `31 mm`，同时存在相对 root 向前约 `335 mm` 的样本。最终：
+
+- box center 从 `(0.20606, -0.40428)` 移到更安全且可达的 `(0.18, -0.43)`；
+- cube reset 限制为 `x=(-0.02, 0.05)`、`y=(-0.06, -0.04)`；
+- yaw 保留 `[-30°, +30°]`，没有通过取消姿态随机化规避抓取问题。
+
+第一次几何修正后，10 个 episode 全部能建立抓取，整体成功率由 `3/10` 提高到 `5/10`。核心教训：随机化
+范围是任务可行域的一部分。应先排除静态障碍重叠和真实工作空间不可达，再用控制器调参解释剩余失败。
+
+## 26. Cube yaw 随机化后固定夹爪方向会夹飞方块（2026-08-13）
+
+即使位置可达，夹爪闭合轴保持固定时，旋转后的方块会让爪面先撞到相邻边角，将 cube 横向挤开。reference
+路线验证了可用的几何：以 gripper local `+X` 为闭合轴，在 wrist-roll 软限位内选择与
+`{+cube X, -cube X, +cube Y, -cube Y}` 转角最小的无向轴。
+
+polar 最终加入：
+
+```text
+descend
+-> measured position settle
+-> freeze other four arm joints
+-> direct wrist_roll axis alignment
+-> recenter while preserving measured aligned quaternion
+-> close while holding aligned arm target
+```
+
+直接从固定时长 descend 跳到 align/close 的实验被否决，因为实际末端仍落后参考约 `43 mm`。必须先按实测
+位置稳定，再旋转并 recenter。alignment 每步 target 增量仍限制为 `1°`，实测角误差门仍为 `5°` 且需连续
+10 帧稳定；只把 target 相对 actual 的最大 lead 从 `2°` 增至 `4°`。同一 10 回合 batch 中，平均 alignment
+由 `255.2` 降到 `188.8` 步、最大由 `564` 降到 `348` 步，最终最大实测误差仍为 `0.32°`。两版都抓到
+10/10；剩余 4 个失败发生在 retreat，因此此时没有继续放宽 alignment 精度。
+
+核心教训：单关节 direct control 能避免 IK 与另一个 writer 争用 wrist roll；速度优化应增加有界 target lead，
+而不是放宽最终实测误差或稳定门。
+
+## 27. Cube 旋转后仍用世界固定抓取偏移（2026-08-13）
+
+### 27.1 新发现：jaw detection 不是夹持中心
+
+为修复 axis alignment 后的抓取偏心，曾尝试：
+
+```text
+recenter_gripper_xy = actual_gripper_xy + (cube_xy - actual_jaw_xy)
+```
+
+这个公式隐含假设 `actual_jaw_xy` 是两爪间隙中心。实际 LeIsaac 配置中，`ee_frame.target[1]` 是 jaw
+刚体加 `(-0.021, -0.070, +0.020) m` 偏移得到的检测点，位于可动夹爪最远端。上述公式会把可动爪端点
+送到 cube 中心，从而把真正的夹持开口整体移到一侧。动态 smoke 因此在
+`recenter_after_alignment` 超时并推动 cube。该实验被撤销，没有进入提交历史。
+
+### 27.2 更根本的问题：标定偏移没有随夹爪旋转
+
+原成功抓取目标使用世界系固定偏移：
+
+```text
+gripper_xy = cube_xy + (-0.020, 0)
+```
+
+它只在 gripper local `+X` 与世界 `+X` 重合时成立。新增 wrist-roll axis alignment 后，夹爪闭合轴会随
+cube yaw 旋转，但该偏移仍固定指向世界 `-X`，于是 cube yaw 越大，夹持开口越偏。旧 10 回合 batch 中
+4 个 retreat grasp-loss（episode 2、5、6、7）正是这一类抓取几何不一致的后果；不应先修改 retreat 路线。
+
+### 27.3 核心解决方式：旋转已有成功标定，而不是追踪 jaw 端点
+
+将既有 `20 mm` 标定解释为 gripper local closing-axis offset，并在 alignment 完成后用实测 gripper
+姿态转到世界系：
+
+```text
+closing_axis_xy = normalize(world_direction(gripper_local_+X).xy)
+target_gripper_xy = live_cube_xy - 0.020 * closing_axis_xy
+```
+
+这里使用 alignment 后的实时 cube XY，保留原抓取 Z；`jaw_detection` 不参与 recenter。零旋转时该公式
+严格退化为原来的 `(-0.020, 0)` 成功目标，因此只修正姿态变化带来的坐标系错误。
+
+### 27.4 验证结果
+
+- Windows 原生 seed-42 单环境 smoke：`1793` 步，`expert_success=True`，无 timeout/abort；
+- 相同 seed-42 随机序列的 10 回合录像 batch：从旧版 `6/10` 提升到 `10/10`；
+- 原失败 episode 2、5、6、7 全部成功；
+- `failed_episodes=[]`、`servo_abort_episodes=[]`、`success_rate=1.000`；
+- batch 与全部 10 个录像目录位于
+  `D:\Sim\results\expert-batch\polar\rotated-grasp-offset-20260813-203016`。
+
+核心教训：先确认一个 frame 是 IK 原点、刚体原点、接触点、检测端点还是夹持中心。经过姿态对齐后，
+局部标定向量必须随末端姿态旋转；不能继续把它当作世界系固定 XY，也不能用单个可动爪端点替代夹持中心。

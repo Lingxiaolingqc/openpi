@@ -334,6 +334,17 @@ def test_axis_alignment_speedup_keeps_closed_loop_accuracy_gate() -> None:
     assert "_AXIS_ALIGNMENT_MAX_TARGET_STEP = math.radians(1.0)" in source
 
 
+def test_post_alignment_recenter_rotates_calibrated_gripper_offset_without_jaw_detection() -> None:
+    get_action_source = ast.unparse(_method("get_action"))
+    recenter_source = ast.unparse(_method("_capture_postalign_recenter_target"))
+    assert "self._capture_postalign_recenter_target(env, pick_grasp_w)" in get_action_source
+    assert 'env.scene[\'cube\'].data.root_pos_w' in recenter_source
+    assert "self._axis_alignment_closing_axis_w[:, :2]" in recenter_source
+    assert "cube_w[:, :2] - _PICK_GRIPPER_OFFSET_ALONG_CLOSING_AXIS * closing_axis_xy" in recenter_source
+    assert 'env.scene[\'ee_frame\'].data.target_pos_w[:, 1' not in recenter_source
+    assert "target_w[:, 2]" not in recenter_source
+
+
 def test_scene_keeps_box_clear_of_reachable_cube_randomization() -> None:
     source = ENV_CFG_PATH.read_text(encoding="utf-8")
     assert "TARGET_BOX_CENTER_XY = (0.18, -0.43)" in source

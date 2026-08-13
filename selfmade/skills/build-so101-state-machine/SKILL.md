@@ -32,12 +32,15 @@ Run or repair the scene audit before writing motion logic. Confirm:
 - arm and gripper joint names, indices, limits, and direction conventions;
 - wrist and gripper body names;
 - `ee_frame.target[0]` and `target[1]` semantics;
+- whether each frame is an IK origin, rigid-body origin, contact point, distal detection point, or grasp-gap center;
 - cube center and half-height;
 - target-box floor center, wall top, and usable inner bounds;
 - action shape and quaternion convention;
 - success predicate and reset behavior.
 
 Stop and correct frame semantics if a named point is ambiguous. Never infer the end effector from the last body index.
+Before controller tuning, verify that randomized cube poses remain outside box geometry and inside the arm's measured
+pickup workspace. Preserve useful yaw variation instead of deleting it to hide a grasp-orientation defect.
 
 ## Define the state-machine contract
 
@@ -60,13 +63,15 @@ Implement and validate incrementally:
 
 1. `approach_cube`: move above the measured cube with the gripper open.
 2. `descend_to_cube`: preserve the verified pickup orientation and approach the grasp point.
-3. `close_gripper`: close with feedback; require contact-compatible aperture and a stable window.
-4. vertical lift: gain wall/table clearance before horizontal motion.
-5. safe horizontal transport: use a segmented path whose geometry is explainable from robot root and box position.
-6. radial/placement alignment: compensate the live held-object offset rather than aligning the gripper origin.
-7. vertical lower: freeze the achieved handoff XY and judge completion primarily from actual Z.
-8. `release`: hold the actual release pose and open only after placement gates pass.
-9. vertical retract and settle.
+3. optional axis alignment and recenter: align the closing axis to object geometry, then rotate the calibrated
+   gripper-to-grasp offset with the measured aligned axis.
+4. `close_gripper`: close with feedback; require contact-compatible aperture and a stable window.
+5. vertical lift: gain wall/table clearance before horizontal motion.
+6. safe horizontal transport: use a segmented path whose geometry is explainable from robot root and box position.
+7. radial/placement alignment: compensate the live held-object offset rather than aligning the gripper origin.
+8. vertical lower: freeze the achieved handoff XY and judge completion primarily from actual Z.
+9. `release`: hold the actual release pose and open only after placement gates pass.
+10. vertical retract and settle.
 
 After each phase becomes dynamically valid, add only the next phase. Preserve the last working version as a comparison
 expert or commit.
@@ -85,6 +90,30 @@ expert or commit.
 
 Do not use full world 6D pose as a default transport constraint for the five arm joints. Do not use unconstrained
 position-only without soft posture stabilization.
+
+## Preserve pickup geometry through axis alignment
+
+Do not treat a jaw detection point as the center of the grasp gap. In the bundled LeIsaac SO-101 scene,
+`ee_frame.target[1]` is an offset point at the distal end of the moving jaw. Driving it to the cube center shifts the
+whole grasp to one side.
+
+If an unrotated pickup was calibrated as an offset along gripper local axes, rotate that calibration after wrist-roll
+alignment. For a calibrated distance `d` along gripper local `+X`:
+
+```text
+closing_axis_xy = normalize(world_direction(gripper_local_+X).xy)
+target_gripper_xy = live_cube_xy - d * closing_axis_xy
+```
+
+Use the live cube position after alignment because contact or alignment may have moved it. Preserve the verified Z.
+Only use a midpoint of fixed- and moving-jaw contact points when both contact-point frames are explicitly defined and
+verified; never synthesize it from one distal detection point.
+
+When the object has randomized yaw, align the gripper closing axis before close. Settle the measured Cartesian pickup
+position first; a completed time interpolation does not prove arrival. Freeze the other arm joints and give
+`wrist_roll` one direct target writer. Choose the nearest reachable signed object X/Y axis, preserve soft limits, and
+complete only from measured angular error, joint velocity, and consecutive stable frames. Increase bounded target lead
+to improve speed before relaxing measured accuracy.
 
 ## Compute placement from held geometry
 
@@ -115,6 +144,10 @@ Require:
   release.
 
 Never continue issuing transport actions after confirmed grasp loss.
+
+Keep close feedback concepts separate: contact geometry may be sticky once established, task `pick_cube` feedback must
+be debounced, and gripper aperture still needs its own stable multi-frame window. A longer bounded timeout can absorb
+contact settling; it must not replace those gates.
 
 ## Instrument before tuning
 

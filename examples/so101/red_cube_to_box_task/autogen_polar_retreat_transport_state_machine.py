@@ -56,6 +56,7 @@ _PREALIGN_POSITION_TOLERANCE = 0.006
 _POSTALIGN_RECENTER_TIMEOUT_STEPS = 240
 _POSTALIGN_POSITION_TOLERANCE = 0.006
 _PICKUP_SETTLE_STABLE_STEPS = 8
+_PICK_GRIPPER_OFFSET_ALONG_CLOSING_AXIS = 0.020
 _SMOOTHERSTEP_MAX_DERIVATIVE = 1.875
 
 
@@ -170,6 +171,7 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         self._pickup_settle_streak = 0
         self._pickup_position_error: float | None = None
         self._aligned_gripper_quat_w: torch.Tensor | None = None
+        self._postalign_recenter_target_w: torch.Tensor | None = None
 
     def setup(self, env) -> None:
         super().setup(env)
@@ -223,6 +225,10 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
             else:
                 if self._aligned_gripper_quat_w is None:
                     raise RuntimeError("Aligned gripper quaternion was not captured before recenter")
+                if self._postalign_recenter_target_w is None:
+                    self._capture_postalign_recenter_target(env, pick_grasp_w)
+                assert self._postalign_recenter_target_w is not None
+                pick_grasp_w = self._postalign_recenter_target_w
                 action = self._compose_pose_action_with_quaternion(
                     env, pick_grasp_w, self._aligned_gripper_quat_w, _GRIPPER_OPEN
                 )
@@ -511,6 +517,27 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
         )
         stable = bool((error <= tolerance).all().item())
         self._pickup_settle_streak = self._pickup_settle_streak + 1 if stable else 0
+
+    def _capture_postalign_recenter_target(self, env, nominal_gripper_target_w: torch.Tensor) -> None:
+        """Rotate the calibrated gripper-to-grasp offset with the aligned closing axis.
+
+        The LeIsaac jaw detection frame is the distal point of the moving jaw,
+        not the center of the open grasp gap.  It must therefore not be driven
+        to the cube center.  The successful unrotated pickup was calibrated at
+        ``cube_xy - 20 mm * gripper_local_+x``.  After wrist-roll alignment,
+        rotate that same calibration with the measured local +X closing axis.
+        """
+
+        if self._axis_alignment_closing_axis_w is None:
+            raise RuntimeError("Closing axis was not measured before post-alignment recenter")
+        cube_w = env.scene["cube"].data.root_pos_w
+        closing_axis_xy = self._axis_alignment_closing_axis_w[:, :2]
+        closing_axis_xy = closing_axis_xy / torch.clamp(
+            torch.linalg.vector_norm(closing_axis_xy, dim=-1, keepdim=True), min=1.0e-8
+        )
+        target_w = nominal_gripper_target_w.clone()
+        target_w[:, :2] = cube_w[:, :2] - _PICK_GRIPPER_OFFSET_ALONG_CLOSING_AXIS * closing_axis_xy
+        self._postalign_recenter_target_w = target_w.detach().clone()
 
     def _measure_axis_alignment(self, env, *, select_axis: bool):
         gripper_quat_w = env.scene["ee_frame"].data.target_quat_w[:, 0]
@@ -1087,6 +1114,8 @@ class RedCubeToBoxAutogenPolarRetreatTransportStateMachine(RedCubeToBoxPolarBase
             "pickup_axis_alignment": "direct_wrist_roll_to_nearest_signed_cube_xy_axis",
             "pickup_axis_alignment_tolerance_rad": _AXIS_ALIGNMENT_TOLERANCE,
             "pickup_axis_alignment_max_target_step_rad": _AXIS_ALIGNMENT_MAX_TARGET_STEP,
+            "pickup_recenter_policy": "live_cube_xy_minus_rotated_calibrated_gripper_closing_axis_offset",
+            "pickup_gripper_offset_along_closing_axis": _PICK_GRIPPER_OFFSET_ALONG_CLOSING_AXIS,
             "gripper_close_minimum_steps": _GRIPPER_CLOSE_MINIMUM_STEPS,
             "gripper_close_maximum_steps": _GRIPPER_CLOSE_MAXIMUM_STEPS,
             "gripper_settle_stable_steps": _GRIPPER_SETTLE_STABLE_STEPS,

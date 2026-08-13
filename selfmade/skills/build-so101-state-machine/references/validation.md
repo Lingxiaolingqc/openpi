@@ -36,6 +36,11 @@ performance rendering, and no recording. Accept the NVIDIA EULA through `OMNI_KI
 If 8 GB VRAM is insufficient, first reduce camera or recording load. Do not change physics, phase gates, or success
 criteria to mask OOM.
 
+For every recorded run, print first-frame camera dtype, shape, minimum, maximum, and mean. Treat `max=0` as a renderer
+failure and stop immediately. Existing JPEG files or a valid tensor shape do not prove that off-screen RTX rendering is
+active. When cameras are enabled and no explicit mode was requested, use `performance`; do not add
+`--renderer_device`.
+
 ## Static checks
 
 Adapt the test list to the files changed:
@@ -102,3 +107,11 @@ Require all applicable conditions:
 - a fresh-process repeat succeeds before claiming a stable baseline.
 
 Report exact log path, completed steps, final object pose, box offset, speed, semantic sentinel, and commit hash.
+
+When pickup geometry or randomization behavior changes, follow the smoke with a recorded 10-episode batch. Put all ten
+episode directories under one timestamped `recordings` root and require the summary to report completed/successful/
+failed episodes, aborts, resets, non-finite episodes, and success rate. Compare the same seed sequence to the previous
+implementation so a changed random sample is not mistaken for improvement.
+
+Before interpreting controller failures, report the randomized cube min/max pose and check box clearance plus pickup
+reachability. If failures all share one phase/reason, repair that bottleneck before changing later phases.

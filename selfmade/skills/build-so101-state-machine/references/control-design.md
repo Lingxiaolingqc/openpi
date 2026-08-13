@@ -63,6 +63,10 @@ target_xy(k) = root_xy + radius * [sin(bearing(k)), cos(bearing(k))]
 
 Use a smoothstep/smootherstep time law and keep Z at the actual safe handoff height.
 
+For randomized object yaw, insert a measured pickup settle, closing-axis alignment, and recenter before feedback close.
+Do not start alignment merely because descend interpolation time elapsed. Prefer one direct `wrist_roll` writer while
+holding the other arm joints; do not let Cartesian IK and a second joint writer compete for the same joint.
+
 ## IK and joint-target rules
 
 SO-101 has five arm joints. Treat full XYZ plus three-axis world orientation as overconstrained unless a measured test
@@ -118,6 +122,14 @@ Use phase-specific measured criteria:
 Monitor grasp geometry continuously after confirmation. Abort before producing the next unsafe motion when the grasp is
 lost. Record timeout and safety reasons separately.
 
+For close, distinguish three signals:
+
+1. contact-compatible jaw/object geometry, which may be latched once established;
+2. debounced task grasp feedback, which must not be accepted from one frame;
+3. a stable gripper-aperture window, which remains required before lift.
+
+Log all three when close times out. Do not fix a concentrated close failure by editing transport first.
+
 ## Placement geometry
 
 Align the held object proxy, not the gripper origin:
@@ -132,6 +144,37 @@ systematic placement error.
 
 Perform final descent at the actual handoff XY. Release in place. Retract vertically from the actual release XY.
 
+## Pickup frame semantics and rotated calibration
+
+Keep these quantities distinct:
+
+| Quantity | Meaning | Safe use |
+| --- | --- | --- |
+| gripper frame | IK-controlled rigid-body origin | Cartesian pose target |
+| jaw detection frame | distal point attached to the moving jaw | task predicate or diagnostic only |
+| grasp-gap center | midpoint between verified opposing contact surfaces | object centering, if both surfaces are known |
+| calibrated grasp offset | empirically verified vector from gripper origin to desired grasp center | pickup target after rotating into world coordinates |
+
+This correction is invalid when `jaw_detection` is a moving-jaw endpoint:
+
+```text
+target_gripper_xy = actual_gripper_xy + (cube_xy - actual_jaw_xy)
+```
+
+It makes the moving jaw endpoint chase the cube center and displaces the actual opening. Instead, express a successful
+calibration in gripper-local coordinates and transform it with the aligned gripper orientation. For a `20 mm` local
+`+X` calibration:
+
+```text
+closing_axis_w = rotate(gripper_quaternion_w, [1, 0, 0])
+closing_axis_xy = normalize(closing_axis_w.xy)
+target_gripper_xy = live_cube_xy - 0.020 * closing_axis_xy
+```
+
+Verify that the zero-yaw case reduces exactly to the old successful target. Log the cube and gripper before/after
+recenter, and assess whether close displaces the cube. Use jaw distance only as the task-defined grasp proxy, not as
+proof that the grasp opening is centered.
+
 ## Avoided designs
 
 Do not repeat these without an explicit new hypothesis and instrumentation:
@@ -142,6 +185,10 @@ Do not repeat these without an explicit new hypothesis and instrumentation:
 - releasing retreat Y and allowing a large sideways IK branch;
 - simultaneous low-height XY realignment and lowering near box walls;
 - aligning the gripper origin directly to the box center;
+- driving a single moving-jaw distal detection point to the cube center;
+- retaining a world-fixed pickup XY offset after rotating the gripper closing axis;
+- starting wrist-roll alignment from a lagging time-driven descend endpoint;
+- loosening measured alignment accuracy merely to reduce alignment duration;
 - single-frame phase completion;
 - diagnosing tracking from final endpoint error;
 - continuing after grasp loss;
