@@ -1,8 +1,8 @@
-"""Autogen reference ablation with only a slower gripper close trajectory."""
+"""Archived Autogen reference ablation with only a slower gripper close trajectory."""
 
 from __future__ import annotations
 
-from .autogen_reference_state_machine import RedCubeToBoxAutogenReferenceStateMachine
+from ..autogen_reference_state_machine import RedCubeToBoxAutogenReferenceStateMachine
 
 
 class RedCubeToBoxAutogenReferenceSlowGraspStateMachine(RedCubeToBoxAutogenReferenceStateMachine):

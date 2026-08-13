@@ -489,7 +489,7 @@ grep -nE \
 tail -n 520
 ```
 
-The independent `autogen_reference` expert ports the bundled
+The internal `autogen_reference_state_machine.py` base ports the bundled
 `autogen/so101-autogen-main/src/state_machine` implementation as a reference baseline. It does not inherit the
 legacy, adaptive, servo, or earlier Autogen-derived experts. Its active state order is approach, descend, grasp,
 grasp settle, lift, radial retreat, transport, release, and return home; the original
@@ -506,7 +506,7 @@ single-object task uses the live target-box floor center instead of Autogen's mu
 grasp stops safely instead of issuing the source project's direct joint-space return-home recovery. Thus this is a
 behavioral port with explicit adapters, not a byte-for-byte runtime transplant.
 
-Run the first dynamic comparison with seed 42. The recorder retains both successful and failed visual evidence. Do
+Run the verified axis-aligned slow-grasp expert with seed 42. The recorder retains both successful and failed visual evidence. Do
 not add `--renderer_device`; this installation uses the selected simulation device.
 
 ```bash
@@ -532,7 +532,7 @@ timeout --signal=KILL 480s \
   --enable_cameras \
   --device cuda:6 \
   --assets_root "$LEISAAC_ASSETS_ROOT" \
-  --expert autogen_reference \
+  --expert autogen_reference_axis_align_slow_grasp \
   --autogen_ray_axis=-z \
   --seed 42 \
   --record_dir "$AUTOGEN_REFERENCE_RECORD_DIR" \
@@ -619,12 +619,12 @@ gripper-frame local-axis ray. It therefore does not claim to be a bit-for-bit re
 the log's `expert_ik_runtime_mode`, `posture_target_rad`, `temp_jaw_angle_rad`, and
 `expert_temp_jaw_angle_captured` fields make that experimental difference explicit.
 
-Two additional experts isolate the latest grasp-ejection diagnosis without overwriting `autogen_reference`:
+The archived experiments leading to the verified expert isolate the grasp-ejection diagnosis:
 
 - `autogen_reference_slow_grasp` changes only `GRASP_DURATION_STEPS` from 80 to 240. The commanded close slope is
   one third of the reference value; ray geometry, descent, temporary jaw-angle latch, settle gates, and all later phases
   remain unchanged.
-- `autogen_reference_axis_align_slow_grasp` inherits that exact slow close. When the reference ray gate first becomes valid,
+- `autogen_reference_axis_align_slow_grasp` preserves that exact slow close directly. When the reference ray gate first becomes valid,
   it freezes the already-issued Cartesian target and enters `ray_hit_tracking_settle` with the gripper still open. It does
   not lower that target again: the measured wrist is allowed to finish the residual motion that the baseline controller had
   already requested. The wrist must remain on the valid ray, approach the frozen target within 5 mm, and keep all five arm
@@ -651,9 +651,10 @@ Two explicit handoff experiments were removed after their traces showed that wai
 custom XYZ-plus-nullspace controller formed positive feedback; native pose IK reduced the drift but did not settle; and even
 a direct hold rebased to the five measured joints remained displaced by contact load while wrist-flex velocity stayed near
 0.116 rad/s. The old `ik_handoff` phase and its detailed logger are therefore gone. This variant now tests edge alignment plus
-slow closing followed by prompt contact relief, while `autogen_reference_slow_grasp` remains the slow-close-only control.
+slow closing followed by prompt contact relief. The unsuccessful slow-close-only control is retained under
+`red_cube_to_box_task/failed/` for source comparison but is no longer an active smoke or batch option.
 
-Run both variants from a new terminal with the same seed. Each command writes a separate log and diagnostic recording;
+Run the verified variant from a new terminal. The command writes a separate log and diagnostic recording;
 do not add `--renderer_device`:
 
 ```bash
@@ -666,43 +667,13 @@ export ISAACSIM_PORTABLE_ROOT=/home/data/xiaoqinchuan/cache/isaacsim-portable
 export OMNI_KIT_ACCEPT_EULA=YES
 export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
 
-export AUTOGEN_SLOW_LOG="$LEISAAC_BASE/results/leisaac/autogen-reference-slow-grasp-seed42.log"
-export AUTOGEN_SLOW_RECORD_DIR="$LEISAAC_BASE/results/leisaac/autogen-reference-slow-grasp-recordings"
 export AUTOGEN_AXIS_LOG="$LEISAAC_BASE/results/leisaac/autogen-reference-axis-align-slow-grasp-seed42.log"
 export AUTOGEN_AXIS_RECORD_DIR="$LEISAAC_BASE/results/leisaac/autogen-reference-axis-align-slow-grasp-recordings"
 
 cd "$OPENPI_ROOT"
 mkdir -p \
   "$LEISAAC_BASE/results/leisaac" \
-  "$AUTOGEN_SLOW_RECORD_DIR" \
   "$AUTOGEN_AXIS_RECORD_DIR"
-
-timeout --signal=KILL 600s \
-  "$LEISAAC_ENV/bin/python" \
-  examples/so101/red_cube_to_box_expert_smoke.py \
-  --headless \
-  --enable_cameras \
-  --device cuda:6 \
-  --assets_root "$LEISAAC_ASSETS_ROOT" \
-  --expert autogen_reference_slow_grasp \
-  --autogen_ray_axis=-z \
-  --seed 42 \
-  --record_dir "$AUTOGEN_SLOW_RECORD_DIR" \
-  --record_every 4 \
-  --record_fps 15 \
-  2>&1 | tee "$AUTOGEN_SLOW_LOG"
-
-autogen_slow_transport_status=${PIPESTATUS[0]}
-echo "autogen_slow_transport_exit=$autogen_slow_transport_status"
-
-if [ "$autogen_slow_transport_status" -eq 0 ] &&
-   grep -q '^RED_CUBE_TO_BOX_EXPERT_SMOKE_OK$' "$AUTOGEN_SLOW_LOG" &&
-   ! grep -q '^RED_CUBE_TO_BOX_EXPERT_SMOKE_FAILED$' "$AUTOGEN_SLOW_LOG"; then
-  autogen_slow_semantic_status=0
-else
-  autogen_slow_semantic_status=1
-fi
-echo "autogen_slow_semantic_exit=$autogen_slow_semantic_status"
 
 timeout --signal=KILL 600s \
   "$LEISAAC_ENV/bin/python" \
@@ -731,7 +702,7 @@ else
 fi
 echo "autogen_axis_semantic_exit=$autogen_axis_semantic_status"
 
-for log_path in "$AUTOGEN_SLOW_LOG" "$AUTOGEN_AXIS_LOG"; do
+for log_path in "$AUTOGEN_AXIS_LOG"; do
   echo "========== $log_path =========="
   grep -nE \
     'expert_variant|servo_parameters|expert_phase|expert_autogen_reference|expert_temp_jaw_angle_captured|expert_temp_jaw_angle_released|expert_grasp_event|completed_steps|cube_final|cube_offset|expert_success|RED_CUBE_TO_BOX_EXPERT_SMOKE|Traceback|RuntimeError' \

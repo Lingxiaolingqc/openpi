@@ -7,13 +7,17 @@ import math
 from isaaclab.utils.math import quat_apply
 import torch
 
-from .autogen_reference_slow_grasp_state_machine import RedCubeToBoxAutogenReferenceSlowGraspStateMachine
+from .autogen_reference_state_machine import RedCubeToBoxAutogenReferenceStateMachine
 from .cube_axis_alignment import measure_cube_axis_alignment
 from .cube_axis_alignment import select_nearest_cube_axis_alignment
 
 
-class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAutogenReferenceSlowGraspStateMachine):
+class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAutogenReferenceStateMachine):
     """Freeze four arm joints and align cube edges with wrist_roll before closing."""
+
+    # Preserve the successful variant's original slow-close behavior directly
+    # instead of depending on the archived single-variable ablation class.
+    GRASP_DURATION_STEPS = 240
 
     # Contact impulses keep the simulated gripper joint's instantaneous
     # velocity near 0.2 rad/s even after its aperture has effectively stopped
@@ -554,6 +558,8 @@ class RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine(RedCubeToBoxAut
         return {
             **super().servo_parameters,
             "comparison_variant": "autogen_reference_axis_align_slow_grasp",
+            "grasp_duration_steps": self.GRASP_DURATION_STEPS,
+            "close_reference_speed_vs_autogen_reference": 1.0 / 3.0,
             "closing_axis": "gripper_local_+x",
             "alignment_target": "nearest_unoriented_cube_local_x_or_y",
             "alignment_rotation_joint": "wrist_roll_only",

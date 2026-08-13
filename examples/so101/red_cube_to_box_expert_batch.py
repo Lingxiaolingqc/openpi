@@ -12,8 +12,6 @@ from isaaclab.app import AppLauncher
 
 AUTOGEN_REFERENCE_EXPERTS = frozenset(
     {
-        "autogen_reference",
-        "autogen_reference_slow_grasp",
         "autogen_reference_axis_align_slow_grasp",
     }
 )
@@ -31,8 +29,6 @@ def _build_parser() -> argparse.ArgumentParser:
             "autogen_retreat_transport",
             "autogen_independent_retreat_transport",
             "autogen_polar_retreat_transport",
-            "autogen_reference",
-            "autogen_reference_slow_grasp",
             "autogen_reference_axis_align_slow_grasp",
             "legacy_gripper_anchor",
             "legacy_gripper_anchor_align_then_lower",
@@ -117,11 +113,7 @@ def main() -> int:
         RedCubeToBoxAutogenPolarRetreatTransportStateMachine,
     )
     from red_cube_to_box_task.autogen_reference_state_machine import (
-        RedCubeToBoxAutogenReferenceStateMachine,
         configure_autogen_reference_action,
-    )
-    from red_cube_to_box_task.autogen_reference_slow_grasp_state_machine import (
-        RedCubeToBoxAutogenReferenceSlowGraspStateMachine,
     )
     from red_cube_to_box_task.autogen_reference_axis_align_slow_grasp_state_machine import (
         RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine,
@@ -265,8 +257,6 @@ def main() -> int:
             "autogen_retreat_transport": RedCubeToBoxAutogenRetreatTransportStateMachine,
             "autogen_independent_retreat_transport": (RedCubeToBoxAutogenIndependentRetreatTransportStateMachine),
             "autogen_polar_retreat_transport": RedCubeToBoxAutogenPolarRetreatTransportStateMachine,
-            "autogen_reference": RedCubeToBoxAutogenReferenceStateMachine,
-            "autogen_reference_slow_grasp": RedCubeToBoxAutogenReferenceSlowGraspStateMachine,
             "autogen_reference_axis_align_slow_grasp": (RedCubeToBoxAutogenReferenceAxisAlignSlowGraspStateMachine),
             "legacy_gripper_anchor": RedCubeToBoxLegacyGripperAnchorStateMachine,
             "legacy_gripper_anchor_align_then_lower": RedCubeToBoxLegacyGripperAnchorAlignThenLowerStateMachine,
@@ -348,15 +338,9 @@ def main() -> int:
                 "independent_pickup,root_relative_5_over_7_retreat,root-centered_arc_with_yaw,"
                 "radial_box_approach,full_6d_pose,actual_xyz_and_bearing_completion"
             ),
-            "autogen_reference": (
-                "bundled_autogen_state_flow,robot-base_coordinates,original_green_ray_obb,"
-                "wrist_xyz_ik_plus_wrist_flex_posture_correction,continuous_gripper"
-            ),
-            "autogen_reference_slow_grasp": (
-                "autogen_reference,grasp_close_duration_80_to_240_steps,no_other_behavior_change"
-            ),
             "autogen_reference_axis_align_slow_grasp": (
-                "autogen_reference_slow_grasp,post_descend_gripper_local_x_to_nearest_cube_local_x_or_y,"
+                "autogen_reference,grasp_close_duration_80_to_240_steps,"
+                "post_descend_gripper_local_x_to_nearest_cube_local_x_or_y,"
                 "wrist_xyz_plus_wrist_roll,recenter_before_grasp"
             ),
             "legacy_gripper_anchor": "legacy_fixed_world,jaw_anchored_placement",

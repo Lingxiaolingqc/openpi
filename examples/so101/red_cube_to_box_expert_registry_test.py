@@ -73,7 +73,7 @@ def _expert_class_mappings(path: Path) -> list[dict[str, str]]:
             for key, value in zip(node.value.keys, node.value.values, strict=True)
             if isinstance(key, ast.Constant) and isinstance(key.value, str) and isinstance(value, ast.Name)
         }
-        if "autogen_reference_slow_grasp" in mapping:
+        if "autogen_reference_axis_align_slow_grasp" in mapping:
             mappings.append(mapping)
     return mappings
 
@@ -91,8 +91,8 @@ def test_every_entry_point_maps_every_expert_choice() -> None:
         assert all(mapping == choices for mapping in mappings), f"An expert mapping is incomplete in {path}"
 
 
-def test_slow_grasp_expert_is_a_single_variable_subclass() -> None:
-    path = TASK_ROOT / "autogen_reference_slow_grasp_state_machine.py"
+def test_slow_grasp_expert_is_an_archived_single_variable_subclass() -> None:
+    path = TASK_ROOT / "failed" / "autogen_reference_slow_grasp_state_machine.py"
     class_node = _class_definition(path, SLOW_GRASP_CLASS)
 
     assert [ast.unparse(base) for base in class_node.bases] == ["RedCubeToBoxAutogenReferenceStateMachine"]
@@ -107,15 +107,22 @@ def test_slow_grasp_expert_is_a_single_variable_subclass() -> None:
     assert {node.name for node in class_node.body if isinstance(node, ast.FunctionDef)} == {"servo_parameters"}
 
 
-def test_axis_alignment_expert_inherits_the_same_slow_close() -> None:
+def test_axis_alignment_expert_directly_preserves_the_same_slow_close() -> None:
     path = TASK_ROOT / "autogen_reference_axis_align_slow_grasp_state_machine.py"
     class_node = _class_definition(path, AXIS_ALIGN_CLASS)
-    assert [ast.unparse(base) for base in class_node.bases] == [SLOW_GRASP_CLASS]
+    assert [ast.unparse(base) for base in class_node.bases] == ["RedCubeToBoxAutogenReferenceStateMachine"]
+    class_assignments = {
+        target.id: ast.literal_eval(statement.value)
+        for statement in class_node.body
+        if isinstance(statement, ast.Assign)
+        for target in statement.targets
+        if isinstance(target, ast.Name) and target.id == "GRASP_DURATION_STEPS"
+    }
+    assert class_assignments == {"GRASP_DURATION_STEPS": 240}
 
     for entry_point in ENTRY_POINTS:
         mappings = _expert_class_mappings(entry_point)
         assert mappings
-        assert all(mapping["autogen_reference_slow_grasp"] == SLOW_GRASP_CLASS for mapping in mappings)
         assert all(mapping["autogen_reference_axis_align_slow_grasp"] == AXIS_ALIGN_CLASS for mapping in mappings)
 
 
@@ -155,7 +162,7 @@ def test_direct_joint_hold_action_writes_the_complete_controlled_joint_vector() 
 
 
 def test_only_axis_alignment_variant_uses_and_clears_direct_joint_hold() -> None:
-    slow_path = TASK_ROOT / "autogen_reference_slow_grasp_state_machine.py"
+    slow_path = TASK_ROOT / "failed" / "autogen_reference_slow_grasp_state_machine.py"
     slow_tree = ast.parse(slow_path.read_text(encoding="utf-8"), filename=str(slow_path))
     slow_calls = _attribute_calls(slow_tree)
     assert "set_direct_joint_position_target" not in slow_calls
