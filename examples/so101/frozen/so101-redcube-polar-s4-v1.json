@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "freeze_name": "so101-redcube-polar-s4-v1",
+  "frozen_at_utc_date": "2026-08-14",
+  "expert": {
+    "name": "autogen_polar_retreat_transport",
+    "git_tag": "so101-redcube-polar-s4-v1",
+    "git_commit": "dd51997dd9cbda9c7f7026de99a18032cdd471a0",
+    "branch_at_freeze": "libero-repro"
+  },
+  "task": {
+    "task_id": "OpenPI-LeIsaac-SO101-RedCubeToBox-v0",
+    "target_box_center_xy_m": [0.18, -0.43],
+    "cube_randomization_x_m": [-0.02, 0.05],
+    "cube_randomization_y_m": [-0.06, -0.04],
+    "cube_randomization_yaw_deg": [-30.0, 30.0]
+  },
+  "source_files_sha256": {
+    "examples/so101/red_cube_to_box_task/autogen_polar_retreat_transport_state_machine.py": "a340460138f7586de886bf89fb290a4c0d41406d273bbaa4b1a2e91bcf84d405",
+    "examples/so101/red_cube_to_box_task/polar_base_state_machine.py": "6216c773bd215c84658d06bfc6529017b57b0992ffd4f4f860819cd2e29bb9c9",
+    "examples/so101/red_cube_to_box_task/phase_aware_ik_action.py": "1577f11a646ea3b83d576d0697999aaf8b103883d4bb51a387b79cda2cc16d4c",
+    "examples/so101/red_cube_to_box_task/cube_axis_alignment.py": "6d6b869a9cf97f07260c6112094eff55316d5db6de004f0142bca29c78f08130",
+    "examples/so101/red_cube_to_box_task/env_cfg.py": "770ab878e3e30e45b43bc23cff6db3759943a0c97a8b5733839c28cb053fa2ae",
+    "examples/so101/red_cube_to_box_task/mdp.py": "357653286f1b021530274ce14456798f824fc5fcd37d6ede7ea6e8895bf99e58",
+    "examples/so101/red_cube_to_box_expert_smoke.py": "ccf692c0f4b23256544c23b7a8ce681e1ea11013cc5190d33c1fd070d707d013",
+    "examples/so101/red_cube_to_box_expert_batch.py": "88bca16fc1f4c40167a1c89355f4a377aed52ff8f0b4016e73e803da6424d0f1"
+  },
+  "external_dependencies": {
+    "leisaac_version": "0.4.0",
+    "leisaac_git_commit": "1651c321e9b0c1bb54233211fc7b3cd70d8373d5",
+    "so101_usd_relative_path": "robots/so101_follower.usd",
+    "so101_usd_sha256": "64a877c3b82cdc4a48ab8a1f321a2dd3ef7c55d4b10bce222b58c530d978ae58"
+  },
+  "verified_windows_environment": {
+    "python": "3.11.15",
+    "torch": "2.7.0+cu128",
+    "isaaclab": "2.3.0",
+    "isaacsim": "5.1.0.0",
+    "leisaac": "0.4.0",
+    "device": "cuda:0"
+  },
+  "validation_evidence": {
+    "windows_seed_42": {
+      "attempted_episodes": 50,
+      "successful_episodes": 42,
+      "success_rate": 0.84,
+      "non_finite_episodes": 0,
+      "unexpected_reset_episodes": 0
+    },
+    "server_seed_42": {
+      "attempted_episodes": 50,
+      "successful_episodes": 43,
+      "success_rate": 0.86,
+      "non_finite_episodes": 0,
+      "unexpected_reset_episodes": 0,
+      "device": "cuda:6"
+    }
+  },
+  "collection_contract": {
+    "expert_source_commit": "dd51997dd9cbda9c7f7026de99a18032cdd471a0",
+    "verify_all_source_file_hashes_before_collection": true,
+    "record_collector_commit_separately": true,
+    "accept_only_successful_episodes": true,
+    "hash_completed_hdf5_with_sha256": true
+  }
+}
