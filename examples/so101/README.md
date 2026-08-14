@@ -288,12 +288,92 @@ The converter reports `action_motor_limit_violation_count`. It intentionally doe
 the frozen expert commanded beyond the declared physical motor range and must be resolved before deploying the trained
 policy to hardware.
 
-Set `OPENPI_SO101_LIFTCUBE_REPO_ID` to the converted dataset, compute normalization statistics, and start training:
+Set `OPENPI_SO101_LIFTCUBE_REPO_ID` to the converted dataset, compute normalization statistics, and start training.
+The pilot dataset is simulation-only, so the converter's raw expert targets remain unchanged; they are not intended for
+direct execution on the real robot.
+
+Minimal Windows commands are:
 
 ```powershell
 $env:OPENPI_SO101_LIFTCUBE_REPO_ID = "local/leisaac-so101-dataset"
 uv run scripts/compute_norm_stats.py --config-name pi05_lora_so101_liftcube
 uv run scripts/train.py pi05_lora_so101_liftcube --exp-name=so101_lora --num-workers=0
+```
+
+For training on the Linux server, start from a fresh terminal. The two existing local copies of the same pi05 base
+checkpoint are:
+
+```text
+/home/data/xiaoqinchuan/models/openpi-assets/checkpoints/pi05_base/params
+/home/data/xiaoqinchuan/cache/openpi/openpi-assets/checkpoints/pi05_base/params
+```
+
+Prefer the first path and use the second as a fallback. This avoids downloading `pi05_base` again. The example below
+uses the converted 20-episode pilot, writes named checkpoints below
+`/home/data/xiaoqinchuan/checkpoints/openpi`, and first recomputes normalization statistics on one GPU:
+
+```bash
+cd /home/data/xiaoqinchuan/projects/openpi
+
+export HF_LEROBOT_HOME="/home/data/xiaoqinchuan/datasets/lerobot"
+export OPENPI_SO101_LIFTCUBE_REPO_ID="local/so101-redcube-polar-s4-pilot20"
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export OPENPI_BASE_PARAMS="/home/data/xiaoqinchuan/models/openpi-assets/checkpoints/pi05_base/params"
+export OPENPI_CHECKPOINT_ROOT="/home/data/xiaoqinchuan/checkpoints/openpi"
+export OPENPI_EXP_NAME="so101-redcube-polar-s4-pilot20-v1"
+
+test -d "$OPENPI_BASE_PARAMS" || exit 1
+mkdir -p "$OPENPI_CHECKPOINT_ROOT/logs"
+
+CUDA_VISIBLE_DEVICES=6 uv run scripts/compute_norm_stats.py \
+  --config-name pi05_lora_so101_liftcube \
+  2>&1 | tee "$OPENPI_CHECKPOINT_ROOT/logs/${OPENPI_EXP_NAME}.norm-stats.log"
+```
+
+The config has global `batch_size=8`. The number of GPUs visible to JAX must therefore divide 8; exposing seven GPUs
+fails during sharded batch creation. A single RTX 3090 previously ran out of memory, while two-card FSDP passed the
+training initialization and checkpoint-save gate. Select two free GPUs (the example uses physical GPUs 5 and 6), then
+run a 1000-step smoke without W&B:
+
+```bash
+CUDA_VISIBLE_DEVICES=5,6 uv run scripts/train.py \
+  pi05_lora_so101_liftcube \
+  --exp-name "$OPENPI_EXP_NAME-smoke" \
+  --checkpoint-base-dir "$OPENPI_CHECKPOINT_ROOT" \
+  --weight-loader.params-path "$OPENPI_BASE_PARAMS" \
+  --fsdp-devices 2 \
+  --num-train-steps 1000 \
+  --save-interval 250 \
+  --keep-period 500 \
+  --no-wandb-enabled \
+  2>&1 | tee "$OPENPI_CHECKPOINT_ROOT/logs/${OPENPI_EXP_NAME}-smoke.train.log"
+```
+
+After the smoke completes without OOM or checkpoint errors, start the named 30,000-step run:
+
+```bash
+CUDA_VISIBLE_DEVICES=5,6 uv run scripts/train.py \
+  pi05_lora_so101_liftcube \
+  --exp-name "$OPENPI_EXP_NAME" \
+  --checkpoint-base-dir "$OPENPI_CHECKPOINT_ROOT" \
+  --weight-loader.params-path "$OPENPI_BASE_PARAMS" \
+  --fsdp-devices 2 \
+  --num-train-steps 30000 \
+  --save-interval 1000 \
+  --keep-period 5000 \
+  2>&1 | tee "$OPENPI_CHECKPOINT_ROOT/logs/${OPENPI_EXP_NAME}.train.log"
+```
+
+The checkpoint layout is
+`$OPENPI_CHECKPOINT_ROOT/pi05_lora_so101_liftcube/$OPENPI_EXP_NAME/<step>/`; the inference parameters are in the
+`params/` child of a step directory. `--exp-name` names the run and `--checkpoint-base-dir` selects its storage root.
+Do not pass `--overwrite` for an interrupted run. Restore the same environment variables and append `--resume` to the
+same training command instead. Extract the important terminal log lines with:
+
+```bash
+grep -nE \
+  'Running on:|Initialized data loader|Initialized train state|Step [0-9]+:|loss=|grad_norm=|Saving|Finished saving|Closing|closed|Traceback|ValueError|RuntimeError|RESOURCE_EXHAUSTED|out of memory|OOM' \
+  "$OPENPI_CHECKPOINT_ROOT/logs/${OPENPI_EXP_NAME}.train.log"
 ```
 
 Serve a checkpoint with a free port shared by the policy server and LeIsaac client:
