@@ -1,5 +1,59 @@
 # RedCubeToBox：从 legacy 到 polar 的问题定位与解决记录
 
+## 先读：最终有效设计原则（原第 18 节，含后续复测修订）
+
+这一节只给出当前仍成立的结论，方便从零搭建或检查 state machine。后面的章节才按时间顺序记录每次
+find-and-solve、失败实验及证据。早期单 seed 成功后的结论已经用随机 batch、录像和跨环境复测修订；这里不把
+完整复测日志重复搬上来，只保留会改变设计方式的要点。
+
+### 路径层
+
+- 抓取后先近似垂直达到安全高度，再改变水平半径或 bearing，避免上抬和侧移同时增加夹持载荷。
+- 圆弧只改变 bearing，保持入口实测半径和安全 Z；radial 只改变沿 box bearing 的半径。
+- lower/retract 使用实际 handoff XY 的垂直路径，不在盒沿附近重新加入低高度横移。
+- 路径公式正确不代表机械臂会跟上；阶段 handoff 必须同时检查参考完成和真实控制点的安全位置。
+
+### IK 与关节目标层
+
+- retreat/arc 控制 wrist XYZ，不强制 gripper 完整世界姿态；radial/lower 切回 gripper XYZ。
+- position-only 必须配合入口实测五关节姿态的软 nullspace posture，避免自由姿态漂移。
+- 关节 target 使用独立累计参考，每步最大变化 `0.005 rad`；控制刚体或阶段语义切换时从实测关节 rebase。
+- 不使用达到 tracking gap 后冻结目标的 anti-windup；硬冻结会切断后半段必需的反向制动和纠偏。
+- 区分 action term 写入的 target 与物理关节实际达到的位置。后续数据 dry-run 已发现少量 target 可超过声明的
+  motor range，因此训练标签、仿真关节限位和真机安全裁剪必须分别审计。
+
+### 抓取与状态机门控层
+
+- descend 的时间插值结束不等于真实末端已经到位；先等待实测位置稳定，再做腕部轴对齐、recenter 和 close。
+- cube yaw 随机时，冻结其余四个 arm joint，只由一个 direct writer 控制 `wrist_roll`，使 gripper local `+X`
+  闭合轴对齐最近的 cube 无向 X/Y 轴；速度优化用有界 target lead，不放宽最终实测误差。
+- close 必须分开处理三件事：接触几何可以锁存，`pick_cube` proxy 需要连续帧 debounce，夹爪孔径和速度仍需
+  独立稳定窗口。延长 timeout 只能吸收接触 settling，不能替代这些门。
+- 抓取确认后的丢失判断不能再使用单帧 `jaw_cube_distance > 25 mm`。jaw detection 位于可动爪远端，不是抓取
+  不变量；最终使用“cube 在 gripper 局部系的相对漂移 + jaw 距离”双证据、连续 5 帧和滞回。只有两项同时
+  越界才终止，任一项回到 clear 阈值就清零 streak。
+- lift 看真实安全 Z；retreat 看 radius、Z、bearing 和连续稳定；lower/retract 看真实 Z 和连续稳定；release
+  只能在上游 placement 已对齐后原地发生。
+
+### 控制点与抓取几何层
+
+- 每个目标和日志字段必须明确属于 wrist、gripper frame、jaw detection、cube 还是 box floor center。
+- `ee_frame.target[1]` 是可动 jaw 的远端检测点，不是两爪间隙中心；不能用
+  `actual_gripper_xy + (cube_xy - actual_jaw_xy)` 把它送到 cube 中心。
+- 最终放置对齐的是 cube/持物代理，不是 gripper 原点；placement offset 必须从真实持物 handoff 测量。
+- 抓取的 `20 mm` 标定是 gripper 局部闭合轴上的向量。经过 wrist-roll 对齐后，必须用实测 gripper 姿态把它
+  旋转到世界系，再由实时 cube XY 反算 gripper target；不能继续复用世界固定 `(-20 mm, 0)`。
+
+### 场景随机化与验证层
+
+- 随机化必须位于真实任务可行域：cube 既不能靠盒壁太近而挡住固定爪，也不能远到五关节机械臂只能求折中
+  解；当前 box 与 cube XY 范围由 scene audit 和 batch 共同校准，同时保留 `[-30°, +30°]` yaw 变化。
+- 单 seed smoke 只能证明路线可行，10/10 也不能替代更大 batch。后续 50 回合复测显示，失败原因可能集中在
+  抓取丢失判据而非运输路线，必须按共同 phase/reason 修门，不能根据最终画面直接改路径。
+- 录像存在不代表相机有效。启用离屏相机时使用明确的 `performance` rendering，并检查首帧
+  dtype/shape/min/max/mean；原始像素 `max=0` 时立即失败，不生成整批黑数据。
+- Windows 与服务器的失败 episode 不必逐项一致；比较共同失败类型和统计区间，不对单个平台 seed 序列过拟合。
+
 ## 1. 文档范围
 
 本文只记录最终通向 `autogen_polar_retreat_transport` 的问题链。时间线从最初的 RedCubeToBox
@@ -552,40 +606,7 @@ D:\Sim\results\expert-smoke\polar\recordings\red_cube_20260813-120216\
 autogen_polar_retreat_transport-seed42-20260813-040256-pid4072\index.html
 ```
 
-## 18. 最终有效的设计原则
-
-### 18.1 路径层
-
-- 抓取后先垂直达到安全高度，再改变水平半径或 bearing。
-- 圆弧只改变 bearing，固定入口实际半径和安全 Z。
-- radial 只改变沿 box bearing 的半径。
-- lower/retract 使用实际 handoff XY 的垂直路径，不在低高度引入横移。
-
-### 18.2 IK 层
-
-- retreat/arc 控制 wrist XYZ，而不是强制 gripper 完整世界姿态。
-- radial/lower 控制 gripper XYZ。
-- 使用入口实测五关节姿态的软 nullspace posture，避免 position-only 自由漂移。
-- 关节 target 使用独立累计参考，每步最大 `0.005 rad`。
-- 不使用会冻结关键纠偏的 tracking-gap anti-windup。
-- 每次控制刚体或阶段语义切换时，从实际关节状态 rebase 累计目标。
-
-### 18.3 状态机门控层
-
-- close 由接触几何和最小/最大步数门控，不强求空载名义闭合角。
-- grasp 确认后持续监控 jaw-cube 距离，超过阈值立即失败。
-- lift 完成看实际安全 Z。
-- retreat 看 radius、Z、bearing 和连续稳定。
-- lower/retract 看实际 Z 和连续稳定。
-- release 必须在上游 placement 已对齐后原地发生。
-
-### 18.4 控制点层
-
-- 日志和目标必须明确属于 wrist、gripper、jaw 还是 cube。
-- 最终放置对齐的对象是 cube/jaw，不是 gripper 原点。
-- jaw/gripper 偏置必须在持物实际姿态下测量；不能长期复用打开夹爪或早期姿态下的固定 offset。
-
-## 19. 已证明不应直接重复的方向
+## 18. 已证明不应直接重复的方向
 
 1. **完整 6D 世界姿态贯穿 retreat/arc**：五关节 SO-101 会在位置与姿态之间选错误折中。
 2. **完全 position-only 且不做软姿态保持**：自由关节/姿态会漂移，通过杠杆把 cube 甩离目标。
@@ -597,7 +618,7 @@ autogen_polar_retreat_transport-seed42-20260813-040256-pid4072\index.html
 8. **lower/retract 同时重新对 box XY 和 Z**：会在盒沿附近引入不必要横移，并可能卡在姿态折中解。
 9. **只看单帧到达或固定阶段时长**：接触抖动和动态越过会产生假阳性，需要连续稳定门。
 
-## 20. 关键提交索引
+## 19. 关键提交索引
 
 | Commit      | 作用                                                             |
 | ----------- | ---------------------------------------------------------------- |
@@ -623,7 +644,7 @@ autogen_polar_retreat_transport-seed42-20260813-040256-pid4072\index.html
 | `0bc130f` | lower position-only，并以实际 Z 完成                             |
 | `85d19d8` | jaw/gripper 偏置反算、垂直 lower/retract、原地 release；最终成功 |
 
-## 21. 后续复测建议
+## 20. 当时的后续复测计划（随后由第 22–27 节执行）
 
 当前成功结论来自固定 seed 42 的 Windows 原生单环境重复运行，证明该状态机在当前资产和初始状态上可行，
 但不等于随机化成功率已经充分验证。后续应保持以下顺序：
@@ -634,7 +655,7 @@ autogen_polar_retreat_transport-seed42-20260813-040256-pid4072\index.html
 4. 8GB 显存仍优先单环境、headless、performance；OOM 时先降低录制频率或关闭不必要录像，不改变物理逻辑。
 5. 保留 legacy、independent 和 polar 三条路线，避免用新实验覆盖可比较基线。
 
-## 22. State machine 目录整理
+## 21. State machine 目录整理
 
 最终成功路线与仍在开发的 Autogen reference 路线保留在
 `examples/so101/red_cube_to_box_task/`。失败、被取代或尚未证明成功的消融专家移动到同级
@@ -645,7 +666,7 @@ autogen_polar_retreat_transport-seed42-20260813-040256-pid4072\index.html
 `RedCubeToBoxPolarBaseStateMachine`；polar 继承该活动基类，而 `failed/` 中保留使用旧类名的薄兼容子类。
 这只改变代码组织和导入路径，不改变原 independent 专家的状态、动作或参数。
 
-## 23. 随机 batch 的 close gate 集中失败（2026-08-13）
+## 22. 随机 batch 的 close gate 集中失败（2026-08-13）
 
 初次成功率验证中，polar 明显优于其他路线，但 7 个失败全部集中为
 `gripper_not_settled_before_retreat`。这说明当时应先处理抓取后的物理判定，而不是修改已经能工作的运输路线。
@@ -662,7 +683,7 @@ autogen_polar_retreat_transport-seed42-20260813-040256-pid4072\index.html
 核心教训：接触成立、任务 proxy 为真和执行器孔径稳定是三个不同事实。可以锁存前两者，但进入运动前仍须
 等待第三者；不能只放宽 jaw 距离或只延长阶段时间。
 
-## 24. Batch 录像全黑但物理仿真仍在运行（2026-08-13）
+## 23. Batch 录像全黑但物理仿真仍在运行（2026-08-13）
 
 录制目录和 JPEG 正常生成，但 batch 帧全部为黑。对比已验证的非 batch smoke 后确认，问题不在图片编码：
 问题运行的原始 `policy.front` 张量本身就是全零。根因是启用离屏相机但未显式指定 rendering mode，
@@ -678,7 +699,7 @@ AppLauncher 的空覆盖继承了本机禁用 RTX 的持久设置。
 修复后首帧恢复到 `max=240`、均值约 `153.79`，非 batch smoke 同时保持成功。核心教训：录像 QA 必须检查
 传感器原始像素，文件存在和相机 tensor shape 正常都不能证明 renderer 真正在输出图像。
 
-## 25. 随机位置暴露盒子遮挡和远端不可达（2026-08-13）
+## 24. 随机位置暴露盒子遮挡和远端不可达（2026-08-13）
 
 录像显示部分失败并非 state machine 控制器本身：cube 离盒子太近时，固定爪会先被盒壁挡住；cube 离 robot
 root 太远时，五关节机械臂无法让 gripper 与 cube 在 XY 对齐，只能进入折中 IK 构型。
@@ -692,7 +713,7 @@ root 太远时，五关节机械臂无法让 gripper 与 cube 在 XY 对齐，�
 第一次几何修正后，10 个 episode 全部能建立抓取，整体成功率由 `3/10` 提高到 `5/10`。核心教训：随机化
 范围是任务可行域的一部分。应先排除静态障碍重叠和真实工作空间不可达，再用控制器调参解释剩余失败。
 
-## 26. Cube yaw 随机化后固定夹爪方向会夹飞方块（2026-08-13）
+## 25. Cube yaw 随机化后固定夹爪方向会夹飞方块（2026-08-13）
 
 即使位置可达，夹爪闭合轴保持固定时，旋转后的方块会让爪面先撞到相邻边角，将 cube 横向挤开。reference
 路线验证了可用的几何：以 gripper local `+X` 为闭合轴，在 wrist-roll 软限位内选择与
@@ -718,9 +739,9 @@ descend
 核心教训：单关节 direct control 能避免 IK 与另一个 writer 争用 wrist roll；速度优化应增加有界 target lead，
 而不是放宽最终实测误差或稳定门。
 
-## 27. Cube 旋转后仍用世界固定抓取偏移（2026-08-13）
+## 26. Cube 旋转后仍用世界固定抓取偏移（2026-08-13）
 
-### 27.1 新发现：jaw detection 不是夹持中心
+### 26.1 新发现：jaw detection 不是夹持中心
 
 为修复 axis alignment 后的抓取偏心，曾尝试：
 
@@ -733,7 +754,7 @@ recenter_gripper_xy = actual_gripper_xy + (cube_xy - actual_jaw_xy)
 送到 cube 中心，从而把真正的夹持开口整体移到一侧。动态 smoke 因此在
 `recenter_after_alignment` 超时并推动 cube。该实验被撤销，没有进入提交历史。
 
-### 27.2 更根本的问题：标定偏移没有随夹爪旋转
+### 26.2 更根本的问题：标定偏移没有随夹爪旋转
 
 原成功抓取目标使用世界系固定偏移：
 
@@ -745,7 +766,7 @@ gripper_xy = cube_xy + (-0.020, 0)
 cube yaw 旋转，但该偏移仍固定指向世界 `-X`，于是 cube yaw 越大，夹持开口越偏。旧 10 回合 batch 中
 4 个 retreat grasp-loss（episode 2、5、6、7）正是这一类抓取几何不一致的后果；不应先修改 retreat 路线。
 
-### 27.3 核心解决方式：旋转已有成功标定，而不是追踪 jaw 端点
+### 26.3 核心解决方式：旋转已有成功标定，而不是追踪 jaw 端点
 
 将既有 `20 mm` 标定解释为 gripper local closing-axis offset，并在 alignment 完成后用实测 gripper
 姿态转到世界系：
@@ -758,7 +779,7 @@ target_gripper_xy = live_cube_xy - 0.020 * closing_axis_xy
 这里使用 alignment 后的实时 cube XY，保留原抓取 Z；`jaw_detection` 不参与 recenter。零旋转时该公式
 严格退化为原来的 `(-0.020, 0)` 成功目标，因此只修正姿态变化带来的坐标系错误。
 
-### 27.4 验证结果
+### 26.4 验证结果
 
 - Windows 原生 seed-42 单环境 smoke：`1793` 步，`expert_success=True`，无 timeout/abort；
 - 相同 seed-42 随机序列的 10 回合录像 batch：从旧版 `6/10` 提升到 `10/10`；
@@ -770,7 +791,7 @@ target_gripper_xy = live_cube_xy - 0.020 * closing_axis_xy
 核心教训：先确认一个 frame 是 IK 原点、刚体原点、接触点、检测端点还是夹持中心。经过姿态对齐后，
 局部标定向量必须随末端姿态旋转；不能继续把它当作世界系固定 XY，也不能用单个可动爪端点替代夹持中心。
 
-## 28. 服务器 50 回合把 jaw 端点阈值误当成抓取丢失（2026-08-14）
+## 27. 服务器 50 回合把 jaw 端点阈值误当成抓取丢失（2026-08-14）
 
 服务器 scene audit、非黑 polar smoke 均通过；相同进程的 50 回合 batch 为 `44/50`。六个失败全部在
 `retreat_to_safe`，旧原因都是 `jaw_cube_distance > 0.025 m`。其中 episode 33 仅为 `0.025043 m`，episode 43
@@ -793,7 +814,7 @@ relative_position_error = norm(p_cube_in_gripper_live - p_cube_in_gripper_at_ret
 
 最终双证据版本需重新通过 polar 静态回归和 Windows seed-42 smoke；是否把服务器 `44/50` 提高到目标门槛，
 仍需用同一 seed 的 50 回合 batch 动态验证，静态检查不能替代动力学结论。
-## 29. 从成功率验证进入 S4 时，不能直接保存状态机的 8D action
+## 28. 从成功率验证进入 S4 时，不能直接保存状态机的 8D action
 
 RedCube 状态机输入环境的是 7D Cartesian pose 加 1D gripper 命令，但 OpenPI SO-101 policy 的训练 action 是
 六个电机关节的绝对目标。如果直接使用 LeIsaac recorder 的环境 action，会得到语义错误的 `[T, 8]` 数据。
