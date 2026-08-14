@@ -199,17 +199,94 @@ grep -nE \
 
 ## Dataset conversion and training
 
-Keep Isaac Sim/LeIsaac and OpenPI/LeRobot in separate Python environments. Record native LeIsaac HDF5 in the simulator
-environment, then convert it from the OpenPI environment:
+Keep Isaac Sim/LeIsaac and OpenPI/LeRobot in separate Python environments. The collector stores only successful polar
+trajectories in resumable shards; failed attempts retain metadata without RGB frames. The current scene has only the
+front camera. If a future scene exposes `policy.wrist`, the collector and converter include it automatically.
+
+Windows collection:
+
+```powershell
+$env:OMNI_KIT_ACCEPT_EULA = "YES"
+$env:PYTHONUNBUFFERED = "1"
+$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$runRoot = "D:\Sim\results\expert-dataset\polar\red_cube_$stamp"
+$env:SO101_DATASET_LOG = Join-Path $runRoot "collection.log"
+New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
+
+& "D:\Envs\leisaac-so101-win\Scripts\python.exe" `
+  examples/so101/red_cube_to_box_expert_dataset.py `
+  --headless `
+  --enable_cameras `
+  --device cuda:0 `
+  --rendering_mode performance `
+  --assets_root "D:\Sim\leisaac-v0.4.0" `
+  --dataset_dir (Join-Path $runRoot "dataset") `
+  --successful_episodes 20 `
+  --maximum_attempts 50 `
+  --shard_size 50 `
+  --seed 42 2>&1 | Tee-Object -FilePath $env:SO101_DATASET_LOG
+```
+
+Windows audit and terminal-only log extraction:
+
+```powershell
+& "D:\Envs\leisaac-so101-win\Scripts\python.exe" `
+  examples/so101/audit_red_cube_to_box_hdf5.py `
+  (Join-Path $runRoot "dataset")
+
+Select-String -LiteralPath $env:SO101_DATASET_LOG -Pattern `
+'RED_CUBE_TO_BOX_DATASET_|dataset_attempt:|camera_names:|camera_frame_stats:|step_dt:|recovered_staging_groups:|starting_successful_episodes:|completed_new_attempts:|total_attempts:|total_successful_episodes:|Traceback|RuntimeError' |
+ForEach-Object { "$($_.LineNumber):$($_.Line)" }
+```
+
+Server Linux collection:
+
+```bash
+stamp=$(date +%Y%m%d-%H%M%S)
+run_root="$LEISAAC_BASE/results/leisaac/expert-dataset/polar/red_cube_$stamp"
+export SO101_DATASET_LOG="$run_root/collection.log"
+mkdir -p "$run_root"
+
+"$LEISAAC_ENV/bin/python" \
+  examples/so101/red_cube_to_box_expert_dataset.py \
+  --headless \
+  --enable_cameras \
+  --device "$ISAAC_DEVICE" \
+  --rendering_mode performance \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --dataset_dir "$run_root/dataset" \
+  --successful_episodes 20 \
+  --maximum_attempts 50 \
+  --shard_size 50 \
+  --seed 42 2>&1 | tee "$SO101_DATASET_LOG"
+
+"$LEISAAC_ENV/bin/python" \
+  examples/so101/audit_red_cube_to_box_hdf5.py \
+  "$run_root/dataset"
+
+grep -nE \
+  'RED_CUBE_TO_BOX_DATASET_|dataset_attempt:|camera_names:|camera_frame_stats:|step_dt:|recovered_staging_groups:|starting_successful_episodes:|completed_new_attempts:|total_attempts:|total_successful_episodes:|Traceback|RuntimeError' \
+  "$SO101_DATASET_LOG"
+```
+
+`--successful_episodes` is the total target, not an increment. The same command can be rerun with the same
+`--dataset_dir`: completed shards are preserved and interrupted staging groups are removed before collection resumes.
+One 1793-frame front-camera smoke used about 513 MB of native HDF5, so check free space before a large run.
+
+Convert the native shards from the OpenPI environment:
 
 ```powershell
 uv run examples/so101/convert_leisaac_hdf5_to_lerobot.py `
-  --input-path "D:\path\to\recording.hdf5" `
+  --input-path (Join-Path $runRoot "dataset") `
   --repo-id local/leisaac-so101-dataset `
   --task "Pick up the red cube and place it inside the green box." `
   --fps 60 `
   --image-mode video
 ```
+
+The converter reports `action_motor_limit_violation_count`. It intentionally does not clip labels: nonzero values mean
+the frozen expert commanded beyond the declared physical motor range and must be resolved before deploying the trained
+policy to hardware.
 
 Set `OPENPI_SO101_LIFTCUBE_REPO_ID` to the converted dataset, compute normalization statistics, and start training:
 

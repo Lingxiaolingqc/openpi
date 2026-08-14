@@ -194,3 +194,32 @@ or success logic to hide OOM or controller failure.
 4. Commit and push only after relevant static checks and dynamic smoke pass.
 5. Always provide the complete Windows-native run command and a terminal-only `Select-String` extraction command. Do
    not create a second diagnostics output file.
+
+## Export a validated expert for training
+
+Keep robustness batch validation separate from trajectory collection. For an SO-101 joint-space policy, do not save
+the state machine's Cartesian environment command as the training action.
+
+Pair data explicitly:
+
+```text
+obs_t    = copied pre-step camera image and measured joint position
+action_t = six absolute articulation joint_pos_target values after action terms apply in that same step
+```
+
+Copy simulator tensors before stepping because observation buffers may be reused. Read joint targets after stepping so
+the values include both the differential-IK arm target and binary gripper target generated for that command. Preserve
+the canonical joint-name order and test the alignment independently of Isaac.
+
+Stream an active attempt into an HDF5 staging group. Promote full frames only after physical success; for failures,
+discard frames but retain an auditable summary with abort, timeout, final error, and step count. On resume, remove
+incomplete staging, preserve committed demos, and continue into fixed-size shards with an atomically replaced manifest.
+Audit the dataset read-only before conversion.
+
+Report any commanded target outside the declared physical motor range. Preserve raw labels unless the user explicitly
+chooses a clipping policy; silently clipping during conversion changes the agreed expert-action semantics. Treat label
+preservation and hardware-safe deployment clipping as separate decisions.
+
+Only record camera views that the scene actually exposes. Optional policy interfaces are not evidence that a wrist
+sensor exists. Report image shape, frame count, sample interval, shard size, and measured bytes per episode before a
+large collection run.

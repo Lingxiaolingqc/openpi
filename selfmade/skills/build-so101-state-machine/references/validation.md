@@ -115,3 +115,11 @@ implementation so a changed random sample is not mistaken for improvement.
 
 Before interpreting controller failures, report the randomized cube min/max pose and check box clearance plus pickup
 reachability. If failures all share one phase/reason, repair that bottleneck before changing later phases.
+
+## Dataset collection smoke
+
+After freezing a dynamically validated expert, collect one successful episode into a new timestamped directory. Require
+the collector sentinel, then run the read-only HDF5 audit. Confirm that `actions` and `obs/joint_pos` are `[T, 6]`, front
+images are `[T, H, W, 3] uint8`, timestamps are strictly increasing at the environment step interval, and optional wrist
+images appear only when the policy observation actually contains that sensor. Report the native HDF5 bytes per episode
+before choosing the final collection size.

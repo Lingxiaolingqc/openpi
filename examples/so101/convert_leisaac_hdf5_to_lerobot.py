@@ -61,6 +61,7 @@ class EpisodeRef:
     name: str
     num_samples: int
     image_shape: tuple[int, int, int]
+    wrist_image_shape: tuple[int, int, int] | None = None
 
 
 def leisaac_radians_to_motor_degrees(values: np.ndarray) -> np.ndarray:
@@ -117,6 +118,14 @@ def _validate_episode(path: Path, name: str, demo: h5py.Group) -> EpisodeRef:
         raise ValueError(f"{path}:{name} has invalid front camera shape {front.shape}")
     if front.dtype != np.uint8:
         raise ValueError(f"{path}:{name} front camera must be uint8, got {front.dtype}")
+    wrist_image_shape = None
+    if "obs/wrist" in demo:
+        wrist = demo["obs/wrist"]
+        if wrist.ndim != 4 or wrist.shape[0] != actions.shape[0] or wrist.shape[-1] != 3:
+            raise ValueError(f"{path}:{name} has invalid wrist camera shape {wrist.shape}")
+        if wrist.dtype != np.uint8:
+            raise ValueError(f"{path}:{name} wrist camera must be uint8, got {wrist.dtype}")
+        wrist_image_shape = tuple(wrist.shape[1:])
 
     num_samples = int(demo.attrs.get("num_samples", -1))
     if num_samples != actions.shape[0]:
@@ -129,6 +138,7 @@ def _validate_episode(path: Path, name: str, demo: h5py.Group) -> EpisodeRef:
         name=name,
         num_samples=num_samples,
         image_shape=tuple(front.shape[1:]),
+        wrist_image_shape=wrist_image_shape,
     )
 
 
@@ -158,14 +168,20 @@ def discover_successful_episodes(input_path: Path) -> tuple[list[EpisodeRef], in
     image_shapes = {episode.image_shape for episode in episodes}
     if len(image_shapes) != 1:
         raise ValueError(f"Successful episodes have inconsistent camera shapes: {sorted(image_shapes)}")
+    wrist_shapes = {episode.wrist_image_shape for episode in episodes}
+    if len(wrist_shapes) != 1:
+        raise ValueError("Successful episodes inconsistently include the optional wrist camera")
     return episodes, skipped_failures, len(files)
 
 
-def _audit_ranges(episodes: list[EpisodeRef]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def audit_ranges(
+    episodes: list[EpisodeRef],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     state_min = np.full(len(JOINT_NAMES), np.inf, dtype=np.float64)
     state_max = np.full(len(JOINT_NAMES), -np.inf, dtype=np.float64)
     action_min = state_min.copy()
     action_max = state_max.copy()
+    action_limit_violations = np.zeros(len(JOINT_NAMES), dtype=np.int64)
     for episode in episodes:
         with h5py.File(episode.path, "r") as h5_file:
             demo = h5_file["data"][episode.name]
@@ -175,7 +191,10 @@ def _audit_ranges(episodes: list[EpisodeRef]) -> tuple[np.ndarray, np.ndarray, n
             state_max = np.maximum(state_max, state.max(axis=0))
             action_min = np.minimum(action_min, action.min(axis=0))
             action_max = np.maximum(action_max, action.max(axis=0))
-    return state_min, state_max, action_min, action_max
+            action_limit_violations += np.sum(
+                (action < MOTOR_LIMITS_DEGREES[:, 0]) | (action > MOTOR_LIMITS_DEGREES[:, 1]), axis=0
+            )
+    return state_min, state_max, action_min, action_max, action_limit_violations
 
 
 def _format_range(values: np.ndarray) -> tuple[float, ...]:
@@ -184,18 +203,22 @@ def _format_range(values: np.ndarray) -> tuple[float, ...]:
 
 def print_source_audit(episodes: list[EpisodeRef], *, skipped_failures: int, file_count: int, fps: int) -> None:
     total_frames = sum(episode.num_samples for episode in episodes)
-    state_min, state_max, action_min, action_max = _audit_ranges(episodes)
+    state_min, state_max, action_min, action_max, action_limit_violations = audit_ranges(episodes)
     print("source_file_count:", file_count)
     print("successful_episode_count:", len(episodes))
     print("skipped_failed_episode_count:", skipped_failures)
     print("total_frames:", total_frames)
     print("image_shape:", episodes[0].image_shape)
+    print("wrist_image_shape:", episodes[0].wrist_image_shape)
     print("fps:", fps)
     print("duration_seconds:", round(total_frames / fps, 4))
     print("state_motor_min:", _format_range(state_min))
     print("state_motor_max:", _format_range(state_max))
     print("action_motor_min:", _format_range(action_min))
     print("action_motor_max:", _format_range(action_max))
+    print("action_motor_limit_violation_count:", tuple(int(value) for value in action_limit_violations))
+    if action_limit_violations.any():
+        print("WARNING: raw expert targets exceed declared physical motor limits; conversion preserves them unchanged")
 
 
 def _lerobot_home() -> Path:
@@ -245,6 +268,13 @@ def convert_dataset(
             "names": list(JOINT_NAMES),
         },
     }
+    wrist_image_shape = episodes[0].wrist_image_shape
+    if wrist_image_shape is not None:
+        features["observation.images.wrist"] = {
+            "dtype": image_mode,
+            "shape": wrist_image_shape,
+            "names": ["height", "width", "channels"],
+        }
     dataset = LeRobotDataset.create(
         repo_id=repo_id,
         robot_type="so101_follower",
@@ -262,15 +292,17 @@ def convert_dataset(
             state = leisaac_radians_to_motor_degrees(demo["obs/joint_pos"][:])
             action = leisaac_radians_to_motor_degrees(demo["actions"][:])
             front = demo["obs/front"]
+            wrist = demo.get("obs/wrist")
             for frame_index in range(episode.num_samples):
-                dataset.add_frame(
-                    {
-                        "observation.images.front": front[frame_index],
-                        "observation.state": state[frame_index],
-                        "action": action[frame_index],
-                        "task": task,
-                    }
-                )
+                frame = {
+                    "observation.images.front": front[frame_index],
+                    "observation.state": state[frame_index],
+                    "action": action[frame_index],
+                    "task": task,
+                }
+                if wrist is not None:
+                    frame["observation.images.wrist"] = wrist[frame_index]
+                dataset.add_frame(frame)
                 converted_frames += 1
                 if converted_frames % 250 == 0:
                     print("converted_frames:", converted_frames, flush=True)

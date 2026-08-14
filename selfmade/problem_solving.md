@@ -793,3 +793,36 @@ relative_position_error = norm(p_cube_in_gripper_live - p_cube_in_gripper_at_ret
 
 最终双证据版本需重新通过 polar 静态回归和 Windows seed-42 smoke；是否把服务器 `44/50` 提高到目标门槛，
 仍需用同一 seed 的 50 回合 batch 动态验证，静态检查不能替代动力学结论。
+## 29. 从成功率验证进入 S4 时，不能直接保存状态机的 8D action
+
+RedCube 状态机输入环境的是 7D Cartesian pose 加 1D gripper 命令，但 OpenPI SO-101 policy 的训练 action 是
+六个电机关节的绝对目标。如果直接使用 LeIsaac recorder 的环境 action，会得到语义错误的 `[T, 8]` 数据。
+
+当前采集器按如下时序建立训练对：
+
+```text
+复制 obs_t（front、实测 joint_pos、诊断）
+state_machine.get_action() -> 8D 环境命令
+env.step(8D)
+读取 robot.data.joint_pos_target -> 本步 action term 已写入的六关节 absolute action_t
+保存 (obs_t, action_t)
+```
+
+必须在 step 前复制 observation，因为 Isaac 的 tensor buffer 可能复用；必须在 step 后读 target，因为差分 IK
+和 gripper action term 在 step 内才产生这一步的最终关节目标。不要用 `joint_pos_{t+1}` 替代 action，它包含执行器
+滞后和接触动力学，不再是专家命令。
+
+失败 episode 不能混入训练 demo，但也不能完全消失。可恢复 writer 先把帧写进 `/_staging`：成功时移动到
+`/data/demo_N`，失败时删除 RGB/状态帧并在 `/attempts` 保存 abort、timeout、最终偏差和步数。进程崩溃后恢复
+逻辑会删除未提交 staging；每 50 条成功轨迹滚动一个 shard，并用独立 manifest 记录全局成功数与尝试数。
+
+当前场景只有 `front`：上游 `LiftCubeSceneCfg.__post_init__` 显式删除 wrist camera，观测组也删除
+`policy.wrist`。因此不能仅因模型接口预留 wrist 就伪造第二视角；采集器只在场景真实提供时写 `obs/wrist`。
+Windows 原生动态 smoke 验证了 `1793` 帧、六维 action、严格 `1/60 s` 时间戳和只读审计。无损 480x640 RGB
+约占 `513 MB/episode`，分片解决恢复和文件边界，不会减少总容量，正式采集前仍需做空间预算。
+
+同一次转换 dry-run 还发现 `wrist_flex` 原始 target 最高 `2.11242 rad`，映射到真实电机坐标约 `127.4`，共有
+`163` 帧超过声明的 `100` 上限，而实测关节最多停在约 `95 deg`。这说明“action term 写入的 target”和“物理
+可执行/最终达到的位置”必须分开。为保持已经确定的训练 action 语义，HDF5 和转换器不静默裁剪；转换审计会
+输出逐关节 `action_motor_limit_violation_count`。正式上真机前必须单独决定训练标签裁剪、部署端安全裁剪或专家
+target 限制策略，不能让超范围值在转换时悄悄消失。

@@ -31,7 +31,24 @@ def test_conversion_rejects_invalid_values() -> None:
         converter.leisaac_radians_to_motor_degrees(np.full((1, 6), np.nan, dtype=np.float32))
 
 
-def _write_demo(data: h5py.Group, name: str, *, success: bool, num_samples: int = 3) -> None:
+def test_audit_counts_but_does_not_clip_out_of_range_action_targets(tmp_path: Path) -> None:
+    source = tmp_path / "source.hdf5"
+    with h5py.File(source, "w") as h5_file:
+        data = h5_file.create_group("data")
+        _write_demo(data, "demo_0", success=True, num_samples=1)
+        data["demo_0/actions"][0, 3] = np.deg2rad(120.0)
+    episodes, _, _ = converter.discover_successful_episodes(source)
+
+    *_, violations = converter.audit_ranges(episodes)
+
+    assert tuple(violations) == (0, 0, 0, 1, 0, 0)
+    converted = converter.leisaac_radians_to_motor_degrees(np.asarray([[0, 0, 0, np.deg2rad(120), 0, 0]]))
+    assert converted[0, 3] > 100.0
+
+
+def _write_demo(
+    data: h5py.Group, name: str, *, success: bool, num_samples: int = 3, include_wrist: bool = False
+) -> None:
     demo = data.create_group(name)
     demo.attrs["success"] = success
     demo.attrs["num_samples"] = num_samples
@@ -39,6 +56,8 @@ def _write_demo(data: h5py.Group, name: str, *, success: bool, num_samples: int 
     obs = demo.create_group("obs")
     obs.create_dataset("joint_pos", data=np.zeros((num_samples, 6), dtype=np.float32))
     obs.create_dataset("front", data=np.zeros((num_samples, 8, 12, 3), dtype=np.uint8))
+    if include_wrist:
+        obs.create_dataset("wrist", data=np.zeros((num_samples, 6, 10, 3), dtype=np.uint8))
 
 
 def test_discovery_validates_and_skips_failed_episodes(tmp_path: Path) -> None:
@@ -52,14 +71,25 @@ def test_discovery_validates_and_skips_failed_episodes(tmp_path: Path) -> None:
 
     assert file_count == 1
     assert skipped_failures == 1
-    assert episodes == [converter.EpisodeRef(source.resolve(), "demo_0", 3, (8, 12, 3))]
+    assert episodes == [converter.EpisodeRef(source.resolve(), "demo_0", 3, (8, 12, 3), None)]
+
+
+def test_discovery_and_conversion_contract_include_optional_wrist_camera(tmp_path: Path) -> None:
+    source = tmp_path / "source.hdf5"
+    with h5py.File(source, "w") as h5_file:
+        data = h5_file.create_group("data")
+        _write_demo(data, "demo_0", success=True, include_wrist=True)
+
+    episodes, _, _ = converter.discover_successful_episodes(source)
+
+    assert episodes[0].wrist_image_shape == (6, 10, 3)
 
 
 def test_conversion_uses_openpi_pinned_lerobot_writer_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source = tmp_path / "source.hdf5"
     with h5py.File(source, "w") as h5_file:
         data = h5_file.create_group("data")
-        _write_demo(data, "demo_0", success=True)
+        _write_demo(data, "demo_0", success=True, include_wrist=True)
 
     episodes, _, _ = converter.discover_successful_episodes(source)
     lerobot_home = tmp_path / "lerobot"
@@ -111,7 +141,9 @@ def test_conversion_uses_openpi_pinned_lerobot_writer_contract(tmp_path: Path, m
     assert dataset is not None
     assert output_path == lerobot_home / "local/test-dataset"
     assert FakeLeRobotDataset.create_kwargs["robot_type"] == "so101_follower"
+    assert "observation.images.wrist" in FakeLeRobotDataset.create_kwargs["features"]
     assert "task" not in FakeLeRobotDataset.create_kwargs["features"]
     assert len(dataset.frames) == 3
     assert all(frame["task"] == "Lift the cube." for frame in dataset.frames)
+    assert all("observation.images.wrist" in frame for frame in dataset.frames)
     assert dataset.saved_episode_count == 1
