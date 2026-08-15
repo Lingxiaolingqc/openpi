@@ -243,6 +243,7 @@ def convert_dataset(
     image_writer_threads: int,
     push_to_hub: bool,
     private: bool,
+    start_frame: int = 0,
 ) -> Path:
     from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
@@ -293,7 +294,7 @@ def convert_dataset(
             action = leisaac_radians_to_motor_degrees(demo["actions"][:])
             front = demo["obs/front"]
             wrist = demo.get("obs/wrist")
-            for frame_index in range(episode.num_samples):
+            for frame_index in range(start_frame,episode.num_samples):
                 frame = {
                     "observation.images.front": front[frame_index],
                     "observation.state": state[frame_index],
@@ -341,6 +342,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--push-to-hub", action="store_true")
     parser.add_argument("--private", action="store_true")
+    parser.add_argument(
+    "--start-frame",
+    type=int,
+    default=0,
+    help="Skip frames before this index in every episode",
+)
     return parser
 
 
@@ -377,6 +384,7 @@ def main() -> int:
         image_writer_threads=args.image_writer_threads,
         push_to_hub=args.push_to_hub,
         private=args.private,
+        start_frame=args.start_frame if hasattr(args, "start_frame") else 0,
     )
     return 0
 
