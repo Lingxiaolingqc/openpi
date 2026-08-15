@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+import sys
+import types
+
+import numpy as np
+import pytest
+
+from examples.so101 import red_cube_to_box_policy_rollout as rollout
+
+
+def test_normalize_action_chunk_accepts_server_and_compact_shapes() -> None:
+    compact = np.arange(60, dtype=np.float32).reshape(10, 6)
+    expanded = rollout.normalize_action_chunk(compact)
+
+    assert expanded.shape == (10, 1, 6)
+    np.testing.assert_array_equal(expanded[:, 0], compact)
+    np.testing.assert_array_equal(rollout.normalize_action_chunk(expanded), expanded)
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        (np.zeros((10, 7), dtype=np.float32), "action chunk shape"),
+        (np.zeros((0, 6), dtype=np.float32), "empty action chunk"),
+        (np.full((10, 6), np.nan, dtype=np.float32), "non-finite action chunk"),
+    ],
+)
+def test_normalize_action_chunk_rejects_invalid_outputs(value: np.ndarray, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        rollout.normalize_action_chunk(value)
+
+
+def test_clip_action_chunk_reports_every_clipped_scalar() -> None:
+    actions = np.array(
+        [
+            [
+                [-2.0, -0.5, 0.0, 0.5, 2.0, 0.25],
+            ]
+        ],
+        dtype=np.float32,
+    )
+    lower = np.full(6, -1.0, dtype=np.float32)
+    upper = np.full(6, 1.0, dtype=np.float32)
+
+    clipped, count, maximum = rollout.clip_action_chunk(actions, lower, upper)
+
+    assert count == 2
+    assert maximum == pytest.approx(1.0)
+    np.testing.assert_allclose(clipped[0, 0], [-1.0, -0.5, 0.0, 0.5, 1.0, 0.25])
+
+
+def test_clip_action_chunk_rejects_limit_dimension_mismatch() -> None:
+    with pytest.raises(ValueError, match="Joint-limit dimension"):
+        rollout.clip_action_chunk(np.zeros((10, 1, 6), dtype=np.float32), np.zeros(5), np.ones(5))
+
+
+class _FakeTensor:
+    def __init__(self, value: np.ndarray) -> None:
+        self.value = value
+
+    def __getitem__(self, item) -> _FakeTensor:
+        return _FakeTensor(self.value[item])
+
+    def detach(self) -> _FakeTensor:
+        return self
+
+    def cpu(self) -> _FakeTensor:
+        return self
+
+    def numpy(self) -> np.ndarray:
+        return self.value
+
+
+def test_openpi_adapter_builds_so101_request_and_restores_simulator_actions(monkeypatch) -> None:
+    requests: list[dict] = []
+    closed: list[bool] = []
+
+    class FakeWebsocketClientPolicy:
+        def __init__(self, *, host: str, port: int) -> None:
+            assert (host, port) == ("policy-host", 18000)
+            setattr(self, "_ws", types.SimpleNamespace(close=lambda: closed.append(True)))
+
+        def get_server_metadata(self) -> dict:
+            return {"model": "fake"}
+
+        def infer(self, request: dict) -> dict:
+            requests.append(request)
+            return {"actions": np.full((10, 6), 2.0, dtype=np.float32)}
+
+    robot_utils = types.ModuleType("leisaac.utils.robot_utils")
+    robot_utils.convert_leisaac_action_to_lerobot = lambda value: value.detach().cpu().numpy() + 10.0
+    robot_utils.convert_lerobot_action_to_leisaac = lambda value: value - 1.0
+    websocket_module = types.SimpleNamespace(WebsocketClientPolicy=FakeWebsocketClientPolicy)
+    openpi_client = types.ModuleType("openpi_client")
+    openpi_client.websocket_client_policy = websocket_module
+    monkeypatch.setitem(sys.modules, "leisaac", types.ModuleType("leisaac"))
+    monkeypatch.setitem(sys.modules, "leisaac.utils", types.ModuleType("leisaac.utils"))
+    monkeypatch.setitem(sys.modules, "leisaac.utils.robot_utils", robot_utils)
+    monkeypatch.setitem(sys.modules, "openpi_client", openpi_client)
+
+    client = rollout.OpenPISO101Client(
+        host="policy-host",
+        port=18000,
+        camera_names=("front",),
+        prompt=rollout.TASK_PROMPT,
+    )
+    actions = client.get_action(
+        {
+            "front": _FakeTensor(np.zeros((1, 4, 5, 3), dtype=np.uint8)),
+            "joint_pos": _FakeTensor(np.arange(6, dtype=np.float32)[None]),
+        }
+    )
+
+    assert client.server_metadata == {"model": "fake"}
+    assert actions.shape == (10, 1, 6)
+    np.testing.assert_array_equal(actions, np.ones((10, 1, 6), dtype=np.float32))
+    assert requests[0]["images/front"].shape == (4, 5, 3)
+    np.testing.assert_array_equal(requests[0]["state"], np.arange(6, dtype=np.float32) + 10.0)
+    assert requests[0]["prompt"] == rollout.TASK_PROMPT
+    client.close()
+    assert closed == [True]
