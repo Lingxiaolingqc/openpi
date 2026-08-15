@@ -201,13 +201,13 @@ def _format_range(values: np.ndarray) -> tuple[float, ...]:
     return tuple(round(float(value), 4) for value in values)
 
 
-def print_source_audit(episodes: list[EpisodeRef], *, skipped_failures: int, file_count: int, fps: int) -> None:
-    total_frames = sum(episode.num_samples for episode in episodes)
+def print_source_audit(episodes: list[EpisodeRef], *, skipped_failures: int, file_count: int, fps: int, start_frame: int = 0) -> None:
+    total_frames = sum(episode.num_samples-start_frame for episode in episodes)
     state_min, state_max, action_min, action_max, action_limit_violations = audit_ranges(episodes)
     print("source_file_count:", file_count)
     print("successful_episode_count:", len(episodes))
     print("skipped_failed_episode_count:", skipped_failures)
-    print("total_frames:", total_frames)
+    print("converted_frames:", total_frames)
     print("image_shape:", episodes[0].image_shape)
     print("wrist_image_shape:", episodes[0].wrist_image_shape)
     print("fps:", fps)
@@ -309,7 +309,7 @@ def convert_dataset(
                     print("converted_frames:", converted_frames, flush=True)
         dataset.save_episode()
         print(
-            f"saved_episode:{episode_index}:source={episode.path}:{episode.name}:frames={episode.num_samples}",
+            f"saved_episode:{episode_index}:source={episode.path}:{episode.name}:frames={episode.num_samples-start_frame}",
             flush=True,
         )
 
@@ -362,6 +362,8 @@ def main() -> int:
         parser.error("--repo-id is required unless --dry-run is used")
     if args.push_to_hub and args.dry_run:
         parser.error("--push-to-hub cannot be combined with --dry-run")
+    if args.start_frame < 0:
+        parser.error("--start-frame must be non-negative")
 
     episodes, skipped_failures, file_count = discover_successful_episodes(args.input_path)
     print_source_audit(
@@ -369,6 +371,7 @@ def main() -> int:
         skipped_failures=skipped_failures,
         file_count=file_count,
         fps=args.fps,
+        start_frame=args.start_frame if hasattr(args, "start_frame") else 0
     )
     if args.dry_run:
         print("LEISAAC_HDF5_TO_LEROBOT_DRY_RUN_OK")
