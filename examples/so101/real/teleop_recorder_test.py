@@ -177,8 +177,10 @@ CALIBRATIONS = {"leader": CALIBRATION, "follower": CALIBRATION}
 def make_config(
     dataset_root: Path,
     *,
+    motion_margin_deg: float = 1.0,
     max_auto_align_deg: float = 10.0,
     large_auto_align_speed_deg_s: float = MODULE.DEFAULT_LARGE_AUTO_ALIGN_SPEED_DEG_S,
+    gripper_speed_deg_s: float = 15.0,
 ) -> Any:
     return MODULE.RecorderConfig(
         dataset_root=dataset_root,
@@ -190,8 +192,9 @@ def make_config(
         front_camera=1,
         wrist_camera=2,
         speed_deg_s=15.0,
+        gripper_speed_deg_s=gripper_speed_deg_s,
         max_episode_s=30.0,
-        motion_margin_deg=1.0,
+        motion_margin_deg=motion_margin_deg,
         max_auto_align_deg=max_auto_align_deg,
         large_auto_align_speed_deg_s=large_auto_align_speed_deg_s,
     )
@@ -215,6 +218,45 @@ class TeleopRecorderTest(unittest.TestCase):
         command = controller.compute(mapped)
         self.assertEqual(command["shoulder_pan"], 0.5)
         self.assertTrue(all(command[name] == 0.0 for name in MODULE.no_jump.hold.MOTOR_NAMES[1:]))
+
+    def test_relative_controller_uses_independent_gripper_slew_limit(self) -> None:
+        limits = dict.fromkeys(MODULE.no_jump.hold.MOTOR_NAMES, (-90.0, 90.0))
+        zeros = dict.fromkeys(MODULE.no_jump.hold.MOTOR_NAMES, 0.0)
+        controller = MODULE.RelativeJointController(
+            anchor_mapped=zeros,
+            anchor_follower=zeros,
+            follower_limits=limits,
+            maximum_step_deg=0.5,
+            gripper_maximum_step_deg=1.0,
+        )
+        mapped = zeros.copy()
+        mapped["shoulder_pan"] = 2.0
+        mapped["gripper"] = 2.0
+
+        command = controller.compute(mapped)
+
+        self.assertEqual(command["shoulder_pan"], 0.5)
+        self.assertEqual(command["gripper"], 1.0)
+
+    def test_point_three_degree_arm_margin_and_zero_gripper_margin_stay_calibrated(self) -> None:
+        clock = FakeClock()
+        recorder = MODULE.RealTeleopRecorder(
+            config=make_config(Path("."), motion_margin_deg=0.3),
+            cameras=FakeCameras(clock),
+            calibrations=CALIBRATIONS,
+            key_source=SequenceKeys(),
+            bus_factory=lambda: {},
+            writer_factory=FakeWriter,
+            clock=clock,
+            sleep=clock.sleep,
+        )
+
+        for joint in MODULE.no_jump.hold.MOTOR_NAMES:
+            startup_low, startup_high = recorder.startup_limits[joint]
+            motion_low, motion_high = recorder.follower_limits[joint]
+            expected_margin = 0.0 if joint == "gripper" else 0.3
+            self.assertAlmostEqual(motion_low, startup_low + expected_margin)
+            self.assertAlmostEqual(motion_high, startup_high - expected_margin)
 
     def test_complete_episode_writes_before_motion_and_always_unloads(self) -> None:
         clock = FakeClock()
@@ -349,12 +391,12 @@ class TeleopRecorderTest(unittest.TestCase):
         clock = FakeClock()
         leader = FakeBus(leader=True)
         follower = FakeBus(leader=False)
-        leader.pose["shoulder_pan"] = 15.0
+        leader.pose["shoulder_pan"] = 40.0
         keys = LargeAlignKeys()
         recorder = MODULE.RealTeleopRecorder(
             config=make_config(
                 Path("."),
-                max_auto_align_deg=30.0,
+                max_auto_align_deg=50.0,
                 large_auto_align_speed_deg_s=8.0,
             ),
             cameras=FakeCameras(clock),

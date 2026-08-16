@@ -204,6 +204,7 @@ tmp\leisaac-remote-env\python.exe `
   --target-id 0 `
   --box-id A `
   --speed-deg-s 15 `
+  --gripper-speed-deg-s 20 `
   --large-auto-align-speed-deg-s 8 `
   --motion-margin-deg 1 `
   --max-auto-align-deg 10 `
@@ -233,17 +234,21 @@ only by atomic rename. A crash cannot alter a completed episode and leaves only 
 
 Startup and ordinary motion use separate limits. The no-jump goal may equal a frozen calibrated endpoint so a folded
 arm can be enabled without a target jump. Before automatic motion, the live mapped Leader target is clamped inward by
-`--motion-margin-deg` (default 1 degree, allowed 0.5 to 2 degrees). The `--max-auto-align-deg` catch-up gate applies
+`--motion-margin-deg` (default 1 degree, allowed 0.3 to 2 degrees). This inward operating margin applies to the five
+arm joints from `shoulder_pan` through `wrist_roll`. The `gripper` uses a fixed zero-degree inward margin so it can
+reach its calibrated fully-open and fully-closed endpoints, but it still cannot cross those frozen endpoints. The
+`--max-auto-align-deg` catch-up gate applies
 only to `shoulder_pan`, `shoulder_lift`, `elbow_flex`, and `wrist_flex`. If one of those four joints would need to move
 farther than the configured value, the episode is refused before torque enable. The option defaults to 10 degrees,
-accepts 0.5 to 30 degrees, and must not be smaller than the selected motion margin. A gated-joint move above 10
+accepts 0.5 to 50 degrees, and must not be smaller than the selected motion margin. A gated-joint move above 10
 degrees displays all six signed joint deltas and waits up to 30 seconds for `A` while both arms remain torque-disabled;
 `Q` cancels and `X` exits.
 
 `wrist_roll` and `gripper` are exempt only from that catch-up angle gate and the associated `A` confirmation. They are
-not unrestricted: both must remain inside the frozen calibrated range and inward motion margin, every command still
-uses the per-tick slew limit, and tracking-error, temperature, camera, serial, and emergency-unload checks remain
-active. Any automatic alignment whose actual largest six-joint movement is above 10 degrees, including a wrist-roll
+not unrestricted: `wrist_roll` retains the configured inward margin, while `gripper` may reach but never cross its
+frozen calibrated endpoints. Every command still uses the per-tick slew limit, and tracking-error, temperature,
+camera, serial, and emergency-unload checks remain active. Any automatic alignment whose actual largest six-joint
+movement is above 10 degrees, including a wrist-roll
 or gripper-only alignment, uses `--large-auto-align-speed-deg-s`. This option defaults to 5 degrees/second and accepts
 1 to 10 degrees/second; the effective speed is the smaller of this value and `--speed-deg-s`. Automatic-alignment
 timeout includes an additional 10-second margin for servo tracking and the one-second stable-alignment gate. Keep the
@@ -256,6 +261,14 @@ steady, and press `R`; the program then re-reads both measured poses, creates fr
 episode without a target jump. `Q` cancels and unloads normally, while `X` performs the emergency fault hold and
 unload. Frozen calibration limits, motion margins, per-tick slew, tracking-error, temperature, camera, and serial
 checks remain active throughout this pre-record follow stage.
+
+During pre-record and recorded Follow, `--speed-deg-s` controls the five arm joints and
+`--gripper-speed-deg-s` controls only the gripper. The gripper option defaults to the selected `--speed-deg-s` and
+accepts 1 to 30 degrees/second. At 30 Hz, 20 degrees/second permits about 0.67 degrees per tick and 30 degrees/second
+permits 1 degree per tick; 1.5 degrees/second is valid but is ten times slower than the default 15 degrees/second.
+This separate option does not change automatic-alignment speed. The frozen gripper endpoints, 15-degree sustained
+tracking-error fault, temperature limit, and all other safety checks remain active. Start at 20 degrees/second and
+only raise it after checking that the object and fingers stay clear of the closing path.
 
 Use a local SSD rather than a synchronized cloud folder for `--dataset-root`: two uncompressed 640x480 RGB streams can
 produce large episodes even with fast lossless HDF5 compression.

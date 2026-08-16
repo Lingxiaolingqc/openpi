@@ -55,15 +55,16 @@ MAX_TRACKING_ERROR_DEG = 15.0
 TRACKING_ERROR_GRACE_S = 0.5
 MAX_TEMPERATURE_C = 65
 STARTUP_MARGIN_DEG = 0.0
+GRIPPER_MOTION_MARGIN_DEG = 0.0
 DEFAULT_MOTION_MARGIN_DEG = 1.0
-MIN_MOTION_MARGIN_DEG = 0.5
+MIN_MOTION_MARGIN_DEG = 0.3
 MAX_MOTION_MARGIN_DEG = 2.0
 START_ALIGNMENT_DEG = 3.0
 AUTO_ALIGN_STABLE_S = 1.0
 AUTO_ALIGN_TIMEOUT_MARGIN_S = 10.0
 DEFAULT_MAX_AUTO_ALIGN_DEG = 10.0
 MIN_MAX_AUTO_ALIGN_DEG = 0.5
-HARD_MAX_AUTO_ALIGN_DEG = 30.0
+HARD_MAX_AUTO_ALIGN_DEG = 50.0
 LARGE_AUTO_ALIGN_THRESHOLD_DEG = 10.0
 DEFAULT_LARGE_AUTO_ALIGN_SPEED_DEG_S = 5.0
 MIN_LARGE_AUTO_ALIGN_SPEED_DEG_S = 1.0
@@ -103,6 +104,7 @@ class RecorderConfig:
     front_camera: int
     wrist_camera: int
     speed_deg_s: float
+    gripper_speed_deg_s: float
     max_episode_s: float
     motion_margin_deg: float
     max_auto_align_deg: float
@@ -145,11 +147,17 @@ class RelativeJointController:
         anchor_follower: dict[str, float],
         follower_limits: dict[str, tuple[float, float]],
         maximum_step_deg: float,
+        gripper_maximum_step_deg: float | None = None,
     ) -> None:
         self.anchor_mapped = anchor_mapped.copy()
         self.anchor_follower = anchor_follower.copy()
         self.follower_limits = follower_limits
         self.maximum_step_deg = maximum_step_deg
+        self.gripper_maximum_step_deg = (
+            maximum_step_deg
+            if gripper_maximum_step_deg is None
+            else gripper_maximum_step_deg
+        )
         self.command = anchor_follower.copy()
 
     def reset(self, *, anchor_mapped: dict[str, float], anchor_follower: dict[str, float]) -> None:
@@ -165,6 +173,9 @@ class RelativeJointController:
         }
         no_jump._check_inside_limits(desired, self.follower_limits)
         command = single._slew(self.command, desired, self.maximum_step_deg)
+        gripper_low = self.command["gripper"] - self.gripper_maximum_step_deg
+        gripper_high = self.command["gripper"] + self.gripper_maximum_step_deg
+        command["gripper"] = min(max(desired["gripper"], gripper_low), gripper_high)
         no_jump._check_complete_finite(command, "Follower command")
         no_jump._check_inside_limits(command, self.follower_limits)
         self.command = command
@@ -305,6 +316,12 @@ def _build_metadata(
         "object_inventory_version": config.object_inventory_version,
         "camera_config": cameras.config(),
         "control_rate_hz": CONTROL_RATE_HZ,
+        "speed_deg_s": config.speed_deg_s,
+        "gripper_speed_deg_s": config.gripper_speed_deg_s,
+        "large_auto_align_speed_deg_s": config.large_auto_align_speed_deg_s,
+        "motion_margin_deg": config.motion_margin_deg,
+        "gripper_motion_margin_deg": GRIPPER_MOTION_MARGIN_DEG,
+        "max_auto_align_deg": config.max_auto_align_deg,
         "action_mode": "absolute_calibrated_motor_degrees",
         "collection_started_utc": dt.datetime.now(dt.UTC).isoformat(),
     }
@@ -358,6 +375,9 @@ class RealTeleopRecorder:
             calibrations["follower"],
             config.motion_margin_deg,
         )
+        # The gripper must be able to reach its calibrated fully-open and
+        # fully-closed endpoints. Its frozen calibration remains the hard bound.
+        self.follower_limits["gripper"] = self.startup_limits["gripper"]
 
     def _safe_auto_align_target(
         self,
@@ -701,6 +721,7 @@ class RealTeleopRecorder:
             anchor_follower=follower,
             follower_limits=self.follower_limits,
             maximum_step_deg=self.config.speed_deg_s / CONTROL_RATE_HZ,
+            gripper_maximum_step_deg=self.config.gripper_speed_deg_s / CONTROL_RATE_HZ,
         )
         tracking = TrackingMonitor()
         buses["follower"].sync_write("Goal_Position", follower)
@@ -912,6 +933,7 @@ class RealTeleopRecorder:
                 anchor_follower=initial_follower,
                 follower_limits=self.follower_limits,
                 maximum_step_deg=self.config.speed_deg_s / CONTROL_RATE_HZ,
+                gripper_maximum_step_deg=self.config.gripper_speed_deg_s / CONTROL_RATE_HZ,
             )
             print(
                 "EPISODE_RECORDING: Y=success D=discard P=pause/resume X=emergency-unload Q=discard-and-exit",
@@ -1151,6 +1173,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--operator", default=os.environ.get("USERNAME", "unknown"))
     parser.add_argument("--object-inventory-version", default="v1")
     parser.add_argument("--speed-deg-s", type=float, default=DEFAULT_SPEED_DEG_S)
+    parser.add_argument(
+        "--gripper-speed-deg-s",
+        type=float,
+        default=None,
+        help=(
+            "Gripper speed during pre-record and recorded Follow; defaults to "
+            f"--speed-deg-s (allowed 1-{MAX_ALLOWED_SPEED_DEG_S:g} deg/s)"
+        ),
+    )
     parser.add_argument("--max-episode-s", type=float, default=DEFAULT_MAX_EPISODE_S)
     parser.add_argument("--motion-margin-deg", type=float, default=DEFAULT_MOTION_MARGIN_DEG)
     parser.add_argument(
@@ -1183,6 +1214,13 @@ def main() -> int:
         raise SystemExit("--front-camera and --wrist-camera must be different")
     if not 1.0 <= args.speed_deg_s <= MAX_ALLOWED_SPEED_DEG_S:
         raise SystemExit(f"--speed-deg-s must be between 1 and {MAX_ALLOWED_SPEED_DEG_S:g}")
+    gripper_speed_deg_s = (
+        args.speed_deg_s if args.gripper_speed_deg_s is None else args.gripper_speed_deg_s
+    )
+    if not 1.0 <= gripper_speed_deg_s <= MAX_ALLOWED_SPEED_DEG_S:
+        raise SystemExit(
+            f"--gripper-speed-deg-s must be between 1 and {MAX_ALLOWED_SPEED_DEG_S:g}"
+        )
     if not 5.0 <= args.max_episode_s <= DEFAULT_MAX_EPISODE_S:
         raise SystemExit(f"--max-episode-s must be between 5 and {DEFAULT_MAX_EPISODE_S:g} seconds")
     if not MIN_MOTION_MARGIN_DEG <= args.motion_margin_deg <= MAX_MOTION_MARGIN_DEG:
@@ -1221,6 +1259,7 @@ def main() -> int:
         front_camera=args.front_camera,
         wrist_camera=args.wrist_camera,
         speed_deg_s=args.speed_deg_s,
+        gripper_speed_deg_s=gripper_speed_deg_s,
         max_episode_s=args.max_episode_s,
         motion_margin_deg=args.motion_margin_deg,
         max_auto_align_deg=args.max_auto_align_deg,
@@ -1242,7 +1281,9 @@ def main() -> int:
     print(
         f"front_camera={config.front_camera} wrist_camera={config.wrist_camera} "
         f"target_id={config.target_id} box_id={config.box_id} "
-        f"speed_deg_s={config.speed_deg_s:.1f} max_episode_s={config.max_episode_s:.1f} "
+        f"speed_deg_s={config.speed_deg_s:.1f} "
+        f"gripper_speed_deg_s={config.gripper_speed_deg_s:.1f} "
+        f"max_episode_s={config.max_episode_s:.1f} "
         f"motion_margin_deg={config.motion_margin_deg:.1f} "
         f"max_auto_align_deg={config.max_auto_align_deg:.1f} "
         f"large_auto_align_speed_deg_s={config.large_auto_align_speed_deg_s:.1f} "
