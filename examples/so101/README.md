@@ -519,6 +519,7 @@ New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
   --successful_episodes 20 `
   --maximum_attempts 50 `
   --shard_size 50 `
+  --camera_refreshes_before_recording 1 `
   --seed 42 2>&1 | Tee-Object -FilePath $env:SO101_DATASET_LOG
 ```
 
@@ -530,7 +531,7 @@ Windows audit and terminal-only log extraction:
   (Join-Path $runRoot "dataset")
 
 Select-String -LiteralPath $env:SO101_DATASET_LOG -Pattern `
-'RED_CUBE_TO_BOX_DATASET_|dataset_attempt:|camera_names:|camera_frame_stats:|step_dt:|recovered_staging_groups:|starting_successful_episodes:|completed_new_attempts:|total_attempts:|total_successful_episodes:|Traceback|RuntimeError' |
+'RED_CUBE_TO_BOX_DATASET_|dataset_attempt:|camera_names:|camera_frame_stats:|camera_refreshes_before_recording:|step_dt:|recovered_staging_groups:|starting_successful_episodes:|completed_new_attempts:|total_attempts:|total_successful_episodes:|Traceback|RuntimeError' |
 ForEach-Object { "$($_.LineNumber):$($_.Line)" }
 ```
 
@@ -553,6 +554,7 @@ mkdir -p "$run_root"
   --successful_episodes 20 \
   --maximum_attempts 50 \
   --shard_size 50 \
+  --camera_refreshes_before_recording 1 \
   --seed 42 2>&1 | tee "$SO101_DATASET_LOG"
 
 "$LEISAAC_ENV/bin/python" \
@@ -560,7 +562,7 @@ mkdir -p "$run_root"
   "$run_root/dataset"
 
 grep -nE \
-  'RED_CUBE_TO_BOX_DATASET_|dataset_attempt:|camera_names:|camera_frame_stats:|step_dt:|recovered_staging_groups:|starting_successful_episodes:|completed_new_attempts:|total_attempts:|total_successful_episodes:|Traceback|RuntimeError' \
+  'RED_CUBE_TO_BOX_DATASET_|dataset_attempt:|camera_names:|camera_frame_stats:|camera_refreshes_before_recording:|step_dt:|recovered_staging_groups:|starting_successful_episodes:|completed_new_attempts:|total_attempts:|total_successful_episodes:|Traceback|RuntimeError' \
   "$SO101_DATASET_LOG"
 ```
 
@@ -577,12 +579,15 @@ uv run examples/so101/convert_leisaac_hdf5_to_lerobot.py `
   --task "Pick up the red cube and place it inside the green box." `
   --fps 60 `
   --image-mode video `
-  --start-frame 1
+  --start-frame 0
 ```
 
-`--start-frame` defaults to `0`. Pass `--start-frame 1` only after confirming that frame 0 in this collection is an
-unrefreshed camera frame. The converter then skips the aligned image, state, and action sample together; it never
-shifts only the image stream.
+For new collections, explicitly use `--camera_refreshes_before_recording 1` and convert with the default
+`--start-frame 0`. The collector refreshes RTX camera buffers without advancing physics or applying a control action,
+so the retained first sample is the genuine aligned `(image_0, state_0, action_0)` pair. Verify its camera statistics
+before scaling collection. Use `--start-frame 1` only for an already collected legacy shard whose frame 0 is known to
+be stale; doing so also removes `state_0` and `action_0`, so it is a compatibility workaround rather than the preferred
+collection path.
 
 The converter reports `action_motor_limit_violation_count`. It intentionally does not clip labels: nonzero values mean
 the frozen expert commanded beyond the declared physical motor range and must be resolved before deploying the trained
@@ -732,9 +737,12 @@ grep -nE \
   "$RED_CUBE_POLICY_LOG"
 ```
 
-The main rollout defaults to `--reset_camera_warmup_steps 0`. Use `1` only when frame 0 is known to be stale; this
-holds the current joint targets for one simulation step and sends the refreshed observation to the policy. The legacy
-`red_cube_to_box_policy_rollout_skip_first_frame.py` entrypoint is equivalent to selecting `1` explicitly.
+The main rollout defaults both reset options to `0`. A model trained from a new collection made with
+`--camera_refreshes_before_recording 1` should use `--reset_camera_refreshes 1`; this refreshes camera buffers without
+advancing physics and preserves the reset joint state. Keep `--reset_camera_warmup_steps 1` only for compatibility with
+an existing model trained after converting legacy data with `--start-frame 1`: it holds the current joints for one
+simulation step, so it is not time-equivalent to preserving frame 0. Do not enable both options for a new experiment.
+The legacy `red_cube_to_box_policy_rollout_skip_first_frame.py` entrypoint selects the one-step compatibility behavior.
 
 For a ten-episode batch, reuse the command with `--episodes 10`, a new `run_root`, and an explicit acceptance threshold
 such as `--minimum_success_rate 0.5`. Every episode gets its own JPEG/JSONL/offline-HTML recording directory below the

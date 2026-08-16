@@ -82,13 +82,26 @@ def reset_with_camera_warmup(
     *,
     joint_ids: list[int],
     warmup_steps: int,
+    camera_names: tuple[str, ...] = (),
+    camera_refreshes: int = 0,
     dynamic_gripper_reset=None,
 ):
     """Reset and advance held simulation steps before exposing a refreshed camera frame."""
 
     if warmup_steps < 0:
         raise ValueError("camera warmup steps must be non-negative")
+    if camera_refreshes < 0:
+        raise ValueError("camera refreshes must be non-negative")
     observations, _ = env.reset()
+    if camera_refreshes:
+        from red_cube_to_box_camera import refresh_camera_observations_without_control
+
+        observations = refresh_camera_observations_without_control(
+            env,
+            observations,
+            camera_names=camera_names,
+            refreshes=camera_refreshes,
+        )
     for warmup_index in range(warmup_steps):
         hold_action = robot.data.joint_pos[:, joint_ids].clone()
         if dynamic_gripper_reset is not None:
@@ -99,6 +112,7 @@ def reset_with_camera_warmup(
                 f"Environment terminated/truncated during camera warmup step {warmup_index + 1}"
             )
     print(f"policy_reset_camera_warmup_steps: {warmup_steps}", flush=True)
+    print(f"policy_reset_camera_refreshes: {camera_refreshes}", flush=True)
     return observations
 
 
@@ -163,6 +177,12 @@ def _build_parser() -> argparse.ArgumentParser:
             "Held simulation steps after reset before the first observation is sent to the policy. "
             "Use 1 only after confirming that reset observation frame 0 is stale."
         ),
+    )
+    parser.add_argument(
+        "--reset_camera_refreshes",
+        type=int,
+        default=0,
+        help="Refresh reset camera buffers without advancing physics or applying an action.",
     )
     parser.add_argument("--record_dir", type=Path)
     parser.add_argument("--record_every", type=int, default=4)
@@ -300,6 +320,8 @@ def main() -> int:
         parser.error("stable-step and recording intervals must be positive")
     if args.reset_camera_warmup_steps < 0:
         parser.error("--reset_camera_warmup_steps must be non-negative")
+    if args.reset_camera_refreshes < 0:
+        parser.error("--reset_camera_refreshes must be non-negative")
     if not 0.0 <= args.minimum_success_rate <= 1.0:
         parser.error("--minimum_success_rate must be between 0 and 1")
     assets_root = Path(args.assets_root).expanduser().resolve()
@@ -348,6 +370,8 @@ def main() -> int:
             robot,
             joint_ids=joint_ids,
             warmup_steps=args.reset_camera_warmup_steps,
+            camera_names=camera_names,
+            camera_refreshes=args.reset_camera_refreshes,
             dynamic_gripper_reset=(
                 dynamic_reset_gripper_effort_limit_sim if env.cfg.dynamic_reset_gripper_effort_limit else None
             ),
@@ -377,6 +401,8 @@ def main() -> int:
                         robot,
                         joint_ids=joint_ids,
                         warmup_steps=args.reset_camera_warmup_steps,
+                        camera_names=camera_names,
+                        camera_refreshes=args.reset_camera_refreshes,
                         dynamic_gripper_reset=(
                             dynamic_reset_gripper_effort_limit_sim
                             if env.cfg.dynamic_reset_gripper_effort_limit

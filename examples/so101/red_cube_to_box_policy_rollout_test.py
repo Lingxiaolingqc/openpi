@@ -143,6 +143,41 @@ def test_reset_camera_warmup_zero_keeps_reset_observation() -> None:
     ) == {"frame": 0}
 
 
+def test_reset_camera_refresh_does_not_step_environment(monkeypatch) -> None:
+    refresh_calls: list[tuple[object, object, tuple[str, ...], int]] = []
+
+    camera_module = types.ModuleType("red_cube_to_box_camera")
+
+    def fake_refresh(env, observations, *, camera_names, refreshes):
+        refresh_calls.append((env, observations, camera_names, refreshes))
+        return {"frame": "refreshed"}
+
+    camera_module.refresh_camera_observations_without_control = fake_refresh
+    monkeypatch.setitem(sys.modules, "red_cube_to_box_camera", camera_module)
+
+    class FakeEnv:
+        def reset(self):
+            return {"frame": 0}, {}
+
+        def step(self, action):
+            raise AssertionError("sensor-only refresh must not advance the environment")
+
+    env = FakeEnv()
+    robot = types.SimpleNamespace(data=types.SimpleNamespace(joint_pos=None))
+
+    observation = rollout.reset_with_camera_warmup(
+        env,
+        robot,
+        joint_ids=list(range(6)),
+        warmup_steps=0,
+        camera_names=("front",),
+        camera_refreshes=1,
+    )
+
+    assert observation == {"frame": "refreshed"}
+    assert refresh_calls == [(env, {"frame": 0}, ("front",), 1)]
+
+
 class _FakeTensor:
     def __init__(self, value: np.ndarray) -> None:
         self.value = value

@@ -223,3 +223,10 @@ preservation and hardware-safe deployment clipping as separate decisions.
 Only record camera views that the scene actually exposes. Optional policy interfaces are not evidence that a wrist
 sensor exists. Report image shape, frame count, sample interval, shard size, and measured bytes per episode before a
 large collection run.
+
+Audit reset camera freshness before collecting. If the reset image is stale, refresh RTX camera sensors and recompute
+observations before the first recorded control step, without advancing physics or applying an action. Then retain the
+aligned initial pair `(image_0, state_0, action_0)`. Dropping the full first sample preserves modality alignment but
+removes the reset-state training example; replacing it at rollout with a held physics step is not time-equivalent and
+can create immediate closed-loop distribution shift. Keep camera refresh and frame skipping explicit and default-off,
+and use frame skipping only as a compatibility path for already collected data.

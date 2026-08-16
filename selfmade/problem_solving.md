@@ -848,7 +848,7 @@ Windows 原生动态 smoke 验证了 `1793` 帧、六维 action、严格 `1/60 s
 输出逐关节 `action_motor_limit_violation_count`。正式上真机前必须单独决定训练标签裁剪、部署端安全裁剪或专家
 target 限制策略，不能让超范围值在转换时悄悄消失。
 
-## 29. reset 后 frame 0 是未刷新相机帧，但跳过必须是显式选择
+## 29. reset 后 frame 0 未刷新：不能用删掉完整样本作为最终方案
 
 当前采集复核确认 episode 的 frame 0 来自 reset 后尚未刷新的相机，因此不能作为该 episode 的有效训练样本。
 删除时必须保持多模态时间对齐：同时从相同索引开始读取 image、state 和 action，不能只删图像后把
@@ -858,7 +858,25 @@ target 限制策略，不能让超范围值在转换时悄悄消失。
 传入 `--start-frame 1` 才删除首个对齐样本。审计的范围、帧数和时长也必须基于删除后的样本，且任何 episode
 都至少要剩一帧。
 
-policy rollout 同样采用 opt-in：主入口默认 warmup 为 0；确认 reset observation 未刷新时，显式使用
-`--reset_camera_warmup_steps 1`，以 reset 后的实测关节位置作为 absolute hold action 推进一步，再把新
-observation 交给 policy。核心教训是把“检测到无效帧”和“如何保持时间对齐地跳过”分开；默认行为不应替
-用户对每批数据作判定。
+后续 step-15000 模型的 teacher-forced 审计补出了更关键的问题：模型在 source frame 1–1400 的训练轨迹上
+能很好复现专家，frame 53 也仍正确保持开爪；但闭环 rollout 在约 step 53 已提前闭爪。旧数据转换删除
+frame 0 后，训练首样本是已经执行 action 0 后的 state 1。rollout 的 one-step warmup 却只保持 reset 关节，
+因此刷新后的首输入仍接近 state 0。两者并不等价，闭环从第一个输入就可能处于训练分布之外。
+
+最终方案是在正式记录之前只刷新 RTX 相机和 observation buffer，不推进 physics，也不调用 action manager：
+
+```text
+reset -> render -> force-refresh camera sensor -> recompute observation
+record (valid image_0, state_0, action_0)
+```
+
+采集端显式使用 `--camera_refreshes_before_recording 1`，新数据转换保持 `--start-frame 0`；使用该数据训练的
+rollout 显式使用 `--reset_camera_refreshes 1`。这些参数仍默认关闭，是否启用由每批数据首帧审计决定。
+`--start-frame 1` 和 `--reset_camera_warmup_steps 1` 只保留给已经存在的旧数据/旧 checkpoint 做兼容复测，
+不再作为新采集的推荐路线。核心教训是：删掉一个对齐样本虽然没有造成模态索引错配，却会删掉部署所需的
+初始状态覆盖；相机预热应该发生在 episode 时间线开始之前。
+
+Windows 原生验证中，无控制刷新后的 frame 0 关节仍为六个 `0 rad`，图像均值为 `153.384819`；执行
+action 0 后的 frame 1 关节才发生变化，图像均值变为 `174.914497`。旧数据 source frame 1 的图像均值恰为
+`153.385`，说明旧流程训练确实从“有效的初始场景图像 + 已推进的 state 1”开始，而新流程把该有效图像放回
+真正的 state 0/action 0。完整专家轨迹仍在 `1793` 步成功并通过 HDF5 审计。

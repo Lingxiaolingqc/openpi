@@ -24,6 +24,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--shard_size", type=int, default=50)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--expert_version", default=DEFAULT_EXPERT_VERSION)
+    parser.add_argument(
+        "--camera_refreshes_before_recording",
+        type=int,
+        default=0,
+        help="Render and refresh camera sensors this many times after reset without stepping physics.",
+    )
     AppLauncher.add_app_launcher_args(parser)
     return parser
 
@@ -78,6 +84,8 @@ def main() -> int:
         parser.error("episode and shard counts must be positive")
     if args.maximum_attempts < args.successful_episodes:
         parser.error("--maximum_attempts must be at least --successful_episodes")
+    if args.camera_refreshes_before_recording < 0:
+        parser.error("--camera_refreshes_before_recording must be non-negative")
     if not args.headless or not args.enable_cameras:
         parser.error("Dataset collection requires --headless --enable_cameras")
     if not args.assets_root:
@@ -96,6 +104,7 @@ def main() -> int:
     print(f"maximum_new_attempts: {args.maximum_attempts}", flush=True)
     print(f"resume_attempt_offset: {resumed_attempts}", flush=True)
     print(f"effective_seed: {effective_seed}", flush=True)
+    print(f"camera_refreshes_before_recording: {args.camera_refreshes_before_recording}", flush=True)
 
     app_launcher = AppLauncher(args)
     simulation_app = app_launcher.app
@@ -107,6 +116,7 @@ def main() -> int:
         from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
         from red_cube_to_box_hdf5 import JOINT_NAMES
         from red_cube_to_box_hdf5 import ShardedDatasetWriter
+        from red_cube_to_box_camera import refresh_camera_observations_without_control
         import red_cube_to_box_task
         from red_cube_to_box_task.autogen_polar_retreat_transport_state_machine import (
             RedCubeToBoxAutogenPolarRetreatTransportStateMachine,
@@ -124,6 +134,7 @@ def main() -> int:
                 "assets_root": str(assets_root),
                 "observation_alignment": "pre_step",
                 "action_semantics": "absolute_joint_pos_target_written_by_action_terms",
+                "camera_refreshes_before_recording": args.camera_refreshes_before_recording,
             },
             resume=True,
         )
@@ -161,6 +172,12 @@ def main() -> int:
                 if writer.successful_episodes >= target_total:
                     break
                 observations, _ = env.reset()
+                observations = refresh_camera_observations_without_control(
+                    env,
+                    observations,
+                    camera_names=camera_names,
+                    refreshes=args.camera_refreshes_before_recording,
+                )
                 state_machine.reset()
                 if not camera_stats_reported:
                     for camera_name in camera_names:
