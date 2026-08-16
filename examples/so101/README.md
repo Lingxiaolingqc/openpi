@@ -540,8 +540,13 @@ uv run examples/so101/convert_leisaac_hdf5_to_lerobot.py `
   --repo-id local/leisaac-so101-dataset `
   --task "Pick up the red cube and place it inside the green box." `
   --fps 60 `
-  --image-mode video
+  --image-mode video `
+  --start-frame 1
 ```
+
+`--start-frame` defaults to `0`. Pass `--start-frame 1` only after confirming that frame 0 in this collection is an
+unrefreshed camera frame. The converter then skips the aligned image, state, and action sample together; it never
+shifts only the image stream.
 
 The converter reports `action_motor_limit_violation_count`. It intentionally does not clip labels: nonzero values mean
 the frozen expert commanded beyond the declared physical motor range and must be resolved before deploying the trained
@@ -638,10 +643,12 @@ grep -nE \
 Serve a checkpoint with a free port shared by the policy server and LeIsaac client:
 
 ```powershell
-uv run scripts/serve_policy.py policy:checkpoint `
-  --policy.config=pi05_lora_so101_liftcube `
-  --policy.dir="D:\path\to\checkpoint" `
-  --port=18000
+uv run scripts/serve_policy.py `
+  --default-prompt "Pick up the red cube and place it inside the green box." `
+  --port 18000 `
+  policy:checkpoint `
+  --policy.config pi05_lora_so101_liftcube `
+  --policy.dir "D:\path\to\checkpoint"
 ```
 
 ### RedCubeToBox learned-policy rollout
@@ -680,13 +687,18 @@ mkdir -p "$run_root"
   --seed 42 \
   --maximum_steps 2400 \
   --actions_per_inference 10 \
+  --reset_camera_warmup_steps 1 \
   --record_dir "$run_root/recordings" \
   2>&1 | tee "$RED_CUBE_POLICY_LOG"
 
 grep -nE \
-  'RED_CUBE_TO_BOX_POLICY_|policy_endpoint:|policy_camera:|policy_inference:|policy_episode:|policy_recording_dir:|completed_episodes:|successful_episodes:|success_rate:|Traceback|ValueError|RuntimeError|out of memory|OOM' \
+  'RED_CUBE_TO_BOX_POLICY_|policy_endpoint:|policy_reset_camera_warmup_steps:|policy_camera:|policy_inference:|policy_episode:|policy_recording_dir:|completed_episodes:|successful_episodes:|success_rate:|Traceback|ValueError|RuntimeError|out of memory|OOM' \
   "$RED_CUBE_POLICY_LOG"
 ```
+
+The main rollout defaults to `--reset_camera_warmup_steps 0`. Use `1` only when frame 0 is known to be stale; this
+holds the current joint targets for one simulation step and sends the refreshed observation to the policy. The legacy
+`red_cube_to_box_policy_rollout_skip_first_frame.py` entrypoint is equivalent to selecting `1` explicitly.
 
 For a ten-episode batch, reuse the command with `--episodes 10`, a new `run_root`, and an explicit acceptance threshold
 such as `--minimum_success_rate 0.5`. Every episode gets its own JPEG/JSONL/offline-HTML recording directory below the
@@ -719,10 +731,11 @@ New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
   --seed 42 `
   --maximum_steps 2400 `
   --actions_per_inference 10 `
+  --reset_camera_warmup_steps 1 `
   --record_dir (Join-Path $runRoot 'recordings') `
   2>&1 | Tee-Object -FilePath $env:RED_CUBE_POLICY_LOG
 
 Select-String -LiteralPath $env:RED_CUBE_POLICY_LOG -Pattern `
-'RED_CUBE_TO_BOX_POLICY_|policy_endpoint:|policy_camera:|policy_inference:|policy_episode:|policy_recording_dir:|completed_episodes:|successful_episodes:|success_rate:|Traceback|ValueError|RuntimeError|out of memory|OOM' |
+'RED_CUBE_TO_BOX_POLICY_|policy_endpoint:|policy_reset_camera_warmup_steps:|policy_camera:|policy_inference:|policy_episode:|policy_recording_dir:|completed_episodes:|successful_episodes:|success_rate:|Traceback|ValueError|RuntimeError|out of memory|OOM' |
 ForEach-Object { "$($_.LineNumber):$($_.Line)" }
 ```
