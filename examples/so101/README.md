@@ -694,10 +694,75 @@ uv run scripts/serve_policy.py `
 
 ### RedCubeToBox learned-policy rollout
 
+Before blaming a checkpoint, replay native HDF5 expert targets through the same direct `so101leader` action path used
+by the learned-policy runner. This separates model error from environment/action-path mismatch. Windows-native:
+
+```powershell
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$runRoot = "D:\Sim\results\expert-joint-replay\red_cube_$stamp"
+$env:SO101_REPLAY_LOG = Join-Path $runRoot 'replay.log'
+New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
+
+& "D:\Envs\leisaac-so101-win\Scripts\python.exe" `
+  examples\so101\red_cube_to_box_expert_joint_replay.py `
+  --headless `
+  --enable_cameras `
+  --device cuda:0 `
+  --rendering_mode performance `
+  --assets_root "D:\Sim\leisaac-v0.4.0" `
+  --input_path "D:\path\to\native-dataset" `
+  --episode_index 0 `
+  --source_frame_index 0 `
+  --maximum_steps 120 `
+  --seed 42 `
+  --joint_damping 10.0 `
+  --disable_robot_gravity `
+  --no_clip_actions `
+  --divergence_threshold_rad 0.01 `
+  --require_tracking_match 2>&1 | Tee-Object -FilePath $env:SO101_REPLAY_LOG
+
+Select-String -LiteralPath $env:SO101_REPLAY_LOG -Pattern `
+'RED_CUBE_TO_BOX_EXPERT_JOINT_REPLAY_|joint_damping_override:|disable_robot_gravity:|replay_initial_|replay_action_clip_|expert_joint_replay:|replayed_transitions:|replay_tracking_|replay_first_divergence_transition:|Traceback|RuntimeError' |
+ForEach-Object { "$($_.LineNumber):$($_.Line)" }
+```
+
+Server Linux uses the same diagnostic and flags:
+
+```bash
+stamp=$(date +%Y%m%d-%H%M%S)
+run_root="$LEISAAC_BASE/results/leisaac/expert-joint-replay/red_cube_$stamp"
+export SO101_REPLAY_LOG="$run_root/replay.log"
+mkdir -p "$run_root"
+
+"$LEISAAC_ENV/bin/python" \
+  examples/so101/red_cube_to_box_expert_joint_replay.py \
+  --headless \
+  --enable_cameras \
+  --device "$ISAAC_DEVICE" \
+  --rendering_mode performance \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --input_path /path/to/native-dataset \
+  --episode_index 0 \
+  --source_frame_index 0 \
+  --maximum_steps 120 \
+  --seed 42 \
+  --joint_damping 10.0 \
+  --disable_robot_gravity \
+  --no_clip_actions \
+  --divergence_threshold_rad 0.01 \
+  --require_tracking_match 2>&1 | tee "$SO101_REPLAY_LOG"
+
+grep -nE \
+  'RED_CUBE_TO_BOX_EXPERT_JOINT_REPLAY_|joint_damping_override:|disable_robot_gravity:|replay_initial_|replay_action_clip_|expert_joint_replay:|replayed_transitions:|replay_tracking_|replay_first_divergence_transition:|Traceback|RuntimeError' \
+  "$SO101_REPLAY_LOG"
+```
+
 [`red_cube_to_box_policy_rollout.py`](red_cube_to_box_policy_rollout.py) evaluates a served OpenPI checkpoint without
 changing the scripted expert runners. It uses the direct six-joint `so101leader` action configuration, sends the front
 camera, six motor-coordinate joint positions, and task prompt to OpenPI, then executes at most 10 returned absolute
-joint targets before replanning. Simulator soft-limit clipping is counted and printed instead of being silent. A
+joint targets before replanning. `--match_expert_dynamics` reproduces the polar collection environment by disabling
+robot gravity, setting joint damping to `10.0`, and executing raw targets; potential soft-limit violations remain fully
+reported even though runner-side clipping is disabled. Without that flag, simulator soft-limit clipping remains active. A
 successful episode must lift the cube by at least 30 mm and keep it settled inside the box for 30 consecutive steps.
 
 Install the lightweight client into the LeIsaac environment once. On the Linux server:
@@ -728,12 +793,13 @@ mkdir -p "$run_root"
   --seed 42 \
   --maximum_steps 2400 \
   --actions_per_inference 10 \
+  --match_expert_dynamics \
   --reset_camera_warmup_steps 1 \
   --record_dir "$run_root/recordings" \
   2>&1 | tee "$RED_CUBE_POLICY_LOG"
 
 grep -nE \
-  'RED_CUBE_TO_BOX_POLICY_|policy_endpoint:|policy_reset_camera_warmup_steps:|policy_camera:|policy_inference:|policy_episode:|policy_recording_dir:|completed_episodes:|successful_episodes:|success_rate:|Traceback|ValueError|RuntimeError|out of memory|OOM' \
+  'RED_CUBE_TO_BOX_POLICY_|policy_endpoint:|policy_match_expert_dynamics:|policy_robot_gravity_disabled:|policy_joint_damping_override:|policy_action_soft_limit_clip_enabled:|policy_reset_camera_warmup_steps:|policy_camera:|policy_inference:|policy_episode:|policy_recording_dir:|completed_episodes:|successful_episodes:|success_rate:|Traceback|ValueError|RuntimeError|out of memory|OOM' \
   "$RED_CUBE_POLICY_LOG"
 ```
 
@@ -775,11 +841,12 @@ New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
   --seed 42 `
   --maximum_steps 2400 `
   --actions_per_inference 10 `
+  --match_expert_dynamics `
   --reset_camera_warmup_steps 1 `
   --record_dir (Join-Path $runRoot 'recordings') `
   2>&1 | Tee-Object -FilePath $env:RED_CUBE_POLICY_LOG
 
 Select-String -LiteralPath $env:RED_CUBE_POLICY_LOG -Pattern `
-'RED_CUBE_TO_BOX_POLICY_|policy_endpoint:|policy_reset_camera_warmup_steps:|policy_camera:|policy_inference:|policy_episode:|policy_recording_dir:|completed_episodes:|successful_episodes:|success_rate:|Traceback|ValueError|RuntimeError|out of memory|OOM' |
+'RED_CUBE_TO_BOX_POLICY_|policy_endpoint:|policy_match_expert_dynamics:|policy_robot_gravity_disabled:|policy_joint_damping_override:|policy_action_soft_limit_clip_enabled:|policy_reset_camera_warmup_steps:|policy_camera:|policy_inference:|policy_episode:|policy_recording_dir:|completed_episodes:|successful_episodes:|success_rate:|Traceback|ValueError|RuntimeError|out of memory|OOM' |
 ForEach-Object { "$($_.LineNumber):$($_.Line)" }
 ```

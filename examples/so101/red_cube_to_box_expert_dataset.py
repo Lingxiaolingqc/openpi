@@ -135,6 +135,9 @@ def main() -> int:
                 "observation_alignment": "pre_step",
                 "action_semantics": "absolute_joint_pos_target_written_by_action_terms",
                 "camera_refreshes_before_recording": args.camera_refreshes_before_recording,
+                "robot_gravity_disabled": True,
+                "robot_joint_damping": 10.0,
+                "action_target_soft_limit_clipped_before_apply": False,
             },
             resume=True,
         )

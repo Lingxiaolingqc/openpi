@@ -184,6 +184,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Refresh reset camera buffers without advancing physics or applying an action.",
     )
+    parser.add_argument(
+        "--match_expert_dynamics",
+        action="store_true",
+        help=(
+            "Match polar collection dynamics: disable robot gravity, set joint damping to 10, "
+            "and execute raw targets without runner-side soft-limit clipping."
+        ),
+    )
     parser.add_argument("--record_dir", type=Path)
     parser.add_argument("--record_every", type=int, default=4)
     parser.add_argument("--jpeg_quality", type=int, default=85)
@@ -334,6 +342,7 @@ def main() -> int:
     print(f"episodes: {args.episodes}", flush=True)
     print(f"maximum_steps: {args.maximum_steps}", flush=True)
     print(f"actions_per_inference: {args.actions_per_inference}", flush=True)
+    print(f"policy_match_expert_dynamics: {args.match_expert_dynamics}", flush=True)
 
     from isaaclab.app import AppLauncher
 
@@ -354,12 +363,16 @@ def main() -> int:
 
         env_cfg = parse_env_cfg(red_cube_to_box_task.TASK_ID, device=args.device, num_envs=1)
         env_cfg.use_teleop_device("so101leader")
+        if args.match_expert_dynamics:
+            env_cfg.scene.robot.spawn.rigid_props.disable_gravity = True
         env_cfg.seed = args.seed
         env_cfg.recorders = None
         env_cfg.terminations.success = None
         env_cfg.terminations.time_out = None
         env = gym.make(red_cube_to_box_task.TASK_ID, cfg=env_cfg).unwrapped
         robot = env.scene["robot"]
+        if args.match_expert_dynamics:
+            robot.write_joint_damping_to_sim(damping=10.0)
         cube = env.scene["cube"]
         floor = env.scene["target_box_floor"]
         joint_ids = [list(robot.data.joint_names).index(name) for name in JOINT_NAMES]
@@ -389,6 +402,9 @@ def main() -> int:
         print(f"joint_names: {JOINT_NAMES}", flush=True)
         print(f"soft_joint_lower_rad: {_rounded(soft_limits[:, 0])}", flush=True)
         print(f"soft_joint_upper_rad: {_rounded(soft_limits[:, 1])}", flush=True)
+        print(f"policy_robot_gravity_disabled: {args.match_expert_dynamics}", flush=True)
+        print(f"policy_joint_damping_override: {10.0 if args.match_expert_dynamics else None}", flush=True)
+        print(f"policy_action_soft_limit_clip_enabled: {not args.match_expert_dynamics}", flush=True)
         print("RED_CUBE_TO_BOX_POLICY_PHASE=evaluating", flush=True)
 
         successes = 0
@@ -439,6 +455,10 @@ def main() -> int:
                 clip_count_by_joint = np.zeros(len(JOINT_NAMES), dtype=np.int64)
                 maximum_clip_by_joint_rad = np.zeros(len(JOINT_NAMES), dtype=np.float32)
                 maximum_clip_rad = 0.0
+                limit_violation_count = 0
+                limit_violation_count_by_joint = np.zeros(len(JOINT_NAMES), dtype=np.int64)
+                maximum_limit_violation_by_joint_rad = np.zeros(len(JOINT_NAMES), dtype=np.float32)
+                maximum_limit_violation_rad = 0.0
                 inference_latencies_ms: list[float] = []
                 rewards_finite = True
                 unexpected_reset = False
@@ -453,15 +473,27 @@ def main() -> int:
                     inference_latency_ms = 1000.0 * (time.perf_counter() - inference_start)
                     inference_latencies_ms.append(inference_latency_ms)
                     raw_action_chunk = normalize_action_chunk(raw_chunk)
-                    action_chunk, chunk_clip_count, chunk_max_clip = clip_action_chunk(
+                    clipped_action_chunk, chunk_violation_count, chunk_max_violation = clip_action_chunk(
                         raw_action_chunk,
                         soft_limits[:, 0],
                         soft_limits[:, 1],
                     )
-                    chunk_clip_by_joint, chunk_max_clip_by_joint = action_chunk_clip_by_joint(
+                    chunk_violation_by_joint, chunk_max_violation_by_joint = action_chunk_clip_by_joint(
                         raw_action_chunk,
-                        action_chunk,
+                        clipped_action_chunk,
                     )
+                    if args.match_expert_dynamics:
+                        action_chunk = raw_action_chunk
+                        chunk_clip_count = 0
+                        chunk_max_clip = 0.0
+                        chunk_clip_by_joint = np.zeros(len(JOINT_NAMES), dtype=np.int64)
+                        chunk_max_clip_by_joint = np.zeros(len(JOINT_NAMES), dtype=np.float32)
+                    else:
+                        action_chunk = clipped_action_chunk
+                        chunk_clip_count = chunk_violation_count
+                        chunk_max_clip = chunk_max_violation
+                        chunk_clip_by_joint = chunk_violation_by_joint
+                        chunk_max_clip_by_joint = chunk_max_violation_by_joint
                     inference_count += 1
                     clip_count += chunk_clip_count
                     clip_count_by_joint += chunk_clip_by_joint
@@ -470,6 +502,13 @@ def main() -> int:
                         chunk_max_clip_by_joint,
                     )
                     maximum_clip_rad = max(maximum_clip_rad, chunk_max_clip)
+                    limit_violation_count += chunk_violation_count
+                    limit_violation_count_by_joint += chunk_violation_by_joint
+                    maximum_limit_violation_by_joint_rad = np.maximum(
+                        maximum_limit_violation_by_joint_rad,
+                        chunk_max_violation_by_joint,
+                    )
+                    maximum_limit_violation_rad = max(maximum_limit_violation_rad, chunk_max_violation)
                     current_joint_rad = _numpy_row(robot.data.joint_pos[:, joint_ids])
                     first_raw_action_rad = raw_action_chunk[0, 0]
                     first_action_rad = action_chunk[0, 0]
@@ -483,6 +522,9 @@ def main() -> int:
                         f"clip_count={chunk_clip_count}:max_clip_rad={chunk_max_clip:.6f}:"
                         f"clip_count_by_joint={tuple(int(x) for x in chunk_clip_by_joint)}:"
                         f"max_clip_by_joint_rad={_rounded(chunk_max_clip_by_joint, 6)}:"
+                        f"soft_limit_violation_count={chunk_violation_count}:"
+                        f"soft_limit_violation_count_by_joint={tuple(int(x) for x in chunk_violation_by_joint)}:"
+                        f"max_soft_limit_violation_by_joint_rad={_rounded(chunk_max_violation_by_joint, 6)}:"
                         f"current_joint_rad={_rounded(current_joint_rad)}:"
                         f"first_raw_action_rad={_rounded(first_raw_action_rad)}:"
                         f"first_action_rad={_rounded(first_action_rad)}:"
@@ -541,6 +583,12 @@ def main() -> int:
                     "policy_action_clip_count_by_joint": clip_count_by_joint.tolist(),
                     "policy_action_max_clip_rad": maximum_clip_rad,
                     "policy_action_max_clip_by_joint_rad": maximum_clip_by_joint_rad.tolist(),
+                    "policy_action_soft_limit_violation_count": limit_violation_count,
+                    "policy_action_soft_limit_violation_count_by_joint": limit_violation_count_by_joint.tolist(),
+                    "policy_action_max_soft_limit_violation_rad": maximum_limit_violation_rad,
+                    "policy_action_max_soft_limit_violation_by_joint_rad": (
+                        maximum_limit_violation_by_joint_rad.tolist()
+                    ),
                     "cube_final_pos_w": list(_rounded(cube.data.root_pos_w[0])),
                     "cube_offset_from_box": final_offset.tolist(),
                     "cube_final_speed": final_speed,
@@ -564,6 +612,8 @@ def main() -> int:
                     f"settled_inside={settled_inside}:clip_count={clip_count}:"
                     f"clip_count_by_joint={tuple(int(x) for x in clip_count_by_joint)}:"
                     f"max_clip_by_joint_rad={_rounded(maximum_clip_by_joint_rad, 6)}:"
+                    f"soft_limit_violation_count={limit_violation_count}:"
+                    f"soft_limit_violation_count_by_joint={tuple(int(x) for x in limit_violation_count_by_joint)}:"
                     f"final_offset={tuple(round(float(x), 5) for x in final_offset)}",
                     flush=True,
                 )

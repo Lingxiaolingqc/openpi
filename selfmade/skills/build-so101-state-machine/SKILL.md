@@ -230,3 +230,10 @@ aligned initial pair `(image_0, state_0, action_0)`. Dropping the full first sam
 removes the reset-state training example; replacing it at rollout with a held physics step is not time-equivalent and
 can create immediate closed-loop distribution shift. Keep camera refresh and frame skipping explicit and default-off,
 and use frame skipping only as a compatibility path for already collected data.
+
+Before training or blaming a learned policy, replay the saved joint targets without the model through the exact action
+configuration used for policy rollout. Compare live `joint_pos_{t+1}` with the saved teacher state at every transition.
+Match every collection-time dynamics side effect explicitly, including robot-link gravity, joint damping, actuator
+limits, and runner-side target clipping. A label can have the correct joint order and absolute-target semantics while
+still producing a different trajectory under different physics settings. Require target replay to match before using
+closed-loop policy behavior to judge dataset size, frame selection, or model quality.

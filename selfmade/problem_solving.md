@@ -861,7 +861,8 @@ target 限制策略，不能让超范围值在转换时悄悄消失。
 后续 step-15000 模型的 teacher-forced 审计补出了更关键的问题：模型在 source frame 1–1400 的训练轨迹上
 能很好复现专家，frame 53 也仍正确保持开爪；但闭环 rollout 在约 step 53 已提前闭爪。旧数据转换删除
 frame 0 后，训练首样本是已经执行 action 0 后的 state 1。rollout 的 one-step warmup 却只保持 reset 关节，
-因此刷新后的首输入仍接近 state 0。两者并不等价，闭环从第一个输入就可能处于训练分布之外。
+因此刷新后的首输入仍接近 state 0。两者并不等价，可能增加初始分布偏移；后续 joint-target 重放证明它不是
+当前 `0/10` rollout 的主要根因。
 
 最终方案是在正式记录之前只刷新 RTX 相机和 observation buffer，不推进 physics，也不调用 action manager：
 
@@ -880,3 +881,25 @@ Windows 原生验证中，无控制刷新后的 frame 0 关节仍为六个 `0 ra
 action 0 后的 frame 1 关节才发生变化，图像均值变为 `174.914497`。旧数据 source frame 1 的图像均值恰为
 `153.385`，说明旧流程训练确实从“有效的初始场景图像 + 已推进的 state 1”开始，而新流程把该有效图像放回
 真正的 state 0/action 0。完整专家轨迹仍在 `1793` 步成功并通过 HDF5 审计。
+
+## 30. 模型拟合教师数据但闭环立即失败：采集和 rollout 动力学不一致
+
+新增 `red_cube_to_box_expert_joint_replay.py`，完全绕过模型，从原生 HDF5 读取 `action_t`，通过 policy runner
+使用的 `so101leader` 六关节绝对位置 action term 执行，并逐步比较 live `joint_pos_{t+1}` 与教师状态。seed 42
+的 reset 关节和 cube 坐标均严格一致，因此第一步偏差不能归因于随机初态。
+
+默认 policy 路径的 120 步对照在 transition 0 就超过 `0.05 rad`：第一步最大误差 `0.137466 rad`，全局 RMSE
+为 `0.288533 rad`。根因不是 action 数值含义，而是 state-machine 配置还隐式改变了执行环境：
+
+- polar `setup()` 把全部关节 damping 设为 `10.0`；普通 `so101leader` runner 没有这一步；
+- `use_teleop_device("so101_state_machine")` 会设置 robot `disable_gravity=True`，`so101leader` 默认启用重力；
+- expert action term 写入并执行原始 target，其中 wrist-flex 可超过 soft limit；旧 runner 在执行前显式裁剪。
+
+逐项恢复给出了严格因果证据：只恢复 damping 后 transition 0 最大误差降到 `0.003499 rad`；再取消 target
+预裁剪后 wrist-flex RMSE 从 `0.185110` 降到 `0.004943 rad`；最后关闭 robot gravity 后，全部 120 个 transition
+的逐关节 MAE、RMSE、最大误差和全局 RMSE 均打印为 `0.000000`，`replay_tracking_match=True`。因此当前模型
+闭环失败首先是执行环境错配，frame 0 只是需要保留的数据完整性问题。
+
+policy rollout 新增显式 `--match_expert_dynamics`：关闭 robot gravity、写入 damping `10.0`，并执行 raw target。
+runner 仍分别报告实际 clip count 和“如果按 soft limit 会越界”的 violation count，不会把未裁剪误写成零风险。
+该模式仅用于匹配这批仿真 polar 数据；真实机械臂部署必须保留独立安全边界，不能照搬仿真 raw-target 语义。
