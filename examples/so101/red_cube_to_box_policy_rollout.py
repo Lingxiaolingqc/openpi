@@ -64,6 +64,18 @@ def clip_action_chunk(
     return clipped, int(np.count_nonzero(violation)), maximum_violation
 
 
+def action_chunk_clip_by_joint(
+    raw_actions: np.ndarray,
+    clipped_actions: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return per-joint clipping counts and maximum absolute corrections."""
+
+    if raw_actions.shape != clipped_actions.shape:
+        raise ValueError("Raw and clipped action chunks must have identical shapes")
+    violation = np.abs(raw_actions - clipped_actions)
+    return np.count_nonzero(violation, axis=(0, 1)), violation.max(axis=(0, 1))
+
+
 def reset_with_camera_warmup(
     env,
     robot,
@@ -398,6 +410,8 @@ def main() -> int:
                 completed_steps = 0
                 inference_count = 0
                 clip_count = 0
+                clip_count_by_joint = np.zeros(len(JOINT_NAMES), dtype=np.int64)
+                maximum_clip_by_joint_rad = np.zeros(len(JOINT_NAMES), dtype=np.float32)
                 maximum_clip_rad = 0.0
                 inference_latencies_ms: list[float] = []
                 rewards_finite = True
@@ -412,21 +426,41 @@ def main() -> int:
                     raw_chunk = policy.get_action(observations["policy"])
                     inference_latency_ms = 1000.0 * (time.perf_counter() - inference_start)
                     inference_latencies_ms.append(inference_latency_ms)
-                    action_chunk = normalize_action_chunk(raw_chunk)
+                    raw_action_chunk = normalize_action_chunk(raw_chunk)
                     action_chunk, chunk_clip_count, chunk_max_clip = clip_action_chunk(
-                        action_chunk,
+                        raw_action_chunk,
                         soft_limits[:, 0],
                         soft_limits[:, 1],
                     )
+                    chunk_clip_by_joint, chunk_max_clip_by_joint = action_chunk_clip_by_joint(
+                        raw_action_chunk,
+                        action_chunk,
+                    )
                     inference_count += 1
                     clip_count += chunk_clip_count
+                    clip_count_by_joint += chunk_clip_by_joint
+                    maximum_clip_by_joint_rad = np.maximum(
+                        maximum_clip_by_joint_rad,
+                        chunk_max_clip_by_joint,
+                    )
                     maximum_clip_rad = max(maximum_clip_rad, chunk_max_clip)
+                    current_joint_rad = _numpy_row(robot.data.joint_pos[:, joint_ids])
+                    first_raw_action_rad = raw_action_chunk[0, 0]
+                    first_action_rad = action_chunk[0, 0]
                     print(
                         "policy_inference:"
                         f"episode={episode_index}:index={inference_count}:step={completed_steps}:"
                         f"latency_ms={inference_latency_ms:.1f}:horizon={action_chunk.shape[0]}:"
+                        f"raw_action_min={float(raw_action_chunk.min()):.5f}:"
+                        f"raw_action_max={float(raw_action_chunk.max()):.5f}:"
                         f"action_min={float(action_chunk.min()):.5f}:action_max={float(action_chunk.max()):.5f}:"
-                        f"clip_count={chunk_clip_count}:max_clip_rad={chunk_max_clip:.6f}",
+                        f"clip_count={chunk_clip_count}:max_clip_rad={chunk_max_clip:.6f}:"
+                        f"clip_count_by_joint={tuple(int(x) for x in chunk_clip_by_joint)}:"
+                        f"max_clip_by_joint_rad={_rounded(chunk_max_clip_by_joint, 6)}:"
+                        f"current_joint_rad={_rounded(current_joint_rad)}:"
+                        f"first_raw_action_rad={_rounded(first_raw_action_rad)}:"
+                        f"first_action_rad={_rounded(first_action_rad)}:"
+                        f"first_action_minus_current_rad={_rounded(first_action_rad - current_joint_rad)}",
                         flush=True,
                     )
 
@@ -478,7 +512,9 @@ def main() -> int:
                     "inference_count": inference_count,
                     "mean_inference_latency_ms": float(np.mean(inference_latencies_ms)),
                     "policy_action_clip_count": clip_count,
+                    "policy_action_clip_count_by_joint": clip_count_by_joint.tolist(),
                     "policy_action_max_clip_rad": maximum_clip_rad,
+                    "policy_action_max_clip_by_joint_rad": maximum_clip_by_joint_rad.tolist(),
                     "cube_final_pos_w": list(_rounded(cube.data.root_pos_w[0])),
                     "cube_offset_from_box": final_offset.tolist(),
                     "cube_final_speed": final_speed,
@@ -500,6 +536,8 @@ def main() -> int:
                     f"index={episode_index}:success={success}:steps={completed_steps}:"
                     f"ever_grasped={ever_grasped}:ever_lifted={ever_lifted}:"
                     f"settled_inside={settled_inside}:clip_count={clip_count}:"
+                    f"clip_count_by_joint={tuple(int(x) for x in clip_count_by_joint)}:"
+                    f"max_clip_by_joint_rad={_rounded(maximum_clip_by_joint_rad, 6)}:"
                     f"final_offset={tuple(round(float(x), 5) for x in final_offset)}",
                     flush=True,
                 )

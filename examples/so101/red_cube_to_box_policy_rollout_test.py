@@ -55,6 +55,26 @@ def test_clip_action_chunk_rejects_limit_dimension_mismatch() -> None:
         rollout.clip_action_chunk(np.zeros((10, 1, 6), dtype=np.float32), np.zeros(5), np.ones(5))
 
 
+def test_action_chunk_clip_by_joint_reports_axis_specific_corrections() -> None:
+    raw = np.zeros((2, 1, 3), dtype=np.float32)
+    raw[0, 0] = [-2.0, 0.0, 2.0]
+    raw[1, 0] = [-3.0, 0.5, 1.5]
+    clipped = np.clip(raw, -1.0, 1.0)
+
+    counts, maximum = rollout.action_chunk_clip_by_joint(raw, clipped)
+
+    np.testing.assert_array_equal(counts, [2, 0, 2])
+    np.testing.assert_allclose(maximum, [2.0, 0.0, 1.0])
+
+
+def test_action_chunk_clip_by_joint_rejects_shape_mismatch() -> None:
+    with pytest.raises(ValueError, match="identical shapes"):
+        rollout.action_chunk_clip_by_joint(
+            np.zeros((2, 1, 6), dtype=np.float32),
+            np.zeros((1, 1, 6), dtype=np.float32),
+        )
+
+
 class _WarmupBool:
     def __init__(self, value: bool) -> None:
         self._value = value
