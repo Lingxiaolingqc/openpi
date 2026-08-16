@@ -758,9 +758,13 @@ For server-side evaluation, keep the policy server and LeIsaac rollout in two te
 uses the validated step-15000 checkpoint. In server terminal 1, verify the checkpoint and norm stats, then serve it on
 GPU 6:
 
+`OPENPI_SO101_LIFTCUBE_REPO_ID` selects the norm-stat `asset_id` in both the project assets and checkpoint assets.
+Set it in the same terminal before starting the server; otherwise the config may fall back to an older dataset ID.
+
 ```bash
 cd /home/data/xiaoqinchuan/projects/openpi
 
+export OPENPI_SO101_LIFTCUBE_REPO_ID="local/so101-redcube-polar-s4-pilot20"
 export OPENPI_POLICY_GPU=6
 export OPENPI_POLICY_PORT=18000
 export OPENPI_POLICY_CKPT="/home/data/xiaoqinchuan/checkpoints/openpi/pi05_lora_so101_liftcube/so101-redcube-polar-s4-pilot20-v1/15000"
