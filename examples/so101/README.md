@@ -610,6 +610,30 @@ Set `OPENPI_SO101_LIFTCUBE_REPO_ID` to the converted dataset, compute normalizat
 The pilot dataset is simulation-only, so the converter's raw expert targets remain unchanged; they are not intended for
 direct execution on the real robot.
 
+The training dataset lookup has four distinct parts:
+
+1. `scripts/train.py pi05_lora_so101_liftcube ...` selects the named training config.
+2. When that Python process imports `src/openpi/training/config.py`, the config reads
+   `OPENPI_SO101_LIFTCUBE_REPO_ID` and assigns it to `LeRobotSO101DataConfig.repo_id`. Export the variable in the same
+   terminal **before** running `uv run`; if it is absent, the config falls back to the legacy
+   `local/leisaac-so101-liftcube-smoke-20260808` dataset.
+3. LeRobot resolves a local repo ID such as `local/so101-redcube-polar-s4-frame0-pilot20` below
+   `HF_LEROBOT_HOME`, giving the expected directory
+   `$HF_LEROBOT_HOME/local/so101-redcube-polar-s4-frame0-pilot20`.
+4. The same repo ID is the default normalization-stat `asset_id`, so norm stats must exist below
+   `assets/pi05_lora_so101_liftcube/<repo-id>/norm_stats.json`; training copies them into each checkpoint's matching
+   `assets/<repo-id>/` directory.
+
+`--exp-name` and `--checkpoint-base-dir` only name and locate training outputs. `--weight-loader.params-path` only
+selects the initial base-model parameters. None of those three options selects the training dataset. Before every norm
+stats or training command, verify the complete lookup without starting training:
+
+```bash
+test -d "$HF_LEROBOT_HOME/$OPENPI_SO101_LIFTCUBE_REPO_ID" || exit 1
+printf 'dataset_repo_id=%s\n' "$OPENPI_SO101_LIFTCUBE_REPO_ID"
+printf 'dataset_path=%s\n' "$HF_LEROBOT_HOME/$OPENPI_SO101_LIFTCUBE_REPO_ID"
+```
+
 Minimal Windows commands are:
 
 ```powershell
