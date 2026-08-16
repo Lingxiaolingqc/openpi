@@ -847,3 +847,18 @@ Windows 原生动态 smoke 验证了 `1793` 帧、六维 action、严格 `1/60 s
 可执行/最终达到的位置”必须分开。为保持已经确定的训练 action 语义，HDF5 和转换器不静默裁剪；转换审计会
 输出逐关节 `action_motor_limit_violation_count`。正式上真机前必须单独决定训练标签裁剪、部署端安全裁剪或专家
 target 限制策略，不能让超范围值在转换时悄悄消失。
+
+## 29. reset 后 frame 0 是未刷新相机帧，但跳过必须是显式选择
+
+当前采集复核确认 episode 的 frame 0 来自 reset 后尚未刷新的相机，因此不能作为该 episode 的有效训练样本。
+删除时必须保持多模态时间对齐：同时从相同索引开始读取 image、state 和 action，不能只删图像后把
+`image_1` 错配给 `state_0/action_0`。
+
+这一场景事实不能扩展成所有数据源的隐式规则。转换器默认仍从 `--start-frame 0` 开始；只有检查数据后明确
+传入 `--start-frame 1` 才删除首个对齐样本。审计的范围、帧数和时长也必须基于删除后的样本，且任何 episode
+都至少要剩一帧。
+
+policy rollout 同样采用 opt-in：主入口默认 warmup 为 0；确认 reset observation 未刷新时，显式使用
+`--reset_camera_warmup_steps 1`，以 reset 后的实测关节位置作为 absolute hold action 推进一步，再把新
+observation 交给 policy。核心教训是把“检测到无效帧”和“如何保持时间对齐地跳过”分开；默认行为不应替
+用户对每批数据作判定。

@@ -176,6 +176,8 @@ def discover_successful_episodes(input_path: Path) -> tuple[list[EpisodeRef], in
 
 def audit_ranges(
     episodes: list[EpisodeRef],
+    *,
+    start_frame: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     state_min = np.full(len(JOINT_NAMES), np.inf, dtype=np.float64)
     state_max = np.full(len(JOINT_NAMES), -np.inf, dtype=np.float64)
@@ -185,8 +187,8 @@ def audit_ranges(
     for episode in episodes:
         with h5py.File(episode.path, "r") as h5_file:
             demo = h5_file["data"][episode.name]
-            state = leisaac_radians_to_motor_degrees(demo["obs/joint_pos"][:])
-            action = leisaac_radians_to_motor_degrees(demo["actions"][:])
+            state = leisaac_radians_to_motor_degrees(demo["obs/joint_pos"][start_frame:])
+            action = leisaac_radians_to_motor_degrees(demo["actions"][start_frame:])
             state_min = np.minimum(state_min, state.min(axis=0))
             state_max = np.maximum(state_max, state.max(axis=0))
             action_min = np.minimum(action_min, action.min(axis=0))
@@ -201,17 +203,49 @@ def _format_range(values: np.ndarray) -> tuple[float, ...]:
     return tuple(round(float(value), 4) for value in values)
 
 
-def print_source_audit(episodes: list[EpisodeRef], *, skipped_failures: int, file_count: int, fps: int, start_frame: int = 0) -> None:
-    total_frames = sum(episode.num_samples-start_frame for episode in episodes)
-    state_min, state_max, action_min, action_max, action_limit_violations = audit_ranges(episodes)
+def validate_start_frame(episodes: list[EpisodeRef], start_frame: int) -> None:
+    """Require every converted episode to retain at least one aligned sample."""
+
+    if start_frame < 0:
+        raise ValueError("start_frame must be non-negative")
+    too_short = [
+        f"{episode.path}:{episode.name}({episode.num_samples})"
+        for episode in episodes
+        if start_frame >= episode.num_samples
+    ]
+    if too_short:
+        raise ValueError(
+            f"start_frame={start_frame} leaves no samples in episode(s): {', '.join(too_short)}"
+        )
+
+
+def print_source_audit(
+    episodes: list[EpisodeRef],
+    *,
+    skipped_failures: int,
+    file_count: int,
+    fps: int,
+    start_frame: int = 0,
+) -> None:
+    validate_start_frame(episodes, start_frame)
+    source_total_frames = sum(episode.num_samples for episode in episodes)
+    converted_frames = source_total_frames - start_frame * len(episodes)
+    state_min, state_max, action_min, action_max, action_limit_violations = audit_ranges(
+        episodes,
+        start_frame=start_frame,
+    )
     print("source_file_count:", file_count)
     print("successful_episode_count:", len(episodes))
     print("skipped_failed_episode_count:", skipped_failures)
-    print("converted_frames:", total_frames)
+    print("source_total_frames:", source_total_frames)
+    print("skipped_initial_frames:", start_frame * len(episodes))
+    # Preserve the historical total_frames key while defining it as the actual converted count.
+    print("total_frames:", converted_frames)
+    print("converted_frames:", converted_frames)
     print("image_shape:", episodes[0].image_shape)
     print("wrist_image_shape:", episodes[0].wrist_image_shape)
     print("fps:", fps)
-    print("duration_seconds:", round(total_frames / fps, 4))
+    print("duration_seconds:", round(converted_frames / fps, 4))
     print("state_motor_min:", _format_range(state_min))
     print("state_motor_max:", _format_range(state_max))
     print("action_motor_min:", _format_range(action_min))
@@ -247,6 +281,7 @@ def convert_dataset(
 ) -> Path:
     from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
+    validate_start_frame(episodes, start_frame)
     output_path = _lerobot_home() / repo_id
     if output_path.exists():
         raise FileExistsError(f"Refusing to overwrite existing LeRobot dataset: {output_path}")
@@ -294,7 +329,7 @@ def convert_dataset(
             action = leisaac_radians_to_motor_degrees(demo["actions"][:])
             front = demo["obs/front"]
             wrist = demo.get("obs/wrist")
-            for frame_index in range(start_frame,episode.num_samples):
+            for frame_index in range(start_frame, episode.num_samples):
                 frame = {
                     "observation.images.front": front[frame_index],
                     "observation.state": state[frame_index],
@@ -309,7 +344,8 @@ def convert_dataset(
                     print("converted_frames:", converted_frames, flush=True)
         dataset.save_episode()
         print(
-            f"saved_episode:{episode_index}:source={episode.path}:{episode.name}:frames={episode.num_samples-start_frame}",
+            f"saved_episode:{episode_index}:source={episode.path}:{episode.name}:"
+            f"frames={episode.num_samples - start_frame}",
             flush=True,
         )
 
@@ -343,11 +379,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--push-to-hub", action="store_true")
     parser.add_argument("--private", action="store_true")
     parser.add_argument(
-    "--start-frame",
-    type=int,
-    default=0,
-    help="Skip frames before this index in every episode",
-)
+        "--start-frame",
+        type=int,
+        default=0,
+        help="Skip this many aligned image/state/action samples at the start of every episode.",
+    )
     return parser
 
 
@@ -362,16 +398,17 @@ def main() -> int:
         parser.error("--repo-id is required unless --dry-run is used")
     if args.push_to_hub and args.dry_run:
         parser.error("--push-to-hub cannot be combined with --dry-run")
-    if args.start_frame < 0:
-        parser.error("--start-frame must be non-negative")
-
     episodes, skipped_failures, file_count = discover_successful_episodes(args.input_path)
+    try:
+        validate_start_frame(episodes, args.start_frame)
+    except ValueError as exc:
+        parser.error(str(exc))
     print_source_audit(
         episodes,
         skipped_failures=skipped_failures,
         file_count=file_count,
         fps=args.fps,
-        start_frame=args.start_frame if hasattr(args, "start_frame") else 0
+        start_frame=args.start_frame,
     )
     if args.dry_run:
         print("LEISAAC_HDF5_TO_LEROBOT_DRY_RUN_OK")
@@ -387,7 +424,7 @@ def main() -> int:
         image_writer_threads=args.image_writer_threads,
         push_to_hub=args.push_to_hub,
         private=args.private,
-        start_frame=args.start_frame if hasattr(args, "start_frame") else 0,
+        start_frame=args.start_frame,
     )
     return 0
 

@@ -46,6 +46,31 @@ def test_audit_counts_but_does_not_clip_out_of_range_action_targets(tmp_path: Pa
     assert converted[0, 3] > 100.0
 
 
+def test_audit_start_frame_excludes_skipped_initial_action(tmp_path: Path) -> None:
+    source = tmp_path / "source.hdf5"
+    with h5py.File(source, "w") as h5_file:
+        data = h5_file.create_group("data")
+        _write_demo(data, "demo_0", success=True, num_samples=2)
+        data["demo_0/actions"][0, 3] = np.deg2rad(120.0)
+    episodes, _, _ = converter.discover_successful_episodes(source)
+
+    *_, all_violations = converter.audit_ranges(episodes)
+    *_, converted_violations = converter.audit_ranges(episodes, start_frame=1)
+
+    assert tuple(all_violations) == (0, 0, 0, 1, 0, 0)
+    assert tuple(converted_violations) == (0, 0, 0, 0, 0, 0)
+
+
+def test_validate_start_frame_requires_a_retained_sample(tmp_path: Path) -> None:
+    episodes = [converter.EpisodeRef(tmp_path / "source.hdf5", "demo_0", 1, (8, 12, 3), None)]
+
+    converter.validate_start_frame(episodes, 0)
+    with pytest.raises(ValueError, match="non-negative"):
+        converter.validate_start_frame(episodes, -1)
+    with pytest.raises(ValueError, match="leaves no samples"):
+        converter.validate_start_frame(episodes, 1)
+
+
 def _write_demo(
     data: h5py.Group, name: str, *, success: bool, num_samples: int = 3, include_wrist: bool = False
 ) -> None:
@@ -90,6 +115,11 @@ def test_conversion_uses_openpi_pinned_lerobot_writer_contract(tmp_path: Path, m
     with h5py.File(source, "w") as h5_file:
         data = h5_file.create_group("data")
         _write_demo(data, "demo_0", success=True, include_wrist=True)
+        data["demo_0/obs/front"][0] = 10
+        data["demo_0/obs/front"][1] = 20
+        data["demo_0/obs/front"][2] = 30
+        data["demo_0/obs/joint_pos"][1] = np.deg2rad(np.arange(6, dtype=np.float32))
+        data["demo_0/actions"][1] = np.deg2rad(np.arange(6, dtype=np.float32) + 1)
 
     episodes, _, _ = converter.discover_successful_episodes(source)
     lerobot_home = tmp_path / "lerobot"
@@ -135,6 +165,7 @@ def test_conversion_uses_openpi_pinned_lerobot_writer_contract(tmp_path: Path, m
         image_writer_threads=1,
         push_to_hub=False,
         private=True,
+        start_frame=1,
     )
 
     dataset = FakeLeRobotDataset.instance
@@ -143,7 +174,16 @@ def test_conversion_uses_openpi_pinned_lerobot_writer_contract(tmp_path: Path, m
     assert FakeLeRobotDataset.create_kwargs["robot_type"] == "so101_follower"
     assert "observation.images.wrist" in FakeLeRobotDataset.create_kwargs["features"]
     assert "task" not in FakeLeRobotDataset.create_kwargs["features"]
-    assert len(dataset.frames) == 3
+    assert len(dataset.frames) == 2
+    assert np.all(dataset.frames[0]["observation.images.front"] == 20)
+    expected_state = converter.leisaac_radians_to_motor_degrees(
+        np.deg2rad(np.arange(6, dtype=np.float32))[None]
+    )[0]
+    expected_action = converter.leisaac_radians_to_motor_degrees(
+        np.deg2rad(np.arange(6, dtype=np.float32) + 1)[None]
+    )[0]
+    np.testing.assert_allclose(dataset.frames[0]["observation.state"], expected_state)
+    np.testing.assert_allclose(dataset.frames[0]["action"], expected_action)
     assert all(frame["task"] == "Lift the cube." for frame in dataset.frames)
     assert all("observation.images.wrist" in frame for frame in dataset.frames)
     assert dataset.saved_episode_count == 1

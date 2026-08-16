@@ -55,6 +55,74 @@ def test_clip_action_chunk_rejects_limit_dimension_mismatch() -> None:
         rollout.clip_action_chunk(np.zeros((10, 1, 6), dtype=np.float32), np.zeros(5), np.ones(5))
 
 
+class _WarmupBool:
+    def __init__(self, value: bool) -> None:
+        self._value = value
+
+    def any(self) -> bool:
+        return self._value
+
+
+class _WarmupJointPositions:
+    def __init__(self, values: np.ndarray) -> None:
+        self._values = values
+
+    def __getitem__(self, item):
+        return self
+
+    def clone(self) -> np.ndarray:
+        return self._values.copy()
+
+
+def test_reset_camera_warmup_is_explicit_and_holds_current_joints() -> None:
+    class FakeEnv:
+        def __init__(self) -> None:
+            self.actions: list[np.ndarray] = []
+
+        def reset(self):
+            return {"frame": 0}, {}
+
+        def step(self, action):
+            self.actions.append(action)
+            return {"frame": len(self.actions)}, None, _WarmupBool(False), _WarmupBool(False), {}
+
+    env = FakeEnv()
+    robot = types.SimpleNamespace(
+        data=types.SimpleNamespace(joint_pos=_WarmupJointPositions(np.arange(6, dtype=np.float32)[None]))
+    )
+    reset_calls: list[tuple[object, str]] = []
+
+    observation = rollout.reset_with_camera_warmup(
+        env,
+        robot,
+        joint_ids=list(range(6)),
+        warmup_steps=1,
+        dynamic_gripper_reset=lambda current_env, robot_name: reset_calls.append(
+            (current_env, robot_name)
+        ),
+    )
+
+    assert observation == {"frame": 1}
+    assert len(env.actions) == 1
+    np.testing.assert_array_equal(env.actions[0], np.arange(6, dtype=np.float32)[None])
+    assert reset_calls == [(env, "so101leader")]
+
+
+def test_reset_camera_warmup_zero_keeps_reset_observation() -> None:
+    class FakeEnv:
+        def reset(self):
+            return {"frame": 0}, {}
+
+        def step(self, action):
+            raise AssertionError("warmup step must remain opt-in")
+
+    robot = types.SimpleNamespace(data=types.SimpleNamespace(joint_pos=None))
+
+    assert rollout.reset_with_camera_warmup(
+        FakeEnv(), robot, joint_ids=list(range(6)), warmup_steps=0
+    ) == {"frame": 0}
+
+
 class _FakeTensor:
     def __init__(self, value: np.ndarray) -> None:
         self.value = value

@@ -64,6 +64,32 @@ def clip_action_chunk(
     return clipped, int(np.count_nonzero(violation)), maximum_violation
 
 
+def reset_with_camera_warmup(
+    env,
+    robot,
+    *,
+    joint_ids: list[int],
+    warmup_steps: int,
+    dynamic_gripper_reset=None,
+):
+    """Reset and advance held simulation steps before exposing a refreshed camera frame."""
+
+    if warmup_steps < 0:
+        raise ValueError("camera warmup steps must be non-negative")
+    observations, _ = env.reset()
+    for warmup_index in range(warmup_steps):
+        hold_action = robot.data.joint_pos[:, joint_ids].clone()
+        if dynamic_gripper_reset is not None:
+            dynamic_gripper_reset(env, "so101leader")
+        observations, _, terminated, truncated, _ = env.step(hold_action)
+        if bool(terminated.any()) or bool(truncated.any()):
+            raise RuntimeError(
+                f"Environment terminated/truncated during camera warmup step {warmup_index + 1}"
+            )
+    print(f"policy_reset_camera_warmup_steps: {warmup_steps}", flush=True)
+    return observations
+
+
 class OpenPISO101Client:
     """Small adapter around openpi-client with LeIsaac's audited motor conversion."""
 
@@ -117,6 +143,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--success_stable_steps", type=int, default=30)
     parser.add_argument("--minimum_lift_m", type=float, default=0.03)
     parser.add_argument("--minimum_success_rate", type=float, default=1.0)
+    parser.add_argument(
+        "--reset_camera_warmup_steps",
+        type=int,
+        default=0,
+        help=(
+            "Held simulation steps after reset before the first observation is sent to the policy. "
+            "Use 1 only after confirming that reset observation frame 0 is stale."
+        ),
+    )
     parser.add_argument("--record_dir", type=Path)
     parser.add_argument("--record_every", type=int, default=4)
     parser.add_argument("--jpeg_quality", type=int, default=85)
@@ -251,6 +286,8 @@ def main() -> int:
         parser.error("episode, step, and action-horizon values must be positive")
     if args.success_stable_steps < 1 or args.record_every < 1:
         parser.error("stable-step and recording intervals must be positive")
+    if args.reset_camera_warmup_steps < 0:
+        parser.error("--reset_camera_warmup_steps must be non-negative")
     if not 0.0 <= args.minimum_success_rate <= 1.0:
         parser.error("--minimum_success_rate must be between 0 and 1")
     assets_root = Path(args.assets_root).expanduser().resolve()
@@ -294,7 +331,15 @@ def main() -> int:
         joint_ids = [list(robot.data.joint_names).index(name) for name in JOINT_NAMES]
         soft_limits = robot.data.soft_joint_pos_limits[0, joint_ids].detach().cpu().numpy()
 
-        observations, _ = env.reset()
+        observations = reset_with_camera_warmup(
+            env,
+            robot,
+            joint_ids=joint_ids,
+            warmup_steps=args.reset_camera_warmup_steps,
+            dynamic_gripper_reset=(
+                dynamic_reset_gripper_effort_limit_sim if env.cfg.dynamic_reset_gripper_effort_limit else None
+            ),
+        )
         camera_names = _validate_camera(observations)
         policy = OpenPISO101Client(
             host=args.policy_host,
@@ -315,7 +360,17 @@ def main() -> int:
         with torch.inference_mode():
             for episode_index in range(args.episodes):
                 if episode_index:
-                    observations, _ = env.reset()
+                    observations = reset_with_camera_warmup(
+                        env,
+                        robot,
+                        joint_ids=joint_ids,
+                        warmup_steps=args.reset_camera_warmup_steps,
+                        dynamic_gripper_reset=(
+                            dynamic_reset_gripper_effort_limit_sim
+                            if env.cfg.dynamic_reset_gripper_effort_limit
+                            else None
+                        ),
+                    )
                 recorder = None
                 if args.record_dir is not None:
                     recorder = _RolloutRecorder(
