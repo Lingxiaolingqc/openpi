@@ -681,17 +681,6 @@ grep -nE \
   "$OPENPI_CHECKPOINT_ROOT/logs/${OPENPI_EXP_NAME}.train.log"
 ```
 
-Serve a checkpoint with a free port shared by the policy server and LeIsaac client:
-
-```powershell
-uv run scripts/serve_policy.py `
-  --default-prompt "Pick up the red cube and place it inside the green box." `
-  --port 18000 `
-  policy:checkpoint `
-  --policy.config pi05_lora_so101_liftcube `
-  --policy.dir "D:\path\to\checkpoint"
-```
-
 ### RedCubeToBox learned-policy rollout
 
 Before blaming a checkpoint, replay native HDF5 expert targets through the same direct `so101leader` action path used
@@ -765,14 +754,54 @@ robot gravity, setting joint damping to `10.0`, and executing raw targets; poten
 reported even though runner-side clipping is disabled. Without that flag, simulator soft-limit clipping remains active. A
 successful episode must lift the cube by at least 30 mm and keep it settled inside the box for 30 consecutive steps.
 
-Install the lightweight client into the LeIsaac environment once. On the Linux server:
+For server-side evaluation, keep the policy server and LeIsaac rollout in two terminals. The following complete example
+uses the validated step-15000 checkpoint. In server terminal 1, verify the checkpoint and norm stats, then serve it on
+GPU 6:
 
 ```bash
 cd /home/data/xiaoqinchuan/projects/openpi
+
+export OPENPI_POLICY_GPU=6
+export OPENPI_POLICY_PORT=18000
+export OPENPI_POLICY_CKPT="/home/data/xiaoqinchuan/checkpoints/openpi/pi05_lora_so101_liftcube/so101-redcube-polar-s4-pilot20-v1/15000"
+export OPENPI_POLICY_LOG="/home/data/xiaoqinchuan/checkpoints/openpi/logs/so101-redcube-polar-s4-pilot20-v1-step15000.serve.log"
+
+test -s "$OPENPI_POLICY_CKPT/params/_METADATA" || exit 1
+test -f "$OPENPI_POLICY_CKPT/assets/local/so101-redcube-polar-s4-pilot20/norm_stats.json" || exit 1
+mkdir -p "$(dirname "$OPENPI_POLICY_LOG")"
+
+CUDA_VISIBLE_DEVICES="$OPENPI_POLICY_GPU" uv run scripts/serve_policy.py \
+  --default-prompt "Pick up the red cube and place it inside the green box." \
+  --port "$OPENPI_POLICY_PORT" \
+  policy:checkpoint \
+  --policy.config pi05_lora_so101_liftcube \
+  --policy.dir "$OPENPI_POLICY_CKPT" \
+  2>&1 | tee "$OPENPI_POLICY_LOG"
+```
+
+The server is ready when the log contains `Creating server`. Inspect it from another terminal without creating another
+output file:
+
+```bash
+grep -nE \
+  'Loading model|Finished restoring|Loaded norm stats|Creating server|Traceback|FileNotFoundError|JSONDecodeError|ValueError|RuntimeError|RESOURCE_EXHAUSTED|out of memory|OOM' \
+  "$OPENPI_POLICY_LOG"
+```
+
+In server terminal 2, install the lightweight client into the LeIsaac environment once:
+
+```bash
+cd /home/data/xiaoqinchuan/projects/openpi
+export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_ENV=/home/data/xiaoqinchuan/envs/leisaac-so101
+export LEISAAC_ASSETS_ROOT=/home/data/xiaoqinchuan/assets/leisaac-v0.4.0
+export ISAAC_DEVICE=cuda:5
+
 uv pip install --python "$LEISAAC_ENV/bin/python" -e packages/openpi-client
 ```
 
-Keep `scripts/serve_policy.py` running on port 18000, then use a different GPU for a recorded one-episode smoke:
+Keep terminal 1 running. Use a different GPU for the recorded one-episode rollout; start with one executed action per
+inference so closed-loop errors are easiest to localize:
 
 ```bash
 stamp=$(date +%Y%m%d-%H%M%S)
@@ -784,7 +813,7 @@ mkdir -p "$run_root"
   examples/so101/red_cube_to_box_policy_rollout.py \
   --headless \
   --enable_cameras \
-  --device cuda:5 \
+  --device "$ISAAC_DEVICE" \
   --rendering_mode performance \
   --assets_root "$LEISAAC_ASSETS_ROOT" \
   --policy_host 127.0.0.1 \
@@ -792,8 +821,9 @@ mkdir -p "$run_root"
   --episodes 1 \
   --seed 42 \
   --maximum_steps 2400 \
-  --actions_per_inference 10 \
+  --actions_per_inference 1 \
   --match_expert_dynamics \
+  --reset_camera_refreshes 0 \
   --reset_camera_warmup_steps 1 \
   --record_dir "$run_root/recordings" \
   2>&1 | tee "$RED_CUBE_POLICY_LOG"
@@ -802,6 +832,11 @@ grep -nE \
   'RED_CUBE_TO_BOX_POLICY_|policy_endpoint:|policy_match_expert_dynamics:|policy_robot_gravity_disabled:|policy_joint_damping_override:|policy_action_soft_limit_clip_enabled:|policy_reset_camera_warmup_steps:|policy_camera:|policy_inference:|policy_episode:|policy_recording_dir:|completed_episodes:|successful_episodes:|success_rate:|Traceback|ValueError|RuntimeError|out of memory|OOM' \
   "$RED_CUBE_POLICY_LOG"
 ```
+
+The reset settings above are for the existing model trained from legacy conversion with `--start-frame 1`. After this
+single-action smoke, change only `--actions_per_inference 1` to `10` for the action-chunk comparison. For a future model
+trained from camera-refreshed data converted with `--start-frame 0`, use `--reset_camera_refreshes 1` and
+`--reset_camera_warmup_steps 0` instead.
 
 The main rollout defaults both reset options to `0`. A model trained from a new collection made with
 `--camera_refreshes_before_recording 1` should use `--reset_camera_refreshes 1`; this refreshes camera buffers without
