@@ -377,6 +377,7 @@ def main() -> int:
         floor = env.scene["target_box_floor"]
         joint_ids = [list(robot.data.joint_names).index(name) for name in JOINT_NAMES]
         soft_limits = robot.data.soft_joint_pos_limits[0, joint_ids].detach().cpu().numpy()
+        camera_names = tuple(name for name in ("front", "wrist") if name in env.scene.sensors)
 
         observations = reset_with_camera_warmup(
             env,
