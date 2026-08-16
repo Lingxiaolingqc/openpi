@@ -1,0 +1,97 @@
+{
+    "schema_version": 1,
+    "created_at": "2026-08-14T15:58:52.602219+08:00",
+    "status": "CANDIDATE_ONLY_NOT_ACTIVE",
+    "arm": "leader",
+    "port": "COM7",
+    "calibration_id": "leader_arm",
+    "active_calibration_path": "D:\\Documents\\Xprogram\\HuiXIONG\\EmbodiedAI\\openpi\\tmp\\leisaac-v0.4.0\\scripts\\environments\\teleoperation\\.cache\\leader_arm.json",
+    "active_calibration_sha256": "B464159908CC975C4CC7D03547AE1F5DEBC862E299A685620D85C7BF9378C7F4",
+    "servo_writes": false,
+    "preflight_temperature_c": {
+        "shoulder_pan": 28,
+        "shoulder_lift": 26,
+        "elbow_flex": 28,
+        "wrist_flex": 27,
+        "wrist_roll": 26,
+        "gripper": 27
+    },
+    "maximum_temperature_c": {
+        "shoulder_pan": 29,
+        "shoulder_lift": 27,
+        "elbow_flex": 30,
+        "wrist_flex": 32,
+        "wrist_roll": 31,
+        "gripper": 39
+    },
+    "sample_count": 913,
+    "elapsed_s": 91.20299999997951,
+    "comparison": {
+        "shoulder_pan": {
+            "old_min": 688,
+            "new_min": 708,
+            "min_delta": 20,
+            "old_max": 3443,
+            "new_max": 3428,
+            "max_delta": -15,
+            "old_span": 2755,
+            "new_span": 2720,
+            "span_ratio": 0.9872958257713249
+        },
+        "shoulder_lift": {
+            "old_min": 823,
+            "new_min": 832,
+            "min_delta": 9,
+            "old_max": 3245,
+            "new_max": 3221,
+            "max_delta": -24,
+            "old_span": 2422,
+            "new_span": 2389,
+            "span_ratio": 0.9863748967795211
+        },
+        "elbow_flex": {
+            "old_min": 883,
+            "new_min": 880,
+            "min_delta": -3,
+            "old_max": 3086,
+            "new_max": 3087,
+            "max_delta": 1,
+            "old_span": 2203,
+            "new_span": 2207,
+            "span_ratio": 1.0018157058556514
+        },
+        "wrist_flex": {
+            "old_min": 852,
+            "new_min": 861,
+            "min_delta": 9,
+            "old_max": 3190,
+            "new_max": 3184,
+            "max_delta": -6,
+            "old_span": 2338,
+            "new_span": 2323,
+            "span_ratio": 0.9935842600513259
+        },
+        "wrist_roll": {
+            "old_min": 120,
+            "new_min": 140,
+            "min_delta": 20,
+            "old_max": 3965,
+            "new_max": 3961,
+            "max_delta": -4,
+            "old_span": 3845,
+            "new_span": 3821,
+            "span_ratio": 0.9937581274382314
+        },
+        "gripper": {
+            "old_min": 2043,
+            "new_min": 2037,
+            "min_delta": -6,
+            "old_max": 3268,
+            "new_max": 3296,
+            "max_delta": 28,
+            "old_span": 1225,
+            "new_span": 1259,
+            "span_ratio": 1.0277551020408164
+        }
+    }
+}

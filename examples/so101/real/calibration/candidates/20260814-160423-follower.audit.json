@@ -1,0 +1,45 @@
+{
+    "schema_version": 1,
+    "created_at": "2026-08-14T16:04:23.081339+08:00",
+    "status": "CANDIDATE_ONLY_NOT_ACTIVE",
+    "arm": "follower",
+    "port": "COM8",
+    "calibration_id": "follower_arm",
+    "selected_joints": [
+        "gripper"
+    ],
+    "active_calibration_path": "D:\\Documents\\Xprogram\\HuiXIONG\\EmbodiedAI\\openpi\\tmp\\leisaac-v0.4.0\\scripts\\environments\\teleoperation\\.cache\\follower_arm.json",
+    "active_calibration_sha256": "F00DC29CD602B3CCB52C46FC4F5B5210FFC4689C6BF46963B12D98A34E6F518E",
+    "servo_writes": false,
+    "preflight_temperature_c": {
+        "shoulder_pan": 28,
+        "shoulder_lift": 26,
+        "elbow_flex": 28,
+        "wrist_flex": 28,
+        "wrist_roll": 29,
+        "gripper": 28
+    },
+    "maximum_temperature_c": {
+        "shoulder_pan": 28,
+        "shoulder_lift": 27,
+        "elbow_flex": 28,
+        "wrist_flex": 32,
+        "wrist_roll": 32,
+        "gripper": 34
+    },
+    "sample_count": 301,
+    "elapsed_s": 30.0,
+    "comparison": {
+        "gripper": {
+            "old_min": 2143,
+            "new_min": 2046,
+            "min_delta": -97,
+            "old_max": 3506,
+            "new_max": 3511,
+            "max_delta": 5,
+            "old_span": 1363,
+            "new_span": 1465,
+            "span_ratio": 1.07483492296405
+        }
+    }
+}

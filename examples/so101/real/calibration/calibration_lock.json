@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "freeze_id": "so101-real-2026-08-14-all-joints-v3",
+  "frozen_on": "2026-08-14",
+  "joint_order": [
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow_flex",
+    "wrist_flex",
+    "wrist_roll",
+    "gripper"
+  ],
+  "arms": [
+    {
+      "role": "leader",
+      "port": "COM7",
+      "calibration_id": "leader_arm",
+      "active_path": "tmp/leisaac-v0.4.0/scripts/environments/teleoperation/.cache/leader_arm.json",
+      "active_sha256": "6A38E5DE55D8CBBA8EE2F0DED67B6268935A072A17532CD10888658D6FD7BCAA",
+      "snapshot_path": "examples/so101/real/calibration/frozen/2026-08-14-all-joints-v3/leader_arm.json",
+      "snapshot_sha256": "90BA207B07CA720F8CF1314306B0373A8E9448EAEE7D13156C9F2DA6829AD942"
+    },
+    {
+      "role": "follower",
+      "port": "COM8",
+      "calibration_id": "follower_arm",
+      "active_path": "tmp/leisaac-v0.4.0/scripts/environments/teleoperation/.cache/follower_arm.json",
+      "active_sha256": "F25C42EF1446B2D74B34222298C904C213B2E30F390C298E60E5143821C2ADE2",
+      "snapshot_path": "examples/so101/real/calibration/frozen/2026-08-14-all-joints-v3/follower_arm.json",
+      "snapshot_sha256": "C9111108CCE8054E2DE2682EC3DCFAFAB925AE3853BB4CB724DA1922F377F26F"
+    }
+  ]
+}

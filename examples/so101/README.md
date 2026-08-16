@@ -46,10 +46,13 @@ Current files:
   path and tracking-fault shutdown with fake buses and never opens a serial port.
 - [`real/camera_capture.py`](real/camera_capture.py) opens the command-line-selected `front` and `wrist` camera indices
   on independent threads and exposes timestamped newest RGB frames with 100 ms stale-frame rejection.
+- [`real/check_cameras.py`](real/check_cameras.py) is an optional, manual OpenCV index preview helper. The recorder does
+  not depend on it; camera roles remain operator-selected command-line arguments.
 - [`real/episode_hdf5.py`](real/episode_hdf5.py) incrementally writes one episode per `.partial.h5` file on a background
   thread, then atomically publishes it under `episodes/` or isolates it under `rejected/`.
 - [`real/teleop_recorder.py`](real/teleop_recorder.py) combines the two cameras, 30 Hz Leader/Follower control, safety
-  monitoring, keyboard episode controls, and the real-only HDF5 contract.
+  monitoring, bounded automatic alignment, an explicit `R` recording gate, keyboard episode controls, and the
+  real-only HDF5 contract.
 - [`real/requirements-windows.txt`](real/requirements-windows.txt) pins the three collection dependencies added to the
   isolated Windows hardware environment; it does not install Isaac Sim or modify the simulation environment.
 - [`real/all_joint_range_audit.py`](real/all_joint_range_audit.py) records a torque-off, six-joint range candidate for
@@ -79,10 +82,11 @@ tmp\leisaac-remote-env\python.exe `
   --duration-s 5
 ```
 
-The test refuses to enable torque if a calibration hash changed, any joint is within two degrees of a calibrated
-endpoint, the initial torque state is not disabled, a motor is not in position-control mode, or the preflight
-temperature is unsafe. While holding, a displacement over three degrees, temperature at or above 65 degrees Celsius,
-invalid torque state, or communication error causes immediate shutdown. Success ends with both
+The test refuses to enable torque if a calibration hash changed, a measured joint is outside its frozen calibrated
+range, the initial torque state is not disabled, a motor is not in position-control mode, or the preflight temperature
+is unsafe. An exact frozen endpoint is permitted because this gate writes only the identical measured pose; it does
+not command farther outward. While holding, a displacement over three degrees, temperature at or above 65 degrees
+Celsius, invalid torque state, or communication error causes immediate shutdown. Success ends with both
 `NO_JUMP_TEST_PASS` and `TORQUE_DISABLED_AND_COM8_CLOSED`.
 
 `Missing motor IDs: 1..6` is not a permissions failure and occurs before any torque write. It means COM8 opened but no
@@ -188,8 +192,8 @@ sponge, and `2` for the capped ballpoint pen. `box-id` intentionally accepts onl
 hard error. A custom balanced prompt template can be supplied with `--task`; otherwise the canonical prompt for the
 target is used.
 
-After fixing both cameras, reconnecting COM7/COM8, clearing the workspace, and placing both arms in aligned safe
-poses, start the recorder explicitly:
+After fixing both cameras, reconnecting COM7/COM8, clearing the complete swept volume, and placing both arms in roughly
+similar poses, start the recorder explicitly:
 
 ```powershell
 tmp\leisaac-remote-env\python.exe `
@@ -200,6 +204,9 @@ tmp\leisaac-remote-env\python.exe `
   --target-id 0 `
   --box-id A `
   --speed-deg-s 15 `
+  --large-auto-align-speed-deg-s 8 `
+  --motion-margin-deg 1 `
+  --max-auto-align-deg 10 `
   --max-episode-s 30 `
   --execute `
   --confirm COLLECT_REAL_EPISODES
@@ -208,7 +215,10 @@ tmp\leisaac-remote-env\python.exe `
 The recorder opens and validates both cameras first, saves one startup JPEG per role under `session_info/`, and then
 waits with both serial ports closed. Keep the PowerShell window focused and use these keys:
 
-- `S`: start an episode, run the alignment/no-jump gates, enable Follower torque, and begin recording;
+- `S`: start an episode, run preflight/no-jump enable, and perform bounded automatic alignment;
+- `A`: authorize a displayed automatic catch-up above 10 degrees on one of the first four arm-geometry joints while
+  both arms are still torque-disabled;
+- `R`: during `PRE_RECORD_FOLLOW_ACTIVE`, capture fresh relative anchors at the current poses and begin recording;
 - `Y`: save a successful episode (ignored until at least 30 frames exist);
 - `D`: stop and move the episode to `rejected/`;
 - `P`: pause or resume motion and recording with a fresh relative pose anchor;
@@ -220,6 +230,32 @@ Every unpaused 30 Hz sample stores `obs/joint_pos`, RGB `obs/front`, RGB `obs/wr
 HDF5 thread; a full queue is a hard fault rather than a dropped or misaligned sample. Completed files are published
 only by atomic rename. A crash cannot alter a completed episode and leaves only its current `.partial.h5` under
 `staging/`.
+
+Startup and ordinary motion use separate limits. The no-jump goal may equal a frozen calibrated endpoint so a folded
+arm can be enabled without a target jump. Before automatic motion, the live mapped Leader target is clamped inward by
+`--motion-margin-deg` (default 1 degree, allowed 0.5 to 2 degrees). The `--max-auto-align-deg` catch-up gate applies
+only to `shoulder_pan`, `shoulder_lift`, `elbow_flex`, and `wrist_flex`. If one of those four joints would need to move
+farther than the configured value, the episode is refused before torque enable. The option defaults to 10 degrees,
+accepts 0.5 to 30 degrees, and must not be smaller than the selected motion margin. A gated-joint move above 10
+degrees displays all six signed joint deltas and waits up to 30 seconds for `A` while both arms remain torque-disabled;
+`Q` cancels and `X` exits.
+
+`wrist_roll` and `gripper` are exempt only from that catch-up angle gate and the associated `A` confirmation. They are
+not unrestricted: both must remain inside the frozen calibrated range and inward motion margin, every command still
+uses the per-tick slew limit, and tracking-error, temperature, camera, serial, and emergency-unload checks remain
+active. Any automatic alignment whose actual largest six-joint movement is above 10 degrees, including a wrist-roll
+or gripper-only alignment, uses `--large-auto-align-speed-deg-s`. This option defaults to 5 degrees/second and accepts
+1 to 10 degrees/second; the effective speed is the smaller of this value and `--speed-deg-s`. Automatic-alignment
+timeout includes an additional 10-second margin for servo tracking and the one-second stable-alignment gate. Keep the
+wrist-camera cable free from twisting and keep the gripper clear of fingers and crushable objects. The alignment
+remains joint-space motion rather than collision-aware path planning, so the entire swept volume must still be clear
+and the operator must remain beside the physical cutoff. After `AUTO_ALIGN_READY`, the recorder enters
+`PRE_RECORD_FOLLOW_ACTIVE`: the Follower tracks relative Leader motion at `--speed-deg-s`, but no HDF5 episode exists
+yet and none of these positioning movements are recorded. Move to the desired episode start pose, hold the Leader
+steady, and press `R`; the program then re-reads both measured poses, creates fresh relative anchors, and starts the
+episode without a target jump. `Q` cancels and unloads normally, while `X` performs the emergency fault hold and
+unload. Frozen calibration limits, motion margins, per-tick slew, tracking-error, temperature, camera, and serial
+checks remain active throughout this pre-record follow stage.
 
 Use a local SSD rather than a synchronized cloud folder for `--dataset-root`: two uncompressed 640x480 RGB streams can
 produce large episodes even with fast lossless HDF5 compression.

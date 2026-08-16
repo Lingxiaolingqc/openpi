@@ -1,0 +1,4 @@
+# Real-hardware collection only. Keep this environment separate from Isaac Sim.
+numpy==1.26.4
+opencv-python==4.10.0.84
+h5py==3.11.0
