@@ -248,7 +248,9 @@ they do not carry temporal-ensemble state across unrelated held-out samples.
 Start the policy server in the OpenPI environment:
 
 ```bash
-CUDA_VISIBLE_DEVICES=5 uv run python examples/so101/act/serve_policy.py \
+read -r -p "Free physical GPU for the ACT server: " ACT_POLICY_GPU
+
+CUDA_VISIBLE_DEVICES="$ACT_POLICY_GPU" uv run python examples/so101/act/serve_policy.py \
   --checkpoint "$OPENPI_ACT_CHECKPOINT" \
   --device cuda \
   --host 0.0.0.0 \
@@ -263,14 +265,23 @@ degrees and LeIsaac radians and records grasp, lift, settled placement, success 
 soft-limit violations, and applied clipping by joint:
 
 ```bash
-export LEISAAC_BASE=/home/data/xiaoqinchuan/projects/LeIsaac
-export LEISAAC_ENV=/home/data/xiaoqinchuan/envs/leisaac
-export LEISAAC_ASSETS_ROOT="$LEISAAC_BASE"
+export OPENPI_ROOT=/home/data/xiaoqinchuan/projects/openpi
+export LEISAAC_BASE=/home/data/xiaoqinchuan
+export LEISAAC_ENV=/home/data/xiaoqinchuan/envs/leisaac-so101
+export LEISAAC_ASSETS_ROOT=/home/data/xiaoqinchuan/assets/leisaac-v0.4.0
+export ISAACSIM_PORTABLE_ROOT=/home/data/xiaoqinchuan/cache/isaacsim-portable
+export OMNI_KIT_ACCEPT_EULA=YES
+export PYTHONUNBUFFERED=1
+export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
+read -r -p "Free physical GPU for LeIsaac rollout: " ACT_ROLLOUT_GPU
 export ISAAC_DEVICE=cuda:0
 export ACT_ROLLOUT_DIR=/home/data/xiaoqinchuan/results/act/so101-redcube
 mkdir -p "$ACT_ROLLOUT_DIR"
 
-"$LEISAAC_ENV/bin/python" examples/so101/red_cube_to_box_policy_rollout.py \
+test -x "$LEISAAC_ENV/bin/python" || echo "missing LeIsaac Python: $LEISAAC_ENV/bin/python"
+
+CUDA_VISIBLE_DEVICES="$ACT_ROLLOUT_GPU" \
+"$LEISAAC_ENV/bin/python" "$OPENPI_ROOT/examples/so101/red_cube_to_box_policy_rollout.py" \
   --headless \
   --enable_cameras \
   --device "$ISAAC_DEVICE" \
@@ -282,6 +293,8 @@ mkdir -p "$ACT_ROLLOUT_DIR"
   --episodes 20 \
   --actions_per_inference 10 \
   --reset_camera_refreshes 1 \
+  --match_expert_dynamics \
+  --minimum_success_rate 0.0 \
   --record_dir "$ACT_ROLLOUT_DIR/records" \
   2>&1 | tee "$ACT_ROLLOUT_DIR/rollout.log"
 ```
