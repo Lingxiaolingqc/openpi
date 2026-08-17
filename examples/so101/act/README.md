@@ -34,9 +34,11 @@ then TOML. Important environment variables are:
 ```text
 HF_LEROBOT_HOME       local LeRobot root
 OPENPI_ACT_REPO_ID    repo ID below that root
+OPENPI_ACT_EXPERIMENT_ID unique name for one dataset/training-condition run
 OPENPI_ACT_OUTPUT_DIR run output directory
 OPENPI_ACT_RUN_NAME   checkpoint job name
 OPENPI_ACT_CHECKPOINT checkpoint/run path for evaluation or serving
+OPENPI_ACT_GPU        free physical GPU selected for ACT
 CUDA_VISIBLE_DEVICES  physical GPUs exposed to PyTorch
 ```
 
@@ -76,16 +78,30 @@ Isaac Sim/LeIsaac environment only for closed-loop rollout.
 cd /home/data/xiaoqinchuan/projects/openpi
 
 export HF_LEROBOT_HOME=/home/data/xiaoqinchuan/datasets/lerobot
-export OPENPI_ACT_REPO_ID=local/so101-redcube-polar-s4-frame0-pilot20
-export OPENPI_ACT_OUTPUT_DIR=/home/data/xiaoqinchuan/checkpoints/act/so101-redcube-pilot20
-export OPENPI_ACT_RUN_NAME=so101-redcube-pilot20
+export OPENPI_ACT_REPO_ID=SELECT_REPO_ID_FROM_OPTIONS_BELOW
+export OPENPI_ACT_EXPERIMENT_ID=SET_UNIQUE_EXPERIMENT_ID
+export OPENPI_ACT_GPU=SELECT_FREE_PHYSICAL_GPU
 
-test -d "$HF_LEROBOT_HOME/$OPENPI_ACT_REPO_ID" || exit 1
+export OPENPI_ACT_OUTPUT_DIR="/home/data/xiaoqinchuan/checkpoints/act/$OPENPI_ACT_EXPERIMENT_ID"
+export OPENPI_ACT_RUN_NAME="$OPENPI_ACT_EXPERIMENT_ID"
+
+test -d "$HF_LEROBOT_HOME/$OPENPI_ACT_REPO_ID" || echo "Replace OPENPI_ACT_REPO_ID with a valid option below"
 printf 'dataset=%s\n' "$HF_LEROBOT_HOME/$OPENPI_ACT_REPO_ID"
+printf 'experiment=%s gpu=%s\n' "$OPENPI_ACT_EXPERIMENT_ID" "$OPENPI_ACT_GPU"
 ```
 
-`CUDA_VISIBLE_DEVICES=5` exposes physical GPU 5 as logical `cuda:0` to PyTorch. Keep `--device cuda`; do not
-write physical GPU numbers into source or TOML.
+Replace all three sentinel values before running a command. Currently known `OPENPI_ACT_REPO_ID` options are:
+
+- `local/so101-redcube-polar-s4-frame0-pilot20` (20-episode dataset);
+- `local/so101-redcube-polar-s4-frame0-100` (100-episode dataset).
+
+`OPENPI_ACT_EXPERIMENT_ID` is not a dataset field and has no fixed choices. Give every controlled run a unique,
+descriptive value such as `so101-redcube-pilot20-step15000-seed42`; it becomes both the output-directory suffix
+and checkpoint run name. Do not reuse an experiment ID unless resuming that exact run.
+
+Set `OPENPI_ACT_GPU` to a currently free physical GPU. GPUs 5 and 6 are reserved for OpenPI training and must
+not be selected for ACT. `CUDA_VISIBLE_DEVICES="$OPENPI_ACT_GPU"` exposes the selected physical GPU as logical
+`cuda:0` to PyTorch. Keep `--device cuda`; do not write physical GPU numbers into source or TOML.
 
 ## 1. Dataset audit
 
@@ -108,21 +124,21 @@ Each non-resume command requires an empty output directory, preventing accidenta
 directories:
 
 ```bash
-CUDA_VISIBLE_DEVICES=5 uv run python examples/so101/act/train.py \
+CUDA_VISIBLE_DEVICES="$OPENPI_ACT_GPU" uv run python examples/so101/act/train.py \
   --mode forward \
   --repo-id "$OPENPI_ACT_REPO_ID" \
   --output-dir "$OPENPI_ACT_OUTPUT_DIR/gates/forward" \
   --batch-size 2 --num-workers 0 \
   2>&1 | tee "$OPENPI_ACT_OUTPUT_DIR/logs/forward.log"
 
-CUDA_VISIBLE_DEVICES=5 uv run python examples/so101/act/train.py \
+CUDA_VISIBLE_DEVICES="$OPENPI_ACT_GPU" uv run python examples/so101/act/train.py \
   --mode backward \
   --repo-id "$OPENPI_ACT_REPO_ID" \
   --output-dir "$OPENPI_ACT_OUTPUT_DIR/gates/backward" \
   --batch-size 2 --num-workers 0 \
   2>&1 | tee "$OPENPI_ACT_OUTPUT_DIR/logs/backward.log"
 
-CUDA_VISIBLE_DEVICES=5 uv run python examples/so101/act/train.py \
+CUDA_VISIBLE_DEVICES="$OPENPI_ACT_GPU" uv run python examples/so101/act/train.py \
   --mode one-step \
   --repo-id "$OPENPI_ACT_REPO_ID" \
   --output-dir "$OPENPI_ACT_OUTPUT_DIR/gates/one-step" \
@@ -143,7 +159,7 @@ dataset on disk.
 ```bash
 export OPENPI_ACT_OVERFIT_DIR="$OPENPI_ACT_OUTPUT_DIR/overfit10"
 
-CUDA_VISIBLE_DEVICES=5 uv run python examples/so101/act/train.py \
+CUDA_VISIBLE_DEVICES="$OPENPI_ACT_GPU" uv run python examples/so101/act/train.py \
   --mode overfit \
   --repo-id "$OPENPI_ACT_REPO_ID" \
   --output-dir "$OPENPI_ACT_OVERFIT_DIR" \
@@ -165,9 +181,9 @@ semantics or simulation physics to make this gate pass.
 Full training requires a passed overfit report by default. Use a new output directory for the full run:
 
 ```bash
-export OPENPI_ACT_TRAIN_DIR=/home/data/xiaoqinchuan/checkpoints/act/so101-redcube-pilot20-full
+export OPENPI_ACT_TRAIN_DIR="$OPENPI_ACT_OUTPUT_DIR/full"
 
-CUDA_VISIBLE_DEVICES=5 uv run python examples/so101/act/train.py \
+CUDA_VISIBLE_DEVICES="$OPENPI_ACT_GPU" uv run python examples/so101/act/train.py \
   --mode train \
   --repo-id "$OPENPI_ACT_REPO_ID" \
   --output-dir "$OPENPI_ACT_TRAIN_DIR" \
@@ -206,7 +222,7 @@ LeRobot checkpoints are saved as:
 Resume from a numbered checkpoint or `checkpoints/last`. `--output-dir` must be the original run root:
 
 ```bash
-CUDA_VISIBLE_DEVICES=5 uv run python examples/so101/act/train.py \
+CUDA_VISIBLE_DEVICES="$OPENPI_ACT_GPU" uv run python examples/so101/act/train.py \
   --mode train \
   --repo-id "$OPENPI_ACT_REPO_ID" \
   --output-dir "$OPENPI_ACT_TRAIN_DIR" \
@@ -231,7 +247,7 @@ held-out split. Checkpoint loading goes through LeRobot's registered `PreTrained
 ```bash
 export OPENPI_ACT_CHECKPOINT="$OPENPI_ACT_TRAIN_DIR/checkpoints/last"
 
-CUDA_VISIBLE_DEVICES=5 uv run python examples/so101/act/offline_eval.py \
+CUDA_VISIBLE_DEVICES="$OPENPI_ACT_GPU" uv run python examples/so101/act/offline_eval.py \
   --checkpoint "$OPENPI_ACT_CHECKPOINT" \
   --repo-id "$OPENPI_ACT_REPO_ID" \
   --output "$OPENPI_ACT_TRAIN_DIR/offline_eval.json" \
