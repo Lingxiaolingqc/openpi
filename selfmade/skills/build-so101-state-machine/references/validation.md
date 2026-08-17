@@ -8,6 +8,7 @@
 - Dynamic smoke
 - Terminal log extraction
 - Acceptance criteria
+- Learned-policy frame-selection A/B
 
 ## Environment contract
 
@@ -123,3 +124,26 @@ the collector sentinel, then run the read-only HDF5 audit. Confirm that `actions
 images are `[T, H, W, 3] uint8`, timestamps are strictly increasing at the environment step interval, and optional wrist
 images appear only when the policy observation actually contains that sensor. Report the native HDF5 bytes per episode
 before choosing the final collection size.
+
+## Learned-policy frame-selection A/B
+
+Compare frame-selection variants only after joint-target replay matches the expert trajectory. Hold constant the expert,
+dataset episodes, training step, checkpoint validity, rollout seeds, policy prompt, action horizon, dynamics overrides,
+target clipping behavior, and success predicate. Change only the paired data/reset treatment:
+
+```text
+refreshed frame 0:
+  collect  --camera_refreshes_before_recording 1
+  convert  --start-frame 0
+  rollout  --reset_camera_refreshes 1 --reset_camera_warmup_steps 0
+
+legacy frame 1 compatibility:
+  convert  --start-frame 1
+  rollout  --reset_camera_refreshes 0 --reset_camera_warmup_steps 1
+```
+
+Report final success plus `ever_grasped`, `ever_lifted`, grasp-to-lift conversion, transport/release failures, and the
+episode indices for every outcome. Treat a ten-episode result as a pilot signal, not a significance claim. If the
+sensor-only refreshed route performs directionally better and is semantically correct by construction, select it for
+the larger collection and reevaluate with a larger same-seed batch. Diagnose remaining no-grasp and post-lift failures
+as separate robustness bottlenecks rather than continuing to attribute them to frame 0.

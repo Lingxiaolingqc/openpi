@@ -903,3 +903,27 @@ action 0 后的 frame 1 关节才发生变化，图像均值变为 `174.914497`�
 policy rollout 新增显式 `--match_expert_dynamics`：关闭 robot gravity、写入 damping `10.0`，并执行 raw target。
 runner 仍分别报告实际 clip count 和“如果按 soft limit 会越界”的 violation count，不会把未裁剪误写成零风险。
 该模式仅用于匹配这批仿真 polar 数据；真实机械臂部署必须保留独立安全边界，不能照搬仿真 raw-target 语义。
+
+## 31. 15k frame 0 A/B：保留刷新后的初始样本，但不要把 10 回合当成统计定论（2026-08-17）
+
+在补齐 expert dynamics 后，用相同 10 个 episode 对两个 step-15000 pilot20 checkpoint 做了闭环对照：
+
+- 新路线：采集时 `--camera_refreshes_before_recording 1`，转换 `--start-frame 0`，rollout 使用
+  `--reset_camera_refreshes 1 --reset_camera_warmup_steps 0`；
+- 旧路线：历史数据转换 `--start-frame 1`，rollout 使用
+  `--reset_camera_refreshes 0 --reset_camera_warmup_steps 1`；
+- 两边都使用匹配 polar expert 的 gravity、damping 和 raw-target 执行语义。
+
+新模型成功 `4/10`，旧模型成功 `2/10`。更有解释力的分阶段结果是：两者都曾抓到 `7/10`，但新模型
+`7/7` 抓取都进入 lift，旧模型只有 `4/7`；新模型成功 episode 为 2、4、6、7，旧模型为 0、1。
+这说明恢复真正对齐的 `(image_0, state_0, action_0)` 对抓取后的闭环连续性有实际正向信号，而不是只改变
+最终 success 计数。
+
+不过，`4/10` 对 `2/10` 只有 2 个 episode 的绝对差异，而且两版成功 seed 并不重合，不能据此宣称已经有
+统计显著提升，也不值得继续把两个 pilot20 模型训练到 30k。工程决策是让后续 100-episode 数据采用新路线：
+在 episode 时间线开始前刷新相机、保留 `--start-frame 0`，部署时同样无 physics warmup 地刷新 reset 相机；
+再用更大的同 seed 闭环 batch 评估真正收益。
+
+新模型剩余失败也表明 frame 0 已不是唯一瓶颈：episode 0、3、8 从未抓取；episode 1、5、9 已抓取并上抬，
+却在运输/释放阶段失败，其中最终 Y 偏差较大。后续应优先增加数据覆盖并分析 no-grasp 和过早/错误释放，
+不能继续把所有闭环失败都归因于第一帧。

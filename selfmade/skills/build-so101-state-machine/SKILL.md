@@ -237,3 +237,9 @@ Match every collection-time dynamics side effect explicitly, including robot-lin
 limits, and runner-side target clipping. A label can have the correct joint order and absolute-target semantics while
 still producing a different trajectory under different physics settings. Require target replay to match before using
 closed-loop policy behavior to judge dataset size, frame selection, or model quality.
+
+When an A/B comparison shows that sensor-only refreshed frame 0 improves a small pilot rollout, use it as a directional
+engineering signal rather than statistical proof. Prefer the semantically aligned route for the next larger collection,
+but report grasp, grasp-to-lift conversion, transport/release failures, and per-seed outcomes separately from final
+success. Do not spend a long training budget on both small pilot variants merely to amplify a ten-episode comparison.
+See [references/validation.md](references/validation.md) for the matched frame-selection A/B contract.
