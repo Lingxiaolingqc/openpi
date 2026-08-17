@@ -328,6 +328,48 @@ def _require_overfit_gate(
         raise ValueError("overfit gate used a different held-out episode split")
 
 
+def _ensure_original_episode_index_lookup(dataset: Any, episodes: tuple[int, ...]) -> bool:
+    """Expand LeRobot's compact subset bounds so original episode IDs remain valid.
+
+    The repository-pinned LeRobot release loads a selected episode's original
+    ``episode_index`` from parquet, but builds ``episode_data_index`` as a compact
+    array whose length is only the number of selected episodes. Non-contiguous
+    selections therefore fail when ``__getitem__`` indexes the compact array with
+    an original episode ID. Keep the upstream dataset and metadata untouched and
+    expand only this in-memory lookup table.
+    """
+    selected = tuple(int(episode) for episode in episodes)
+    if not selected:
+        raise ValueError("LeRobot episode selection must not be empty")
+    if len(set(selected)) != len(selected):
+        raise ValueError("LeRobot episode selection contains duplicate episode IDs")
+
+    total_episodes = int(dataset.meta.total_episodes)
+    if min(selected) < 0 or max(selected) >= total_episodes:
+        raise ValueError(f"LeRobot episode selection must be within [0, {total_episodes}), got {selected}")
+
+    compact = dataset.episode_data_index
+    compact_from = compact["from"]
+    compact_to = compact["to"]
+    if len(compact_from) != len(compact_to):
+        raise RuntimeError("LeRobot episode_data_index has mismatched from/to lengths")
+    if len(compact_from) == total_episodes:
+        return False
+    if len(compact_from) != len(selected):
+        raise RuntimeError(
+            "LeRobot episode_data_index is neither full-sized nor aligned with the selected episodes: "
+            f"bounds={len(compact_from)}, selected={len(selected)}, total={total_episodes}"
+        )
+
+    expanded_from = compact_from.new_zeros(total_episodes)
+    expanded_to = compact_to.new_zeros(total_episodes)
+    for local_index, original_episode in enumerate(selected):
+        expanded_from[original_episode] = compact_from[local_index]
+        expanded_to[original_episode] = compact_to[local_index]
+    dataset.episode_data_index = {"from": expanded_from, "to": expanded_to}
+    return True
+
+
 def _create_lerobot_pipeline(
     args: argparse.Namespace,
     *,
@@ -411,6 +453,8 @@ def _create_lerobot_pipeline(
     train_config.optimizer = policy_config.get_optimizer_preset()
     train_config.scheduler = policy_config.get_scheduler_preset()
     dataset = make_dataset(train_config)
+    if _ensure_original_episode_index_lookup(dataset, episodes):
+        print("act_lerobot_episode_index_compatibility: expanded_original_episode_lookup")
     policy = make_policy(cfg=policy_config, ds_meta=dataset.meta)
     optimizer, scheduler = make_optimizer_and_scheduler(train_config, policy)
     return train_config, dataset, policy, optimizer, scheduler, resume_run_root

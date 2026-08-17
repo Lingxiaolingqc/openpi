@@ -136,7 +136,9 @@ Expected terminal markers are `ACT_FORWARD_GATE_OK`, `ACT_BACKWARD_GATE_OK`, and
 
 The gate dynamically chooses 10 episodes from the current training split and requires the fixed evaluation
 loss to fall below a configurable ratio of its initial value. Episode selection and the current metadata hash
-are saved in `overfit_gate.json`.
+are saved in `overfit_gate.json`. The runner also expands the repository-pinned LeRobot release's compact
+episode-boundary lookup in memory, so non-contiguous original episode IDs remain valid without modifying the
+dataset on disk.
 
 ```bash
 export OPENPI_ACT_OVERFIT_DIR="$OPENPI_ACT_OUTPUT_DIR/overfit10"
