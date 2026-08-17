@@ -25,6 +25,7 @@ if __package__ in {None, ""}:
 
 from examples.so101.act import audit_dataset
 from examples.so101.act import common
+from examples.so101.act.policy_utils import load_act_config
 from examples.so101.act.policy_utils import move_batch_to_device
 
 
@@ -351,10 +352,7 @@ def _create_lerobot_pipeline(
         resume_pretrained, resume_run_root = common.resolve_pretrained_model_path(args.resume_checkpoint)
         if resume_run_root.resolve() != output_dir.resolve():
             raise ValueError(f"resume checkpoint belongs to run {resume_run_root}, but --output-dir is {output_dir}")
-        policy_config = ACTConfig.from_pretrained(resume_pretrained)
-        if policy_config.type != "act":
-            raise ValueError(f"resume checkpoint is not ACT: {policy_config.type!r}")
-        policy_config.device = args.device
+        policy_config = load_act_config(resume_pretrained, device=args.device)
         policy_config.use_amp = args.use_amp
         policy_config.pretrained_path = str(resume_pretrained)
     else:

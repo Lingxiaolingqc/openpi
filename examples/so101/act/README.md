@@ -225,7 +225,8 @@ metadata invalidates the saved split and overfit report and requires fresh gates
 Offline evaluation loads the saved validation split and reports aggregate/per-joint MAE and RMSE, predicted
 and target action ranges, non-finite counts, and motor-limit violation counts. Predictions and targets are not
 clipped. It uses the same in-memory original-episode-ID compatibility lookup as training for the non-contiguous
-held-out split.
+held-out split. Checkpoint loading goes through LeRobot's registered `PreTrainedConfig` base so the saved
+`type = "act"` discriminator selects `ACTConfig` correctly for evaluation, serving, and resume.
 
 ```bash
 export OPENPI_ACT_CHECKPOINT="$OPENPI_ACT_TRAIN_DIR/checkpoints/last"

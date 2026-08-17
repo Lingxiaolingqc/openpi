@@ -8,16 +8,26 @@ from typing import Any
 import numpy as np
 
 
-def load_act_policy(pretrained_model_dir: Path, *, device: str):
+def load_act_config(pretrained_model_dir: Path, *, device: str | None = None):
     try:
         from lerobot.common.policies.act.configuration_act import ACTConfig
+        from lerobot.configs.policies import PreTrainedConfig
+    except ImportError as exc:
+        raise RuntimeError("LeRobot ACT is required; run this command with `uv run`") from exc
+    config = PreTrainedConfig.from_pretrained(pretrained_model_dir, local_files_only=True)
+    if not isinstance(config, ACTConfig):
+        raise ValueError(f"checkpoint policy must be ACT, got {type(config).__name__}")
+    if device is not None:
+        config.device = device
+    return config
+
+
+def load_act_policy(pretrained_model_dir: Path, *, device: str):
+    try:
         from lerobot.common.policies.act.modeling_act import ACTPolicy
     except ImportError as exc:
         raise RuntimeError("LeRobot ACT is required; run this command with `uv run`") from exc
-    config = ACTConfig.from_pretrained(pretrained_model_dir)
-    if config.type != "act":
-        raise ValueError(f"checkpoint policy type must be 'act', got {config.type!r}")
-    config.device = device
+    config = load_act_config(pretrained_model_dir, device=device)
     policy = ACTPolicy.from_pretrained(pretrained_model_dir, config=config, local_files_only=True)
     policy.to(device)
     policy.eval()
