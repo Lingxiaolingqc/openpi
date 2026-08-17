@@ -70,7 +70,7 @@ def test_non_contiguous_lerobot_subset_uses_original_episode_ids() -> None:
         },
     )
 
-    changed = train._ensure_original_episode_index_lookup(dataset, (2, 5, 7))  # noqa: SLF001
+    changed = common.ensure_original_episode_index_lookup(dataset, (2, 5, 7))
 
     assert changed is True
     assert dataset.episode_data_index["from"] == [0, 0, 0, 0, 0, 10, 0, 30]
@@ -84,7 +84,7 @@ def test_full_sized_lerobot_episode_lookup_is_unchanged() -> None:
     }
     dataset = SimpleNamespace(meta=SimpleNamespace(total_episodes=3), episode_data_index=original)
 
-    changed = train._ensure_original_episode_index_lookup(dataset, (0, 1, 2))  # noqa: SLF001
+    changed = common.ensure_original_episode_index_lookup(dataset, (0, 1, 2))
 
     assert changed is False
     assert dataset.episode_data_index is original

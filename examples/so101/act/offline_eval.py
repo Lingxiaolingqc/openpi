@@ -139,13 +139,16 @@ def _load_validation_dataset(
         raise RuntimeError("LeRobot ACT is required; run this command with `uv run`") from exc
     metadata = LeRobotDatasetMetadata(location.repo_id, root=location.dataset_path)
     delta_timestamps = resolve_delta_timestamps(policy.config, metadata)
-    return LeRobotDataset(
+    dataset = LeRobotDataset(
         location.repo_id,
         root=location.dataset_path,
         episodes=list(episodes),
         delta_timestamps=delta_timestamps,
         download_videos=False,
     )
+    if common.ensure_original_episode_index_lookup(dataset, episodes):
+        print("act_lerobot_episode_index_compatibility: expanded_original_episode_lookup")
+    return dataset
 
 
 def evaluate(
