@@ -1,25 +1,10 @@
-import importlib.util
 from pathlib import Path
-import sys
 
 import h5py
 import numpy as np
 import pytest
 
-
-def _load(name: str):
-    path = Path(__file__).with_name(f"{name}.py")
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_load("red_cube_to_box_hdf5")
-audit = _load("audit_red_cube_to_box_hdf5")
+from examples.so101 import audit_red_cube_to_box_hdf5 as audit
 
 
 def test_audit_is_read_only_and_rejects_incomplete_staging(tmp_path: Path) -> None:

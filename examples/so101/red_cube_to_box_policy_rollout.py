@@ -9,10 +9,14 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
 import time
 import traceback
 
 import numpy as np
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 TASK_PROMPT = "Pick up the red cube and place it inside the green box."
 JOINT_NAMES = (
@@ -92,7 +96,7 @@ def reset_with_camera_warmup(
         raise ValueError("camera refreshes must be non-negative")
     observations, _ = env.reset()
     if camera_refreshes:
-        from red_cube_to_box_camera import refresh_camera_observations_without_control
+        from examples.so101.utils.red_cube_to_box_camera import refresh_camera_observations_without_control
 
         observations = refresh_camera_observations_without_control(
             env,

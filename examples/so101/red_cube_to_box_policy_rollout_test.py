@@ -148,14 +148,15 @@ def test_reset_camera_warmup_zero_keeps_reset_observation() -> None:
 def test_reset_camera_refresh_does_not_step_environment(monkeypatch) -> None:
     refresh_calls: list[tuple[object, object, tuple[str, ...], int]] = []
 
-    camera_module = types.ModuleType("red_cube_to_box_camera")
+    module_name = "examples.so101.utils.red_cube_to_box_camera"
+    camera_module = types.ModuleType(module_name)
 
     def fake_refresh(env, observations, *, camera_names, refreshes):
         refresh_calls.append((env, observations, camera_names, refreshes))
         return {"frame": "refreshed"}
 
     camera_module.refresh_camera_observations_without_control = fake_refresh
-    monkeypatch.setitem(sys.modules, "red_cube_to_box_camera", camera_module)
+    monkeypatch.setitem(sys.modules, module_name, camera_module)
 
     class FakeEnv:
         def reset(self):

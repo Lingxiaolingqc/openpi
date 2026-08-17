@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 
 import h5py
 import numpy as np
-from red_cube_to_box_hdf5 import JOINT_NAMES
-from red_cube_to_box_hdf5 import SCHEMA_VERSION
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from examples.so101.utils.red_cube_to_box_hdf5 import JOINT_NAMES
+from examples.so101.utils.red_cube_to_box_hdf5 import SCHEMA_VERSION
 
 
 def audit_dataset(root: Path) -> dict[str, int | tuple[int, ...]]:

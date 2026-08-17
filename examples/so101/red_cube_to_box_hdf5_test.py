@@ -1,25 +1,11 @@
-import importlib.util
 import json
 from pathlib import Path
-import sys
 
 import h5py
 import numpy as np
 
-
-def _load(name: str):
-    path = Path(__file__).with_name(f"{name}.py")
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-hdf5 = _load("red_cube_to_box_hdf5")
-audit = _load("audit_red_cube_to_box_hdf5")
+from examples.so101 import audit_red_cube_to_box_hdf5 as audit
+from examples.so101.utils import red_cube_to_box_hdf5 as hdf5
 
 
 def _sample(index: int = 0) -> dict:

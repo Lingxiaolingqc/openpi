@@ -6,10 +6,14 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
 import traceback
 
 from isaaclab.app import AppLauncher
 import numpy as np
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 EXPERT_NAME = "autogen_polar_retreat_transport"
 DEFAULT_EXPERT_VERSION = "so101-redcube-polar-s4-v1"
@@ -114,9 +118,9 @@ def main() -> int:
         from isaaclab_tasks.utils import parse_env_cfg
         import leisaac.tasks  # noqa: F401
         from leisaac.utils.env_utils import dynamic_reset_gripper_effort_limit_sim
-        from red_cube_to_box_hdf5 import JOINT_NAMES
-        from red_cube_to_box_hdf5 import ShardedDatasetWriter
-        from red_cube_to_box_camera import refresh_camera_observations_without_control
+        from examples.so101.utils.red_cube_to_box_camera import refresh_camera_observations_without_control
+        from examples.so101.utils.red_cube_to_box_hdf5 import JOINT_NAMES
+        from examples.so101.utils.red_cube_to_box_hdf5 import ShardedDatasetWriter
         import red_cube_to_box_task
         from red_cube_to_box_task.autogen_polar_retreat_transport_state_machine import (
             RedCubeToBoxAutogenPolarRetreatTransportStateMachine,

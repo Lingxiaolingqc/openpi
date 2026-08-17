@@ -320,6 +320,9 @@ tmp\leisaac-remote-env\python.exe `
 The task ID is `OpenPI-LeIsaac-SO101-RedCubeToBox-v0`. Both supported command sets use one environment, headless
 rendering, and no `--renderer_device`.
 
+The files directly under `examples/so101/` are user-facing commands, tests, and runbooks. Shared implementation-only
+modules live under `examples/so101/utils/`; they are imported by the commands and are not separate entrypoints.
+
 Windows-native setup:
 
 ```powershell

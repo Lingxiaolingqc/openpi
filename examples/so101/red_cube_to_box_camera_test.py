@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from examples.so101.red_cube_to_box_camera import refresh_camera_observations_without_control
+from examples.so101.utils.red_cube_to_box_camera import refresh_camera_observations_without_control
 
 
 def test_refresh_camera_observations_renders_and_updates_without_control_step() -> None:
