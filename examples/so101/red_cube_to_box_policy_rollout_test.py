@@ -76,7 +76,7 @@ def test_action_chunk_clip_by_joint_rejects_shape_mismatch() -> None:
 
 
 class _WarmupBool:
-    def __init__(self, value: bool) -> None:
+    def __init__(self, *, value: bool) -> None:
         self._value = value
 
     def any(self) -> bool:
@@ -104,7 +104,13 @@ def test_reset_camera_warmup_is_explicit_and_holds_current_joints() -> None:
 
         def step(self, action):
             self.actions.append(action)
-            return {"frame": len(self.actions)}, None, _WarmupBool(False), _WarmupBool(False), {}
+            return (
+                {"frame": len(self.actions)},
+                None,
+                _WarmupBool(value=False),
+                _WarmupBool(value=False),
+                {},
+            )
 
     env = FakeEnv()
     robot = types.SimpleNamespace(
@@ -117,9 +123,7 @@ def test_reset_camera_warmup_is_explicit_and_holds_current_joints() -> None:
         robot,
         joint_ids=list(range(6)),
         warmup_steps=1,
-        dynamic_gripper_reset=lambda current_env, robot_name: reset_calls.append(
-            (current_env, robot_name)
-        ),
+        dynamic_gripper_reset=lambda current_env, robot_name: reset_calls.append((current_env, robot_name)),
     )
 
     assert observation == {"frame": 1}
@@ -138,9 +142,7 @@ def test_reset_camera_warmup_zero_keeps_reset_observation() -> None:
 
     robot = types.SimpleNamespace(data=types.SimpleNamespace(joint_pos=None))
 
-    assert rollout.reset_with_camera_warmup(
-        FakeEnv(), robot, joint_ids=list(range(6)), warmup_steps=0
-    ) == {"frame": 0}
+    assert rollout.reset_with_camera_warmup(FakeEnv(), robot, joint_ids=list(range(6)), warmup_steps=0) == {"frame": 0}
 
 
 def test_reset_camera_refresh_does_not_step_environment(monkeypatch) -> None:
@@ -202,14 +204,23 @@ def test_openpi_adapter_builds_so101_request_and_restores_simulator_actions(monk
     class FakeWebsocketClientPolicy:
         def __init__(self, *, host: str, port: int) -> None:
             assert (host, port) == ("policy-host", 18000)
-            setattr(self, "_ws", types.SimpleNamespace(close=lambda: closed.append(True)))
+            self._ws = types.SimpleNamespace(close=lambda: closed.append(True))
 
         def get_server_metadata(self) -> dict:
-            return {"model": "fake"}
+            return {
+                "model": "fake",
+                "deployment_scope": "simulation-only",
+                "supports_remote_reset": True,
+            }
 
         def infer(self, request: dict) -> dict:
             requests.append(request)
-            return {"actions": np.full((10, 6), 2.0, dtype=np.float32)}
+            if request.get("__reset__") is True:
+                return {"reset_ack": True}
+            return {
+                "actions": np.full((10, 6), 2.0, dtype=np.float32),
+                "policy_diagnostics": {"actions_clipped": False},
+            }
 
     robot_utils = types.ModuleType("leisaac.utils.robot_utils")
     robot_utils.convert_leisaac_action_to_lerobot = lambda value: value.detach().cpu().numpy() + 10.0
@@ -227,7 +238,9 @@ def test_openpi_adapter_builds_so101_request_and_restores_simulator_actions(monk
         port=18000,
         camera_names=("front",),
         prompt=rollout.TASK_PROMPT,
+        required_deployment_scope="simulation-only",
     )
+    client.reset()
     actions = client.get_action(
         {
             "front": _FakeTensor(np.zeros((1, 4, 5, 3), dtype=np.uint8)),
@@ -235,11 +248,41 @@ def test_openpi_adapter_builds_so101_request_and_restores_simulator_actions(monk
         }
     )
 
-    assert client.server_metadata == {"model": "fake"}
+    assert client.server_metadata["model"] == "fake"
+    assert client.last_policy_diagnostics == {"actions_clipped": False}
     assert actions.shape == (10, 1, 6)
     np.testing.assert_array_equal(actions, np.ones((10, 1, 6), dtype=np.float32))
-    assert requests[0]["images/front"].shape == (4, 5, 3)
-    np.testing.assert_array_equal(requests[0]["state"], np.arange(6, dtype=np.float32) + 10.0)
-    assert requests[0]["prompt"] == rollout.TASK_PROMPT
+    assert requests[0] == {"__reset__": True}
+    assert requests[1]["images/front"].shape == (4, 5, 3)
+    np.testing.assert_array_equal(requests[1]["state"], np.arange(6, dtype=np.float32) + 10.0)
+    assert requests[1]["prompt"] == rollout.TASK_PROMPT
     client.close()
     assert closed == [True]
+
+
+def test_openpi_adapter_rejects_wrong_policy_scope(monkeypatch) -> None:
+    class FakeWebsocketClientPolicy:
+        def __init__(self, *, host: str, port: int) -> None:
+            pass
+
+        def get_server_metadata(self) -> dict:
+            return {"deployment_scope": "real"}
+
+    robot_utils = types.ModuleType("leisaac.utils.robot_utils")
+    robot_utils.convert_leisaac_action_to_lerobot = lambda value: value
+    robot_utils.convert_lerobot_action_to_leisaac = lambda value: value
+    openpi_client = types.ModuleType("openpi_client")
+    openpi_client.websocket_client_policy = types.SimpleNamespace(WebsocketClientPolicy=FakeWebsocketClientPolicy)
+    monkeypatch.setitem(sys.modules, "leisaac", types.ModuleType("leisaac"))
+    monkeypatch.setitem(sys.modules, "leisaac.utils", types.ModuleType("leisaac.utils"))
+    monkeypatch.setitem(sys.modules, "leisaac.utils.robot_utils", robot_utils)
+    monkeypatch.setitem(sys.modules, "openpi_client", openpi_client)
+
+    with pytest.raises(ValueError, match="deployment scope"):
+        rollout.OpenPISO101Client(
+            host="policy-host",
+            port=18000,
+            camera_names=("front",),
+            prompt=rollout.TASK_PROMPT,
+            required_deployment_scope="simulation-only",
+        )

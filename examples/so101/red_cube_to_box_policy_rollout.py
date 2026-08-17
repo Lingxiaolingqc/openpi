@@ -14,7 +14,6 @@ import traceback
 
 import numpy as np
 
-
 TASK_PROMPT = "Pick up the red cube and place it inside the green box."
 JOINT_NAMES = (
     "shoulder_pan",
@@ -37,8 +36,7 @@ def normalize_action_chunk(value: object, *, num_envs: int = 1, action_dim: int 
     expected_tail = (num_envs, action_dim)
     if actions.ndim != 3 or actions.shape[1:] != expected_tail:
         raise ValueError(
-            "Expected policy action chunk shape "
-            f"(horizon, {num_envs}, {action_dim}), got {tuple(actions.shape)}"
+            f"Expected policy action chunk shape (horizon, {num_envs}, {action_dim}), got {tuple(actions.shape)}"
         )
     if actions.shape[0] < 1:
         raise ValueError("Policy returned an empty action chunk")
@@ -108,9 +106,7 @@ def reset_with_camera_warmup(
             dynamic_gripper_reset(env, "so101leader")
         observations, _, terminated, truncated, _ = env.step(hold_action)
         if bool(terminated.any()) or bool(truncated.any()):
-            raise RuntimeError(
-                f"Environment terminated/truncated during camera warmup step {warmup_index + 1}"
-            )
+            raise RuntimeError(f"Environment terminated/truncated during camera warmup step {warmup_index + 1}")
     print(f"policy_reset_camera_warmup_steps: {warmup_steps}", flush=True)
     print(f"policy_reset_camera_refreshes: {camera_refreshes}", flush=True)
     return observations
@@ -119,7 +115,15 @@ def reset_with_camera_warmup(
 class OpenPISO101Client:
     """Small adapter around openpi-client with LeIsaac's audited motor conversion."""
 
-    def __init__(self, *, host: str, port: int, camera_names: tuple[str, ...], prompt: str) -> None:
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        camera_names: tuple[str, ...],
+        prompt: str,
+        required_deployment_scope: str | None = None,
+    ) -> None:
         from leisaac.utils.robot_utils import convert_leisaac_action_to_lerobot
         from leisaac.utils.robot_utils import convert_lerobot_action_to_leisaac
         from openpi_client import websocket_client_policy
@@ -129,10 +133,33 @@ class OpenPISO101Client:
         self._prompt = prompt
         self._state_to_motor = convert_leisaac_action_to_lerobot
         self._action_to_sim = convert_lerobot_action_to_leisaac
+        self._server_metadata = self._client.get_server_metadata()
+        self._last_policy_diagnostics: dict = {}
+        if (
+            required_deployment_scope is not None
+            and self._server_metadata.get("deployment_scope") != required_deployment_scope
+        ):
+            raise ValueError(
+                "Policy deployment scope does not match rollout requirement: "
+                f"server={self._server_metadata.get('deployment_scope')!r}, "
+                f"required={required_deployment_scope!r}"
+            )
 
     @property
     def server_metadata(self) -> dict:
-        return self._client.get_server_metadata()
+        return self._server_metadata
+
+    @property
+    def last_policy_diagnostics(self) -> dict:
+        return self._last_policy_diagnostics
+
+    def reset(self) -> None:
+        """Reset stateful remote policies when the server advertises support."""
+        if not self._server_metadata.get("supports_remote_reset", False):
+            return
+        response = self._client.infer({"__reset__": True})
+        if response.get("reset_ack") is not True:
+            raise RuntimeError(f"Policy server did not acknowledge reset: {response}")
 
     def get_action(self, observation: dict) -> np.ndarray:
         request = {
@@ -144,6 +171,12 @@ class OpenPISO101Client:
         response = self._client.infer(request)
         if "actions" not in response:
             raise ValueError(f"Policy response does not contain actions: {sorted(response)}")
+        self._last_policy_diagnostics = response.get("policy_diagnostics", {})
+        if self._last_policy_diagnostics:
+            print(
+                f"policy_server_diagnostics: {json.dumps(self._last_policy_diagnostics, allow_nan=False)}",
+                flush=True,
+            )
         motor_actions = np.asarray(response["actions"], dtype=np.float32)
         simulator_actions = self._action_to_sim(motor_actions)
         return np.asarray(simulator_actions, dtype=np.float32)[:, None, :]
@@ -161,6 +194,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--assets_root", default=os.environ.get("LEISAAC_ASSETS_ROOT"))
     parser.add_argument("--policy_host", default="127.0.0.1")
     parser.add_argument("--policy_port", type=int, default=18000)
+    parser.add_argument(
+        "--require_policy_scope",
+        default=None,
+        help="Require the policy server metadata to advertise this deployment scope.",
+    )
     parser.add_argument("--prompt", default=TASK_PROMPT)
     parser.add_argument("--episodes", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
@@ -396,6 +434,7 @@ def main() -> int:
             port=args.policy_port,
             camera_names=camera_names,
             prompt=args.prompt,
+            required_deployment_scope=args.require_policy_scope,
         )
         print("RED_CUBE_TO_BOX_POLICY_CONNECTED_OK", flush=True)
         print(f"policy_server_metadata: {policy.server_metadata}", flush=True)
@@ -426,6 +465,7 @@ def main() -> int:
                             else None
                         ),
                     )
+                policy.reset()
                 recorder = None
                 if args.record_dir is not None:
                     recorder = _RolloutRecorder(

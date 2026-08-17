@@ -507,6 +507,12 @@ grep -nE \
 
 ## Dataset conversion and training
 
+The S5 Hugging Face LeRobot ACT baseline is isolated under
+[`examples/so101/act`](act/README.md). It provides dynamic LeRobot schema/audit gates, forward/backward/one-step
+checks, a required 10-episode overfit gate, resumable ACT training, held-out MAE/RMSE evaluation, a
+simulation-only policy server, and closed-loop RedCubeToBox commands. ACT data, GPU, camera, horizon, output,
+and checkpoint settings are runtime configuration rather than fixed source constants.
+
 Keep Isaac Sim/LeIsaac and OpenPI/LeRobot in separate Python environments. The collector stores only successful polar
 trajectories in resumable shards; failed attempts retain metadata without RGB frames. The current scene has only the
 front camera. If a future scene exposes `policy.wrist`, the collector and converter include it automatically.

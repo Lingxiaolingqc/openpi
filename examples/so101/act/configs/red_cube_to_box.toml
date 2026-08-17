@@ -1,0 +1,64 @@
+[dataset]
+repo_id = "local/so101-redcube-polar-s4-frame0-pilot20"
+action_semantics = "absolute_joint_position_target_motor_degrees"
+expected_camera_keys = ["observation.images.front"]
+
+[split]
+validation_fraction = 0.2
+seed = 42
+
+[policy]
+chunk_size = 100
+n_action_steps = 10
+device = "cuda"
+use_amp = false
+temporal_ensemble_coeff = -1.0
+vision_backbone = "resnet18"
+pretrained_backbone_weights = "ResNet18_Weights.IMAGENET1K_V1"
+replace_final_stride_with_dilation = false
+pre_norm = false
+dim_model = 512
+n_heads = 8
+dim_feedforward = 3200
+feedforward_activation = "relu"
+n_encoder_layers = 4
+n_decoder_layers = 1
+use_vae = true
+latent_dim = 32
+n_vae_encoder_layers = 4
+dropout = 0.1
+kl_weight = 10.0
+optimizer_lr = 1e-5
+optimizer_weight_decay = 1e-4
+optimizer_lr_backbone = 1e-5
+
+[training]
+output_dir = "outputs/act/so101-redcube"
+batch_size = 8
+num_workers = 4
+steps = 100000
+save_frequency = 5000
+log_frequency = 100
+gradient_accumulation_steps = 1
+seed = 42
+use_imagenet_stats = true
+
+[overfit]
+episode_count = 10
+steps = 2000
+evaluation_batches = 16
+maximum_final_to_initial_loss_ratio = 0.7
+
+[evaluation]
+batch_size = 8
+num_workers = 4
+maximum_batches = 0
+
+[serving]
+host = "0.0.0.0"
+port = 18000
+actions_per_inference = 10
+
+[safety]
+deployment_scope = "simulation-only"
+real_robot_deployment_allowed = false
