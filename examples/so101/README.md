@@ -53,6 +53,12 @@ Current files:
 - [`real/teleop_recorder.py`](real/teleop_recorder.py) combines the two cameras, 30 Hz Leader/Follower control, safety
   monitoring, bounded automatic alignment, an explicit `R` recording gate, keyboard episode controls, and the
   real-only HDF5 contract.
+- [`real/convert_real_hdf5_to_lerobot.py`](real/convert_real_hdf5_to_lerobot.py) audits successful real episodes and
+  converts their already-calibrated motor degrees, two RGB cameras, per-episode task, target ID, and Box-A/B metadata
+  into the repository's pinned LeRobot format without touching the simulation converter.
+- [`real/convert_real_hdf5_to_lerobot_test.py`](real/convert_real_hdf5_to_lerobot_test.py) verifies degree preservation,
+  condition fields, Box-C rejection, calibration bounds, stale-frame rejection, and no-overwrite behavior using only
+  synthetic HDF5 files and a fake LeRobot writer.
 - [`real/requirements-windows.txt`](real/requirements-windows.txt) pins the three collection dependencies added to the
   isolated Windows hardware environment; it does not install Isaac Sim or modify the simulation environment.
 - [`real/all_joint_range_audit.py`](real/all_joint_range_audit.py) records a torque-off, six-joint range candidate for
@@ -272,6 +278,79 @@ only raise it after checking that the object and fingers stay clear of the closi
 
 Use a local SSD rather than a synchronized cloud folder for `--dataset-root`: two uncompressed 640x480 RGB streams can
 produce large episodes even with fast lossless HDF5 compression.
+
+### Convert real HDF5 episodes to LeRobot
+
+The files under `episodes/` are the immutable real-robot source data. Do not pass them to
+`convert_leisaac_hdf5_to_lerobot.py`: that converter expects LeIsaac `/data/demo_*` groups and remaps USD radians,
+whereas the real files contain one episode per `.h5` file and already store calibrated motor degrees.
+
+First run the real-only converter in audit mode. This command needs NumPy and HDF5 but does not import LeRobot, does
+not write a dataset, and does not open cameras or serial ports:
+
+```powershell
+tmp\leisaac-remote-env\python.exe `
+  examples\so101\real\convert_real_hdf5_to_lerobot.py `
+  --input-path D:\SO101RealData `
+  --dry-run
+```
+
+The audit requires schema v1, 30 Hz control metadata, two RGB `480x640` cameras, finite `float32[6]` state/actions,
+valid control/camera timestamps, the selected frozen calibration hashes, and Box-A or Box-B. It rejects Box-C,
+out-of-range motor degrees, stale frames, excessive camera skew, inconsistent frame counts, and an irregular control
+rate. State and action values are copied as motor degrees without any unit conversion.
+
+Perform the actual conversion in this repository's pinned OpenPI/LeRobot environment rather than the minimal Windows
+hardware environment. For example:
+
+```powershell
+uv run python `
+  examples\so101\real\convert_real_hdf5_to_lerobot.py `
+  --input-path D:\SO101RealData `
+  --repo-id local/so101_real_v1 `
+  --output-root D:\SO101LeRobot `
+  --image-mode video
+```
+
+The output path is always computed as:
+
+```text
+<output-root>/<repo-id>
+```
+
+Because `repo-id` has two components, `local/so101_real_v1`, the Windows example above produces exactly:
+
+```text
+D:\SO101LeRobot\local\so101_real_v1
+```
+
+For example, a server command using `--output-root /home/data/xiaoqinchuan/datasets/lerobot` and the same
+`--repo-id local/so101_real_v1` produces:
+
+```text
+/home/data/xiaoqinchuan/datasets/lerobot/local/so101_real_v1
+```
+
+If `--output-root` is omitted, the converter uses the pinned LeRobot `HF_LEROBOT_HOME`; with its normal defaults this
+is `~/.cache/huggingface/lerobot`, so the output is normally
+`~/.cache/huggingface/lerobot/local/so101_real_v1`. The converter prints the resolved locations at the end:
+
+```text
+conversion_manifest: <resolved-output>/real_conversion_manifest.json
+lerobot_output_path: <resolved-output>
+REAL_HDF5_TO_LEROBOT_OK
+```
+
+The output directory contains LeRobot `data/` and `meta/`, plus `videos/` when `--image-mode video` is selected, and
+the real-only `real_conversion_manifest.json`. It is separate from `D:\SO101RealData`, which remains the immutable raw
+HDF5 source. The converter refuses to overwrite the resolved output directory if it already exists.
+
+Each LeRobot frame contains `observation.images.front`, `observation.images.wrist`, six-dimensional `observation.state`,
+six-dimensional absolute `action`, `task`, and one-element `int64` `target_id`/`box_id` fields. Box-A/B are encoded
+as 0/1 only for dataset statistics; `box_id` must never be selected as a model input. The converter also writes
+`real_conversion_manifest.json` with the source episode list, prompts, object/box encodings, and calibration identity.
+ACT must concatenate a three-way one-hot derived from `target_id` in its later data adapter; OpenPI continues to read
+the unmodified six-dimensional `observation.state` and the natural-language `task`.
 
 Do not rerun `leader_remote_windows.py calibrate` merely to update joint ranges: that path calls
 `set_half_turn_homings()` and writes new Homing Offsets for all six motors. To measure all six ranges while preserving
