@@ -801,8 +801,9 @@ reported even though runner-side clipping is disabled. Without that flag, simula
 successful episode must lift the cube by at least 30 mm and keep it settled inside the box for 30 consecutive steps.
 
 For server-side evaluation, keep the policy server and LeIsaac rollout in two terminals. The following complete example
-uses the validated step-15000 checkpoint. In server terminal 1, verify the checkpoint and norm stats, then serve it on
-GPU 6:
+provides backward-compatible defaults for the validated legacy pilot20 step-15000 checkpoint, while allowing every
+model-selection and server field to be overridden before running it. In server terminal 1, verify the selected
+checkpoint and norm stats, then serve it:
 
 `OPENPI_SO101_LIFTCUBE_REPO_ID` selects the norm-stat `asset_id` in both the project assets and checkpoint assets.
 Set it in the same terminal before starting the server; otherwise the config may fall back to an older dataset ID.
@@ -810,14 +811,20 @@ Set it in the same terminal before starting the server; otherwise the config may
 ```bash
 cd /home/data/xiaoqinchuan/projects/openpi
 
-export OPENPI_SO101_LIFTCUBE_REPO_ID="local/so101-redcube-polar-s4-pilot20"
-export OPENPI_POLICY_GPU=6
-export OPENPI_POLICY_PORT=18000
-export OPENPI_POLICY_CKPT="/home/data/xiaoqinchuan/checkpoints/openpi/pi05_lora_so101_liftcube/so101-redcube-polar-s4-pilot20-v1/15000"
-export OPENPI_POLICY_LOG="/home/data/xiaoqinchuan/checkpoints/openpi/logs/so101-redcube-polar-s4-pilot20-v1-step15000.serve.log"
+export OPENPI_POLICY_DATASET_REPO_ID="${OPENPI_POLICY_DATASET_REPO_ID:-local/so101-redcube-polar-s4-pilot20}"
+export OPENPI_POLICY_RUN_NAME="${OPENPI_POLICY_RUN_NAME:-so101-redcube-polar-s4-pilot20-v1}"
+export OPENPI_POLICY_STEP="${OPENPI_POLICY_STEP:-15000}"
+export OPENPI_POLICY_GPU="${OPENPI_POLICY_GPU:-6}"
+export OPENPI_POLICY_PORT="${OPENPI_POLICY_PORT:-18000}"
+export OPENPI_CHECKPOINT_ROOT="${OPENPI_CHECKPOINT_ROOT:-/home/data/xiaoqinchuan/checkpoints/openpi}"
+export OPENPI_POLICY_LOG_ROOT="${OPENPI_POLICY_LOG_ROOT:-$OPENPI_CHECKPOINT_ROOT/logs}"
+
+export OPENPI_SO101_LIFTCUBE_REPO_ID="$OPENPI_POLICY_DATASET_REPO_ID"
+export OPENPI_POLICY_CKPT="${OPENPI_POLICY_CKPT:-$OPENPI_CHECKPOINT_ROOT/pi05_lora_so101_liftcube/$OPENPI_POLICY_RUN_NAME/$OPENPI_POLICY_STEP}"
+export OPENPI_POLICY_LOG="${OPENPI_POLICY_LOG:-$OPENPI_POLICY_LOG_ROOT/${OPENPI_POLICY_RUN_NAME}-step${OPENPI_POLICY_STEP}.serve.log}"
 
 test -s "$OPENPI_POLICY_CKPT/params/_METADATA" || exit 1
-test -f "$OPENPI_POLICY_CKPT/assets/local/so101-redcube-polar-s4-pilot20/norm_stats.json" || exit 1
+test -f "$OPENPI_POLICY_CKPT/assets/$OPENPI_SO101_LIFTCUBE_REPO_ID/norm_stats.json" || exit 1
 mkdir -p "$(dirname "$OPENPI_POLICY_LOG")"
 
 CUDA_VISIBLE_DEVICES="$OPENPI_POLICY_GPU" uv run scripts/serve_policy.py \
@@ -828,6 +835,40 @@ CUDA_VISIBLE_DEVICES="$OPENPI_POLICY_GPU" uv run scripts/serve_policy.py \
   --policy.dir "$OPENPI_POLICY_CKPT" \
   2>&1 | tee "$OPENPI_POLICY_LOG"
 ```
+
+Selectable variables for the block above:
+
+- `OPENPI_POLICY_DATASET_REPO_ID`: choose the converted dataset whose normalization assets were copied into the
+  checkpoint. Known polar choices are `local/so101-redcube-polar-s4-pilot20`,
+  `local/so101-redcube-polar-s4-frame0-pilot20`, and `local/so101-redcube-polar-s4-frame0-100`.
+- `OPENPI_POLICY_RUN_NAME`: choose the matching training run directory:
+  `so101-redcube-polar-s4-pilot20-v1`, `so101-redcube-polar-s4-frame0-pilot20-v1`, or
+  `so101-redcube-polar-s4-frame0-100-v1`. Do not mix a run with another dataset's repo ID.
+- `OPENPI_POLICY_STEP`: choose any checkpoint step under the selected run whose `params/_METADATA` is nonempty valid
+  JSON and whose matching norm stats exist. Both pilot20 comparisons have a known step `15000`; the frame0-100 run
+  saves candidates every `5000` steps.
+- `OPENPI_POLICY_GPU`: choose a currently free physical GPU index on the eight-GPU server, from `0` through `7`.
+  Default: `6`.
+- `OPENPI_POLICY_PORT`: choose any unused TCP port from `1024` through `65535`. Default: `18000`. The rollout terminal
+  must use the same port.
+- `OPENPI_CHECKPOINT_ROOT`: choose the root containing `pi05_lora_so101_liftcube/<run>/<step>`. Default:
+  `/home/data/xiaoqinchuan/checkpoints/openpi`.
+- `OPENPI_POLICY_LOG_ROOT`: choose any writable log directory. Default: `$OPENPI_CHECKPOINT_ROOT/logs`.
+- `OPENPI_POLICY_CKPT`: optionally provide a full checkpoint-directory override; it takes precedence over the derived
+  root/run/step path.
+- `OPENPI_POLICY_LOG`: optionally provide a full log-file override; it takes precedence over the derived log filename.
+
+For example, select the refreshed-frame0 pilot20 checkpoint by setting these three values before running the complete
+block; all other defaults can remain unchanged:
+
+```bash
+export OPENPI_POLICY_DATASET_REPO_ID="local/so101-redcube-polar-s4-frame0-pilot20"
+export OPENPI_POLICY_RUN_NAME="so101-redcube-polar-s4-frame0-pilot20-v1"
+export OPENPI_POLICY_STEP=15000
+```
+
+For the 100-episode model, select `local/so101-redcube-polar-s4-frame0-100` with run name
+`so101-redcube-polar-s4-frame0-100-v1`, then choose a checkpoint step only after its metadata validation passes.
 
 The server is ready when the log contains `Creating server`. Inspect it from another terminal without creating another
 output file:
@@ -854,6 +895,9 @@ Keep terminal 1 running. Use a different GPU for the recorded one-episode rollou
 inference so closed-loop errors are easiest to localize:
 
 ```bash
+export OPENPI_POLICY_HOST="${OPENPI_POLICY_HOST:-127.0.0.1}"
+export OPENPI_POLICY_PORT="${OPENPI_POLICY_PORT:-18000}"
+
 stamp=$(date +%Y%m%d-%H%M%S)
 run_root="/home/data/xiaoqinchuan/results/leisaac/policy-rollout/red_cube_$stamp"
 export RED_CUBE_POLICY_LOG="$run_root/rollout.log"
@@ -866,8 +910,8 @@ mkdir -p "$run_root"
   --device "$ISAAC_DEVICE" \
   --rendering_mode performance \
   --assets_root "$LEISAAC_ASSETS_ROOT" \
-  --policy_host 127.0.0.1 \
-  --policy_port 18000 \
+  --policy_host "$OPENPI_POLICY_HOST" \
+  --policy_port "$OPENPI_POLICY_PORT" \
   --episodes 1 \
   --seed 42 \
   --maximum_steps 2400 \
