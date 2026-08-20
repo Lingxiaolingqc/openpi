@@ -1,8 +1,9 @@
 # SO-101 S6 policy fault harness 和 rollout 安全模式
 
-本目录提供本机 fake server、无 Isaac protocol probe，以及供 Windows 原生 LeIsaac rollout 使用的 action queue
-安全核心。不得使用 WSL 或服务器运行 Isaac Sim，也不得把 fault case 用于已上电真实机械臂。`--s6-safety`
-仍是显式 opt-in；不传该参数时保留原有 S5 rollout 路径。
+本目录提供本机 fake server、无 Isaac protocol probe，以及供原生 Windows 或 Linux LeIsaac rollout 使用的
+action queue 安全核心。Isaac Sim 只能在已经配置好 LeIsaac、资产和 GPU 的原生系统中运行，不得在 WSL 中
+启动，也不得把 fault case 用于已上电真实机械臂。`--s6-safety` 仍是显式 opt-in；不传该参数时保留原有
+S5 rollout 路径。
 
 ## 新文件
 
@@ -187,10 +188,12 @@ Set-Location $env:OPENPI_ROOT
   2>&1 | Tee-Object -FilePath $env:S6_LOG
 ```
 
-预期进程以 fault 失败退出，但必须先依次记录 `rollout_fault_detected`、`action_queue_cancelled`、
+预期语义结果是 fault 失败，但必须先依次记录 `rollout_fault_detected`、`action_queue_cancelled`、
 `safe_hold_applied`、`simulation_terminated` 和 `recovery_required`。验收字段为
 `queued_actions_after=0`、`post_fault_old_action_steps=0`，且没有自动 reconnect。heartbeat 通过后到下一次
 heartbeat 前存在最多一个仿真 action step 的未检测窗口；fault 被检测后旧 action 上界严格为零步。
+Isaac Sim 的 `close(skip_cleanup=True)` 可能在已经输出失败 sentinel 后仍令宿主进程返回 `0`，因此 fault case
+以 `RED_CUBE_TO_BOX_POLICY_ROLLOUT_FAILED` 和完整 S6 终态事件为准，不以 shell 状态码单独判定。
 
 `--s6-safety` 可以并且建议与 `--match_expert_dynamics` 同时启用。组合模式保留专家采集动力学：robot gravity
 关闭、joint damping 为 `10.0`，且合法 target 保持原值执行；但 S6 会在选择动作前拒绝任何 soft-limit 越界，
@@ -213,7 +216,9 @@ policy_action_soft_limit_clip_enabled: False
 
 ## Linux / OpenPI 环境
 
-Linux 只运行 fake/probe 和单元测试；不要在服务器或 WSL 启动 Isaac Sim。
+Linux 可以运行 fake/probe、单元测试，并可在已经配置好 LeIsaac 的原生 Linux 主机上运行后述单环境动态验收；
+不要在 WSL 中启动 Isaac Sim。fault rollout 只连接同一台 Linux 主机的 `127.0.0.1` fake server，不连接训练
+服务器的真实 policy service，也不连接真实机械臂。
 
 安装 client 并运行 fake server：
 
@@ -253,6 +258,162 @@ uv run python -m pytest -q \
   examples/so101/red_cube_to_box_policy_rollout_test.py
 ```
 
+## Linux 原生 LeIsaac 动态验收
+
+以下命令使用仓库已有的 Linux LeIsaac 目录约定。若实际目录不同，只修改环境变量。先确认 Python、资产和
+GPU，再把当前 checkout 的 `openpi-client` 安装到 LeIsaac 环境；不要添加 `--renderer_device`：
+
+```bash
+export OPENPI_ROOT="${OPENPI_ROOT:-/home/data/xiaoqinchuan/projects/openpi}"
+export LEISAAC_ENV="${LEISAAC_ENV:-/home/data/xiaoqinchuan/envs/leisaac-so101}"
+export LEISAAC_ASSETS_ROOT="${LEISAAC_ASSETS_ROOT:-/home/data/xiaoqinchuan/assets/leisaac-v0.4.0}"
+export ISAACSIM_PORTABLE_ROOT="${ISAACSIM_PORTABLE_ROOT:-/home/data/xiaoqinchuan/cache/isaacsim-portable}"
+export OMNI_KIT_ACCEPT_EULA=YES
+export PYTHONUNBUFFERED=1
+export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
+cd "$OPENPI_ROOT"
+
+test -x "$LEISAAC_ENV/bin/python"
+test -d "$LEISAAC_ASSETS_ROOT"
+uv pip install --python "$LEISAAC_ENV/bin/python" -e packages/openpi-client
+"$LEISAAC_ENV/bin/python" -c "import msgpack, openpi_client, websockets; print(websockets.__version__)"
+```
+
+### Normal transport smoke
+
+终端 A 启动本机 normal fake server：
+
+```bash
+export OPENPI_ROOT="${OPENPI_ROOT:-/home/data/xiaoqinchuan/projects/openpi}"
+export LEISAAC_ENV="${LEISAAC_ENV:-/home/data/xiaoqinchuan/envs/leisaac-so101}"
+cd "$OPENPI_ROOT"
+
+"$LEISAAC_ENV/bin/python" examples/so101/s6/fake_policy_server.py \
+  --host 127.0.0.1 \
+  --port 18001 \
+  --fault normal
+```
+
+看到 `S6_FAKE_POLICY_SERVER_READY` 后，终端 B 选择一张空闲物理 GPU。`CUDA_VISIBLE_DEVICES` 将其映射为该
+进程内的 `cuda:0`；命令保持单环境、headless、performance 和 `actions_per_inference=10`：
+
+```bash
+export OPENPI_ROOT="${OPENPI_ROOT:-/home/data/xiaoqinchuan/projects/openpi}"
+export LEISAAC_ENV="${LEISAAC_ENV:-/home/data/xiaoqinchuan/envs/leisaac-so101}"
+export LEISAAC_ASSETS_ROOT="${LEISAAC_ASSETS_ROOT:-/home/data/xiaoqinchuan/assets/leisaac-v0.4.0}"
+export ISAACSIM_PORTABLE_ROOT="${ISAACSIM_PORTABLE_ROOT:-/home/data/xiaoqinchuan/cache/isaacsim-portable}"
+export OMNI_KIT_ACCEPT_EULA=YES
+export PYTHONUNBUFFERED=1
+export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
+read -r -p "Free physical GPU for S6 LeIsaac rollout: " S6_PHYSICAL_GPU
+export ISAAC_DEVICE=cuda:0
+stamp=$(date +%Y%m%d-%H%M%S)
+export S6_RUN_ROOT="/home/data/xiaoqinchuan/results/s6-rollout/normal-$stamp"
+export S6_LOG="$S6_RUN_ROOT/rollout.log"
+mkdir -p "$S6_RUN_ROOT"
+cd "$OPENPI_ROOT"
+set -o pipefail
+
+CUDA_VISIBLE_DEVICES="$S6_PHYSICAL_GPU" \
+"$LEISAAC_ENV/bin/python" examples/so101/red_cube_to_box_policy_rollout.py \
+  --headless \
+  --enable_cameras \
+  --device "$ISAAC_DEVICE" \
+  --rendering_mode performance \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --policy_host 127.0.0.1 \
+  --policy_port 18001 \
+  --require_policy_scope simulation-only \
+  --episodes 1 \
+  --seed 42 \
+  --maximum_steps 20 \
+  --actions_per_inference 10 \
+  --match_expert_dynamics \
+  --s6-safety \
+  --s6-inference-timeout-s 1 \
+  --s6-watchdog-timeout-s 0.10 \
+  --s6-action-chunk-ttl-s 2 \
+  --minimum_success_rate 0.0 \
+  2>&1 | tee "$S6_LOG"
+rollout_status=${PIPESTATUS[0]}
+echo "rollout_status=$rollout_status log=$S6_LOG"
+```
+
+normal smoke 必须以 `rollout_status=0` 和 `RED_CUBE_TO_BOX_POLICY_ROLLOUT_OK` 结束，包含
+`action_chunk_accepted`、`action_step_authorized` 和 `action_step_executed`，且不得出现
+`rollout_fault_detected`。fake server 的 normal action 是确定性的零 target；该案例只验证 transport、watchdog
+和 queue 集成，不验证 checkpoint 成功率。
+
+### Chunk 中途断流
+
+normal smoke 通过后停止终端 A 的 server，再用新进程启动中途断流 case：
+
+```bash
+export OPENPI_ROOT="${OPENPI_ROOT:-/home/data/xiaoqinchuan/projects/openpi}"
+export LEISAAC_ENV="${LEISAAC_ENV:-/home/data/xiaoqinchuan/envs/leisaac-so101}"
+cd "$OPENPI_ROOT"
+
+"$LEISAAC_ENV/bin/python" examples/so101/s6/fake_policy_server.py \
+  --host 127.0.0.1 \
+  --port 18001 \
+  --fault disconnect-after-response \
+  --disconnect-after-response-s 0.05
+```
+
+终端 B 使用新的结果目录运行 fault rollout：
+
+```bash
+export OPENPI_ROOT="${OPENPI_ROOT:-/home/data/xiaoqinchuan/projects/openpi}"
+export LEISAAC_ENV="${LEISAAC_ENV:-/home/data/xiaoqinchuan/envs/leisaac-so101}"
+export LEISAAC_ASSETS_ROOT="${LEISAAC_ASSETS_ROOT:-/home/data/xiaoqinchuan/assets/leisaac-v0.4.0}"
+export ISAACSIM_PORTABLE_ROOT="${ISAACSIM_PORTABLE_ROOT:-/home/data/xiaoqinchuan/cache/isaacsim-portable}"
+export OMNI_KIT_ACCEPT_EULA=YES
+export PYTHONUNBUFFERED=1
+export LD_PRELOAD="$LEISAAC_ENV/lib/libstdc++.so.6"
+read -r -p "Free physical GPU for S6 LeIsaac rollout: " S6_PHYSICAL_GPU
+export ISAAC_DEVICE=cuda:0
+stamp=$(date +%Y%m%d-%H%M%S)
+export S6_RUN_ROOT="/home/data/xiaoqinchuan/results/s6-rollout/mid-chunk-disconnect-$stamp"
+export S6_LOG="$S6_RUN_ROOT/rollout.log"
+mkdir -p "$S6_RUN_ROOT"
+cd "$OPENPI_ROOT"
+set -o pipefail
+
+CUDA_VISIBLE_DEVICES="$S6_PHYSICAL_GPU" \
+"$LEISAAC_ENV/bin/python" examples/so101/red_cube_to_box_policy_rollout.py \
+  --headless \
+  --enable_cameras \
+  --device "$ISAAC_DEVICE" \
+  --rendering_mode performance \
+  --assets_root "$LEISAAC_ASSETS_ROOT" \
+  --policy_host 127.0.0.1 \
+  --policy_port 18001 \
+  --require_policy_scope simulation-only \
+  --episodes 1 \
+  --seed 42 \
+  --maximum_steps 100 \
+  --actions_per_inference 10 \
+  --match_expert_dynamics \
+  --s6-safety \
+  --s6-inference-timeout-s 1 \
+  --s6-watchdog-timeout-s 0.10 \
+  --s6-action-chunk-ttl-s 2 \
+  2>&1 | tee "$S6_LOG"
+rollout_status=${PIPESTATUS[0]}
+echo "rollout_status=$rollout_status log=$S6_LOG"
+
+grep -nE \
+  'S6_EVENT|fault_type|action_chunk_accepted|action_step_|rollout_fault_detected|action_queue_cancelled|safe_hold_|simulation_terminated|recovery_required|queued_actions_before|queued_actions_after|post_fault_old_action_steps|detection_latency_ms|RED_CUBE_TO_BOX_POLICY_ROLLOUT_' \
+  "$S6_LOG"
+```
+
+该 fault case 的 `rollout_status` 可能为非零，也可能被 Isaac Sim 的 `close(skip_cleanup=True)` 覆盖为 `0`；必须
+以 `RED_CUBE_TO_BOX_POLICY_ROLLOUT_FAILED` 和以下完整事件链判定：
+`rollout_fault_detected -> action_queue_cancelled -> safe_hold_applied -> simulation_terminated -> recovery_required`。
+验收要求 `fault_type=disconnected`、`queued_actions_before>0`、`queued_actions_after=0`、
+`post_fault_old_action_steps=0`，且 `rollout_fault_detected` 后没有新的 `action_step_executed`。出现 traceback 或
+`RED_CUBE_TO_BOX_POLICY_ROLLOUT_FAILED` 本身不构成通过证据。
+
 ## 日志提取
 
 probe 和 fake server 默认直接输出到当前终端。若一次正式验证已经由外层运行流程保存为 `$env:S6_LOG`，以下
@@ -277,7 +438,7 @@ grep -nE \
 
 - probe 不会向 LeIsaac 发送 action；`safe_action=no_action_emitted` 只证明非法 response 没有离开 probe。
 - `--s6-safety` 已实现 TTL、逐步 watchdog、queue clear、单步 measured-pose hold 和仿真关闭；当前已有无 Isaac
-  单元测试及真实 localhost socket 证据，Windows LeIsaac 动态证据仍需按上面的命令生成。
+  单元测试及真实 localhost socket 证据，原生 Linux 或 Windows LeIsaac 动态证据仍需按上面的命令生成。
 - 当前逐步 heartbeat 是同步检查；网络若恰好在 pong 后、`env.step()` 期间断开，会在下一步前检测，因此
   物理断流到检测最多存在一个 action step，检测后旧 action 为零步。
 - camera freeze 尚未进入本批 fake server；后续应使用 LeIsaac camera frame counter 和 observation fingerprint

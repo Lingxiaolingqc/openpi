@@ -191,11 +191,21 @@ def test_s6_fault_path_clears_queue_holds_pose_and_requires_recovery(capsys) -> 
         torch_module=fake_torch,
         detection_started_ns=1,
     )
-    rollout._emit_s6_terminated(context)  # noqa: SLF001
 
+    class FakeSimulationApp:
+        def close(self, *, skip_cleanup: bool) -> None:
+            assert skip_cleanup is True
+            print("FAKE_SIMULATION_APP_CLOSE")
+
+    rollout._close_simulation_app_after_s6_events(  # noqa: SLF001
+        simulation_app=FakeSimulationApp(),
+        s6_fault_context=context,
+    )
+
+    output_lines = capsys.readouterr().out.splitlines()
     records = [
         json.loads(line.removeprefix(safety_log.LOG_PREFIX))
-        for line in capsys.readouterr().out.splitlines()
+        for line in output_lines
         if line.startswith(safety_log.LOG_PREFIX)
     ]
     assert [record["event"] for record in records] == [
@@ -212,6 +222,32 @@ def test_s6_fault_path_clears_queue_holds_pose_and_requires_recovery(capsys) -> 
     assert queue.remaining_actions == 0
     assert queue.post_fault_old_action_steps == 0
     np.testing.assert_array_equal(env.actions, [measured_pose])
+    recovery_line = next(index for index, line in enumerate(output_lines) if '"event":"recovery_required"' in line)
+    phase_line = output_lines.index("RED_CUBE_TO_BOX_POLICY_PHASE=immediate_close")
+    close_line = output_lines.index("FAKE_SIMULATION_APP_CLOSE")
+    assert recovery_line < phase_line < close_line
+
+
+def test_simulation_close_survives_terminal_s6_log_failure(monkeypatch, capsys) -> None:
+    close_calls: list[bool] = []
+
+    def fail_to_emit(_context: dict[str, object]) -> None:
+        raise RuntimeError("injected terminal log failure")
+
+    class FakeSimulationApp:
+        def close(self, *, skip_cleanup: bool) -> None:
+            close_calls.append(skip_cleanup)
+
+    monkeypatch.setattr(rollout, "_emit_s6_terminated", fail_to_emit)
+    rollout._close_simulation_app_after_s6_events(  # noqa: SLF001
+        simulation_app=FakeSimulationApp(),
+        s6_fault_context={"fault_type": "injected"},
+    )
+
+    assert close_calls == [True]
+    output = capsys.readouterr().out
+    assert "S6_TERMINAL_EVENT_FAILED:RuntimeError:injected terminal log failure" in output
+    assert "RED_CUBE_TO_BOX_POLICY_PHASE=immediate_close" in output
 
 
 class _WarmupBool:

@@ -564,6 +564,18 @@ def _emit_s6_terminated(context: dict[str, object]) -> None:
     )
 
 
+def _close_simulation_app_after_s6_events(*, simulation_app, s6_fault_context: dict[str, object] | None) -> None:
+    """Flush terminal S6 evidence before an Isaac close call that may not return."""
+
+    if s6_fault_context is not None:
+        try:
+            _emit_s6_terminated(s6_fault_context)
+        except Exception as event_exc:
+            print(f"S6_TERMINAL_EVENT_FAILED:{type(event_exc).__name__}:{event_exc}", flush=True)
+    print("RED_CUBE_TO_BOX_POLICY_PHASE=immediate_close", flush=True)
+    simulation_app.close(skip_cleanup=True)
+
+
 class _RolloutRecorder:
     """Write sampled JPEG frames, JSONL diagnostics, and an offline viewer."""
 
@@ -1199,10 +1211,10 @@ def main() -> int:
                 env.close()
             except Exception as close_exc:
                 print(f"S6_ENV_CLOSE_FAILED:{type(close_exc).__name__}:{close_exc}", flush=True)
-        print("RED_CUBE_TO_BOX_POLICY_PHASE=immediate_close", flush=True)
-        simulation_app.close(skip_cleanup=True)
-        if s6_fault_context is not None:
-            _emit_s6_terminated(s6_fault_context)
+        _close_simulation_app_after_s6_events(
+            simulation_app=simulation_app,
+            s6_fault_context=s6_fault_context,
+        )
     return status
 
 
