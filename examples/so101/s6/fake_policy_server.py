@@ -92,6 +92,7 @@ class FakePolicyServer:
 
     async def handler(self, websocket: Any) -> None:
         await self._send(websocket, self.metadata)
+        pending_duplicate_response: dict[str, Any] | None = None
         try:
             async for packed_request in websocket:
                 self._request_count += 1
@@ -101,6 +102,17 @@ class FakePolicyServer:
                     await websocket.send("S6 fake server requires OpenPI protocol version 1")
                     await websocket.close(code=1002, reason="protocol v1 required")
                     return
+                if pending_duplicate_response is not None:
+                    duplicate_metadata = pending_duplicate_response[protocol.ENVELOPE_KEY]
+                    self._log_injection(
+                        request_metadata,
+                        response_id=duplicate_metadata["response_id"],
+                        duplicated_request_id=duplicate_metadata["request_id"],
+                        injection_stage="sent_on_next_request",
+                    )
+                    await self._send(websocket, pending_duplicate_response)
+                    pending_duplicate_response = None
+                    continue
                 persistent_faults = {
                     FaultMode.FIXED_DELAY,
                     FaultMode.JITTER,
@@ -169,8 +181,7 @@ class FakePolicyServer:
                     await websocket.close(code=1011, reason="injected mid-chunk disconnect")
                     return
                 if inject and self._mode is FaultMode.DUPLICATE_RESPONSE:
-                    self._log_injection(request_metadata, response_id=response[protocol.ENVELOPE_KEY]["response_id"])
-                    await self._send(websocket, response)
+                    pending_duplicate_response = response
         except websockets.exceptions.ConnectionClosed:
             return
 
