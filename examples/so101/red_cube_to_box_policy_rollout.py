@@ -18,6 +18,9 @@ import numpy as np
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from examples.so101.s6 import action_safety as s6_action_safety
+from examples.so101.s6 import safety_log as s6_log
+
 TASK_PROMPT = "Pick up the red cube and place it inside the green box."
 JOINT_NAMES = (
     "shoulder_pan",
@@ -29,23 +32,38 @@ JOINT_NAMES = (
 )
 
 
+class ActionChunkValidationError(ValueError):
+    """Typed invalid-policy-output error for the S6 safe-state path."""
+
+    def __init__(self, fault_type: str, message: str) -> None:
+        super().__init__(message)
+        self.fault_type = fault_type
+
+
 def normalize_action_chunk(value: object, *, num_envs: int = 1, action_dim: int = 6) -> np.ndarray:
     """Return policy actions as a finite ``(horizon, num_envs, action_dim)`` float32 array."""
 
     if hasattr(value, "detach"):
         value = value.detach().cpu().numpy()
-    actions = np.asarray(value, dtype=np.float32)
+    try:
+        actions = np.asarray(value, dtype=np.float32)
+    except (TypeError, ValueError) as exc:
+        raise ActionChunkValidationError(
+            "invalid_action_shape",
+            f"Policy action chunk cannot be converted to float32: {exc}",
+        ) from exc
     if actions.ndim == 2:
         actions = actions[:, None, :]
     expected_tail = (num_envs, action_dim)
     if actions.ndim != 3 or actions.shape[1:] != expected_tail:
-        raise ValueError(
-            f"Expected policy action chunk shape (horizon, {num_envs}, {action_dim}), got {tuple(actions.shape)}"
+        raise ActionChunkValidationError(
+            "invalid_action_shape",
+            f"Expected policy action chunk shape (horizon, {num_envs}, {action_dim}), got {tuple(actions.shape)}",
         )
     if actions.shape[0] < 1:
-        raise ValueError("Policy returned an empty action chunk")
+        raise ActionChunkValidationError("invalid_action_empty", "Policy returned an empty action chunk")
     if not np.isfinite(actions).all():
-        raise ValueError("Policy returned a non-finite action chunk")
+        raise ActionChunkValidationError("invalid_action_nonfinite", "Policy returned a non-finite action chunk")
     return actions
 
 
@@ -76,6 +94,30 @@ def action_chunk_clip_by_joint(
         raise ValueError("Raw and clipped action chunks must have identical shapes")
     violation = np.abs(raw_actions - clipped_actions)
     return np.count_nonzero(violation, axis=(0, 1)), violation.max(axis=(0, 1))
+
+
+def reject_s6_soft_limit_violations(
+    *,
+    violation_count: int,
+    maximum_violation_rad: float,
+    violation_count_by_joint: np.ndarray,
+    maximum_violation_by_joint_rad: np.ndarray,
+) -> None:
+    """Reject an out-of-range S6 response without clipping or repairing it."""
+
+    if violation_count < 1:
+        return
+    raise s6_action_safety.ActionSafetyError(
+        "invalid_action_out_of_range",
+        f"Policy action chunk has {violation_count} soft-limit violations; "
+        f"maximum violation is {maximum_violation_rad:.6f} rad",
+        details={
+            "soft_limit_violation_count": violation_count,
+            "soft_limit_violation_count_by_joint": [int(value) for value in violation_count_by_joint],
+            "maximum_soft_limit_violation_rad": maximum_violation_rad,
+            "maximum_soft_limit_violation_by_joint_rad": [float(value) for value in maximum_violation_by_joint_rad],
+        },
+    )
 
 
 def reset_with_camera_warmup(
@@ -127,22 +169,32 @@ class OpenPISO101Client:
         camera_names: tuple[str, ...],
         prompt: str,
         required_deployment_scope: str | None = None,
+        s6_client_options: dict[str, float | int] | None = None,
     ) -> None:
         from leisaac.utils.robot_utils import convert_leisaac_action_to_lerobot
         from leisaac.utils.robot_utils import convert_lerobot_action_to_leisaac
         from openpi_client import websocket_client_policy
 
-        self._client = websocket_client_policy.WebsocketClientPolicy(host=host, port=port)
+        client_kwargs: dict[str, object] = {"host": host, "port": port}
+        if s6_client_options is not None:
+            client_kwargs.update(s6_client_options)
+            client_kwargs["protocol_version"] = 1
+        self._client = websocket_client_policy.WebsocketClientPolicy(**client_kwargs)
         self._camera_names = camera_names
         self._prompt = prompt
         self._state_to_motor = convert_leisaac_action_to_lerobot
         self._action_to_sim = convert_lerobot_action_to_leisaac
         self._server_metadata = self._client.get_server_metadata()
         self._last_policy_diagnostics: dict = {}
+        self._last_response_received_unix_ns: int | None = None
+        self._last_response_received_monotonic_ns: int | None = None
         if (
             required_deployment_scope is not None
             and self._server_metadata.get("deployment_scope") != required_deployment_scope
         ):
+            bounded_close = getattr(self._client, "close", None)
+            if callable(bounded_close):
+                bounded_close()
             raise ValueError(
                 "Policy deployment scope does not match rollout requirement: "
                 f"server={self._server_metadata.get('deployment_scope')!r}, "
@@ -156,6 +208,26 @@ class OpenPISO101Client:
     @property
     def last_policy_diagnostics(self) -> dict:
         return self._last_policy_diagnostics
+
+    @property
+    def connection_epoch(self) -> int:
+        return self._client.connection_epoch
+
+    @property
+    def last_request_metadata(self) -> dict | None:
+        return self._client.last_request_metadata
+
+    @property
+    def last_response_metadata(self) -> dict | None:
+        return self._client.last_response_metadata
+
+    @property
+    def last_response_received_unix_ns(self) -> int | None:
+        return self._last_response_received_unix_ns
+
+    @property
+    def last_response_received_monotonic_ns(self) -> int | None:
+        return self._last_response_received_monotonic_ns
 
     def reset(self) -> None:
         """Reset stateful remote policies when the server advertises support."""
@@ -173,6 +245,8 @@ class OpenPISO101Client:
         request["state"] = self._state_to_motor(observation["joint_pos"]).squeeze(0).astype(np.float32)
         request["prompt"] = self._prompt
         response = self._client.infer(request)
+        self._last_response_received_monotonic_ns = time.monotonic_ns()
+        self._last_response_received_unix_ns = time.time_ns()
         if "actions" not in response:
             raise ValueError(f"Policy response does not contain actions: {sorted(response)}")
         self._last_policy_diagnostics = response.get("policy_diagnostics", {})
@@ -185,7 +259,14 @@ class OpenPISO101Client:
         simulator_actions = self._action_to_sim(motor_actions)
         return np.asarray(simulator_actions, dtype=np.float32)[:, None, :]
 
+    def health_check(self, *, timeout_s: float) -> None:
+        self._client.health_check(timeout_s=timeout_s)
+
     def close(self) -> None:
+        bounded_close = getattr(self._client, "close", None)
+        if callable(bounded_close):
+            bounded_close()
+            return
         websocket = getattr(self._client, "_ws", None)
         if websocket is not None:
             websocket.close()
@@ -208,6 +289,22 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--maximum_steps", type=int, default=2400)
     parser.add_argument("--actions_per_inference", type=int, default=10)
+    parser.add_argument(
+        "--s6-safety",
+        action="store_true",
+        help=(
+            "Enable protocol-v1 correlation, strict action rejection, per-step watchdog, chunk TTL, "
+            "and fail-closed stop."
+        ),
+    )
+    parser.add_argument("--s6-connect-timeout-s", type=float, default=10.0)
+    parser.add_argument("--s6-connect-attempt-timeout-s", type=float, default=2.0)
+    parser.add_argument("--s6-metadata-timeout-s", type=float, default=2.0)
+    parser.add_argument("--s6-send-timeout-s", type=float, default=2.0)
+    parser.add_argument("--s6-inference-timeout-s", type=float, default=120.0)
+    parser.add_argument("--s6-watchdog-timeout-s", type=float, default=1.0)
+    parser.add_argument("--s6-close-timeout-s", type=float, default=2.0)
+    parser.add_argument("--s6-action-chunk-ttl-s", type=float, default=2.0)
     parser.add_argument("--success_stable_steps", type=int, default=30)
     parser.add_argument("--minimum_lift_m", type=float, default=0.03)
     parser.add_argument("--minimum_success_rate", type=float, default=1.0)
@@ -248,6 +345,197 @@ def _numpy_row(tensor) -> np.ndarray:
 def _rounded(values, digits: int = 5) -> tuple[float, ...]:
     array = values.detach().cpu().numpy() if hasattr(values, "detach") else np.asarray(values)
     return tuple(round(float(value), digits) for value in array.reshape(-1))
+
+
+def _emit_s6_event(
+    event: str,
+    *,
+    state_from: s6_log.SafeState,
+    state_to: s6_log.SafeState,
+    correlation: dict[str, object],
+    **kwargs,
+) -> None:
+    print(
+        s6_log.format_s6_event(
+            s6_log.build_s6_event(
+                event,
+                state_from=state_from,
+                state_to=state_to,
+                **correlation,
+                **kwargs,
+            )
+        ),
+        flush=True,
+    )
+
+
+def _s6_correlation(policy: OpenPISO101Client | None, queue: s6_action_safety.S6ActionQueue) -> dict[str, object]:
+    chunk = queue.chunk
+    if chunk is not None:
+        source = chunk.correlation
+        return {
+            "request_id": source.request_id,
+            "response_id": source.response_id,
+            "observation_id": source.observation_id,
+            "action_chunk_id": chunk.action_chunk_id,
+            "connection_epoch": source.connection_epoch,
+        }
+    if policy is None:
+        return {
+            "request_id": None,
+            "response_id": None,
+            "observation_id": None,
+            "action_chunk_id": None,
+            "connection_epoch": None,
+        }
+    request_metadata = policy.last_request_metadata or {}
+    response_metadata = policy.last_response_metadata or {}
+    if response_metadata.get("request_id") != request_metadata.get("request_id"):
+        response_metadata = {}
+    return {
+        "request_id": request_metadata.get("request_id"),
+        "response_id": response_metadata.get("response_id"),
+        "observation_id": request_metadata.get("observation_id"),
+        "action_chunk_id": None,
+        "connection_epoch": request_metadata.get("connection_epoch", policy.connection_epoch),
+    }
+
+
+def _s6_fault_type(exc: BaseException) -> str:
+    fault_type = getattr(exc, "fault_type", None)
+    if fault_type is None:
+        return "rollout_exception"
+    return str(getattr(fault_type, "value", fault_type))
+
+
+def _enter_s6_safe_state(
+    *,
+    exc: BaseException,
+    queue: s6_action_safety.S6ActionQueue,
+    policy: OpenPISO101Client | None,
+    env,
+    robot,
+    joint_ids: list[int] | None,
+    dynamic_gripper_reset,
+    torch_module,
+    detection_started_ns: int | None,
+) -> dict[str, object]:
+    fault_type = _s6_fault_type(exc)
+    correlation = _s6_correlation(policy, queue)
+    now_ns = time.monotonic_ns()
+    detection_latency_ms = (
+        None if detection_started_ns is None else max(0.0, (now_ns - detection_started_ns) / 1_000_000.0)
+    )
+    details = {"error_type": type(exc).__name__, "message": str(exc)}
+    details.update(getattr(exc, "details", {}))
+    details["max_undetected_old_action_steps"] = 1
+    _emit_s6_event(
+        "rollout_fault_detected",
+        state_from=s6_log.SafeState.NORMAL,
+        state_to=s6_log.SafeState.FAULT_DETECTED,
+        correlation=correlation,
+        fault_type=fault_type,
+        queued_actions_before=queue.remaining_actions,
+        detection_latency_ms=detection_latency_ms,
+        safe_action="pending_measured_pose_hold",
+        details=details,
+    )
+
+    queued_before, queued_after = queue.cancel()
+    _emit_s6_event(
+        "action_queue_cancelled",
+        state_from=s6_log.SafeState.FAULT_DETECTED,
+        state_to=s6_log.SafeState.ACTION_QUEUE_CANCELLED,
+        correlation=correlation,
+        fault_type=fault_type,
+        queued_actions_before=queued_before,
+        queued_actions_after=queued_after,
+        detection_latency_ms=detection_latency_ms,
+        safe_action="measured_pose_hold",
+        details={
+            "post_fault_old_action_steps": queue.post_fault_old_action_steps,
+            "queue_clear_verified": queued_after == 0,
+        },
+    )
+
+    hold_applied = False
+    hold_details: dict[str, object] = {"post_fault_old_action_steps": queue.post_fault_old_action_steps}
+    try:
+        if env is None or robot is None or joint_ids is None or torch_module is None:
+            raise RuntimeError("simulation state is not available for measured-pose hold")
+        hold_action = robot.data.joint_pos[:, joint_ids].clone()
+        if not bool(torch_module.isfinite(hold_action).all()):
+            raise RuntimeError("measured-pose hold contains NaN or infinity")
+        if dynamic_gripper_reset is not None:
+            dynamic_gripper_reset(env, "so101leader")
+        _, hold_rewards, hold_terminated, hold_truncated, _ = env.step(hold_action)
+        hold_applied = True
+        hold_details.update(
+            {
+                "hold_steps": 1,
+                "hold_rewards_finite": bool(torch_module.isfinite(hold_rewards).all()),
+                "hold_terminated": bool(hold_terminated.any()),
+                "hold_truncated": bool(hold_truncated.any()),
+            }
+        )
+        _emit_s6_event(
+            "safe_hold_applied",
+            state_from=s6_log.SafeState.ACTION_QUEUE_CANCELLED,
+            state_to=s6_log.SafeState.SAFE_HOLD,
+            correlation=correlation,
+            fault_type=fault_type,
+            queued_actions_before=queued_before,
+            queued_actions_after=queued_after,
+            safe_action="measured_pose_hold",
+            details=hold_details,
+        )
+    except Exception as hold_exc:
+        hold_details.update({"hold_error_type": type(hold_exc).__name__, "hold_error": str(hold_exc)})
+        _emit_s6_event(
+            "safe_hold_failed",
+            state_from=s6_log.SafeState.ACTION_QUEUE_CANCELLED,
+            state_to=s6_log.SafeState.ACTION_QUEUE_CANCELLED,
+            correlation=correlation,
+            fault_type=fault_type,
+            queued_actions_before=queued_before,
+            queued_actions_after=queued_after,
+            safe_action="terminate_without_hold",
+            details=hold_details,
+        )
+    return {
+        "fault_type": fault_type,
+        "correlation": correlation,
+        "queued_actions_before": queued_before,
+        "queued_actions_after": queued_after,
+        "post_fault_old_action_steps": queue.post_fault_old_action_steps,
+        "hold_applied": hold_applied,
+    }
+
+
+def _emit_s6_terminated(context: dict[str, object]) -> None:
+    correlation = context["correlation"]
+    state_from = s6_log.SafeState.SAFE_HOLD if context["hold_applied"] else s6_log.SafeState.ACTION_QUEUE_CANCELLED
+    common = {
+        "correlation": correlation,
+        "fault_type": context["fault_type"],
+        "queued_actions_before": context["queued_actions_before"],
+        "queued_actions_after": context["queued_actions_after"],
+        "details": {"post_fault_old_action_steps": context["post_fault_old_action_steps"]},
+    }
+    _emit_s6_event(
+        "simulation_terminated",
+        state_from=state_from,
+        state_to=s6_log.SafeState.SIMULATION_TERMINATED,
+        safe_action="simulation_closed",
+        **common,
+    )
+    _emit_s6_event(
+        "recovery_required",
+        state_from=s6_log.SafeState.SIMULATION_TERMINATED,
+        state_to=s6_log.SafeState.RECOVERY_REQUIRED,
+        safe_action="no_automatic_reconnect",
+        **common,
+    )
 
 
 class _RolloutRecorder:
@@ -372,6 +660,22 @@ def main() -> int:
         parser.error("--reset_camera_warmup_steps must be non-negative")
     if args.reset_camera_refreshes < 0:
         parser.error("--reset_camera_refreshes must be non-negative")
+    s6_timeout_values = (
+        args.s6_connect_timeout_s,
+        args.s6_connect_attempt_timeout_s,
+        args.s6_metadata_timeout_s,
+        args.s6_send_timeout_s,
+        args.s6_inference_timeout_s,
+        args.s6_watchdog_timeout_s,
+        args.s6_close_timeout_s,
+        args.s6_action_chunk_ttl_s,
+    )
+    if any(not math.isfinite(value) or value <= 0.0 for value in s6_timeout_values):
+        parser.error("all S6 timeout and action chunk TTL values must be finite and positive")
+    if args.s6_safety and args.match_expert_dynamics:
+        parser.error(
+            "--s6-safety cannot be combined with --match_expert_dynamics because S6 rejects out-of-range actions"
+        )
     if not 0.0 <= args.minimum_success_rate <= 1.0:
         parser.error("--minimum_success_rate must be between 0 and 1")
     assets_root = Path(args.assets_root).expanduser().resolve()
@@ -385,6 +689,11 @@ def main() -> int:
     print(f"maximum_steps: {args.maximum_steps}", flush=True)
     print(f"actions_per_inference: {args.actions_per_inference}", flush=True)
     print(f"policy_match_expert_dynamics: {args.match_expert_dynamics}", flush=True)
+    print(f"s6_safety_enabled: {args.s6_safety}", flush=True)
+    if args.s6_safety:
+        print(f"s6_inference_timeout_s: {args.s6_inference_timeout_s}", flush=True)
+        print(f"s6_watchdog_timeout_s: {args.s6_watchdog_timeout_s}", flush=True)
+        print(f"s6_action_chunk_ttl_s: {args.s6_action_chunk_ttl_s}", flush=True)
 
     from isaaclab.app import AppLauncher
 
@@ -393,6 +702,13 @@ def main() -> int:
     status = 1
     env = None
     policy = None
+    robot = None
+    joint_ids = None
+    torch_module = None
+    dynamic_gripper_reset = None
+    active_s6_queue = s6_action_safety.S6ActionQueue() if args.s6_safety else None
+    s6_operation_started_ns = None
+    s6_fault_context = None
     try:
         import gymnasium as gym
         from isaaclab_tasks.utils import parse_env_cfg
@@ -402,6 +718,8 @@ def main() -> int:
         import red_cube_to_box_task
         from red_cube_to_box_task import mdp
         import torch
+
+        torch_module = torch
 
         env_cfg = parse_env_cfg(red_cube_to_box_task.TASK_ID, device=args.device, num_envs=1)
         env_cfg.use_teleop_device("so101leader")
@@ -420,6 +738,9 @@ def main() -> int:
         joint_ids = [list(robot.data.joint_names).index(name) for name in JOINT_NAMES]
         soft_limits = robot.data.soft_joint_pos_limits[0, joint_ids].detach().cpu().numpy()
         camera_names = tuple(name for name in ("front", "wrist") if name in env.scene.sensors)
+        dynamic_gripper_reset = (
+            dynamic_reset_gripper_effort_limit_sim if env.cfg.dynamic_reset_gripper_effort_limit else None
+        )
 
         observations = reset_with_camera_warmup(
             env,
@@ -428,17 +749,28 @@ def main() -> int:
             warmup_steps=args.reset_camera_warmup_steps,
             camera_names=camera_names,
             camera_refreshes=args.reset_camera_refreshes,
-            dynamic_gripper_reset=(
-                dynamic_reset_gripper_effort_limit_sim if env.cfg.dynamic_reset_gripper_effort_limit else None
-            ),
+            dynamic_gripper_reset=dynamic_gripper_reset,
         )
         camera_names = _validate_camera(observations)
+        s6_client_options = None
+        if args.s6_safety:
+            s6_client_options = {
+                "connect_timeout_s": args.s6_connect_timeout_s,
+                "connect_attempt_timeout_s": args.s6_connect_attempt_timeout_s,
+                "metadata_timeout_s": args.s6_metadata_timeout_s,
+                "send_timeout_s": args.s6_send_timeout_s,
+                "inference_timeout_s": args.s6_inference_timeout_s,
+                "heartbeat_timeout_s": args.s6_watchdog_timeout_s,
+                "close_timeout_s": args.s6_close_timeout_s,
+            }
+        s6_operation_started_ns = time.monotonic_ns()
         policy = OpenPISO101Client(
             host=args.policy_host,
             port=args.policy_port,
             camera_names=camera_names,
             prompt=args.prompt,
             required_deployment_scope=args.require_policy_scope,
+            s6_client_options=s6_client_options,
         )
         print("RED_CUBE_TO_BOX_POLICY_CONNECTED_OK", flush=True)
         print(f"policy_server_metadata: {policy.server_metadata}", flush=True)
@@ -449,12 +781,15 @@ def main() -> int:
         print(f"policy_robot_gravity_disabled: {args.match_expert_dynamics}", flush=True)
         print(f"policy_joint_damping_override: {10.0 if args.match_expert_dynamics else None}", flush=True)
         print(f"policy_action_soft_limit_clip_enabled: {not args.match_expert_dynamics}", flush=True)
+        print(f"policy_protocol_v1_required: {args.s6_safety}", flush=True)
         print("RED_CUBE_TO_BOX_POLICY_PHASE=evaluating", flush=True)
 
         successes = 0
         episode_results: list[dict[str, object]] = []
         with torch.inference_mode():
             for episode_index in range(args.episodes):
+                if args.s6_safety:
+                    active_s6_queue = s6_action_safety.S6ActionQueue()
                 if episode_index:
                     observations = reset_with_camera_warmup(
                         env,
@@ -463,12 +798,9 @@ def main() -> int:
                         warmup_steps=args.reset_camera_warmup_steps,
                         camera_names=camera_names,
                         camera_refreshes=args.reset_camera_refreshes,
-                        dynamic_gripper_reset=(
-                            dynamic_reset_gripper_effort_limit_sim
-                            if env.cfg.dynamic_reset_gripper_effort_limit
-                            else None
-                        ),
+                        dynamic_gripper_reset=dynamic_gripper_reset,
                     )
+                s6_operation_started_ns = time.monotonic_ns()
                 policy.reset()
                 recorder = None
                 if args.record_dir is not None:
@@ -513,6 +845,14 @@ def main() -> int:
                     and stable_steps < args.success_stable_steps
                     and not unexpected_reset
                 ):
+                    if (
+                        args.s6_safety
+                        and active_s6_queue is not None
+                        and active_s6_queue.chunk is not None
+                        and active_s6_queue.remaining_actions == 0
+                    ):
+                        active_s6_queue.discard()
+                    s6_operation_started_ns = time.monotonic_ns()
                     inference_start = time.perf_counter()
                     raw_chunk = policy.get_action(observations["policy"])
                     inference_latency_ms = 1000.0 * (time.perf_counter() - inference_start)
@@ -527,6 +867,13 @@ def main() -> int:
                         raw_action_chunk,
                         clipped_action_chunk,
                     )
+                    if args.s6_safety:
+                        reject_s6_soft_limit_violations(
+                            violation_count=chunk_violation_count,
+                            maximum_violation_rad=chunk_max_violation,
+                            violation_count_by_joint=chunk_violation_by_joint,
+                            maximum_violation_by_joint_rad=chunk_max_violation_by_joint,
+                        )
                     if args.match_expert_dynamics:
                         action_chunk = raw_action_chunk
                         chunk_clip_count = 0
@@ -578,18 +925,111 @@ def main() -> int:
                     )
 
                     steps_from_chunk = min(args.actions_per_inference, action_chunk.shape[0])
+                    if args.s6_safety:
+                        if active_s6_queue is None:
+                            raise RuntimeError("S6 action queue was not initialized")
+                        guarded_chunk = s6_action_safety.GuardedActionChunk.create(
+                            action_chunk[:steps_from_chunk],
+                            request_metadata=policy.last_request_metadata,
+                            response_metadata=policy.last_response_metadata,
+                            ttl_s=args.s6_action_chunk_ttl_s,
+                            received_unix_ns=policy.last_response_received_unix_ns,
+                            received_monotonic_ns=policy.last_response_received_monotonic_ns,
+                        )
+                        active_s6_queue.load(guarded_chunk)
+                        source = guarded_chunk.correlation
+                        _emit_s6_event(
+                            "action_chunk_accepted",
+                            state_from=s6_log.SafeState.NORMAL,
+                            state_to=s6_log.SafeState.NORMAL,
+                            correlation=_s6_correlation(policy, active_s6_queue),
+                            queued_actions_before=0,
+                            queued_actions_after=active_s6_queue.remaining_actions,
+                            details={
+                                "request_created_unix_ns": source.request_created_unix_ns,
+                                "server_received_unix_ns": source.server_received_unix_ns,
+                                "server_completed_unix_ns": source.server_completed_unix_ns,
+                                "chunk_received_unix_ns": guarded_chunk.received_unix_ns,
+                                "chunk_received_monotonic_ns": guarded_chunk.received_monotonic_ns,
+                                "chunk_expires_monotonic_ns": guarded_chunk.expires_monotonic_ns,
+                                "chunk_ttl_s": args.s6_action_chunk_ttl_s,
+                                "policy_horizon": int(action_chunk.shape[0]),
+                                "queued_horizon": steps_from_chunk,
+                            },
+                        )
                     for action_index in range(steps_from_chunk):
                         if completed_steps >= args.maximum_steps or stable_steps >= args.success_stable_steps:
                             break
-                        action_numpy = action_chunk[action_index]
+                        if args.s6_safety:
+                            if active_s6_queue is None:
+                                raise RuntimeError("S6 action queue was not initialized")
+                            s6_operation_started_ns = time.monotonic_ns()
+                            policy.health_check(timeout_s=args.s6_watchdog_timeout_s)
+                            watchdog_latency_ms = (time.monotonic_ns() - s6_operation_started_ns) / 1_000_000.0
+                            action_numpy = active_s6_queue.peek_next(
+                                current_connection_epoch=policy.connection_epoch,
+                                now_monotonic_ns=time.monotonic_ns(),
+                            )
+                            active_chunk = active_s6_queue.chunk
+                            if active_chunk is None:
+                                raise RuntimeError("S6 action queue lost its active chunk")
+                            _emit_s6_event(
+                                "action_step_authorized",
+                                state_from=s6_log.SafeState.NORMAL,
+                                state_to=s6_log.SafeState.NORMAL,
+                                correlation=_s6_correlation(policy, active_s6_queue),
+                                queued_actions_before=active_s6_queue.remaining_actions,
+                                queued_actions_after=active_s6_queue.remaining_actions,
+                                detection_latency_ms=watchdog_latency_ms,
+                                details={
+                                    "episode": episode_index,
+                                    "environment_step_before": completed_steps,
+                                    "action_index": active_chunk.next_action_index,
+                                    "watchdog": "pong_received",
+                                },
+                            )
+                        else:
+                            action_numpy = action_chunk[action_index]
                         action = torch.as_tensor(action_numpy, dtype=torch.float32, device=env.device)
                         if env.cfg.dynamic_reset_gripper_effort_limit:
                             dynamic_reset_gripper_effort_limit_sim(env, "so101leader")
                         observations, rewards, terminated, truncated, _ = env.step(action)
+                        if args.s6_safety:
+                            if active_s6_queue is None:
+                                raise RuntimeError("S6 action queue was not initialized")
+                            active_chunk = active_s6_queue.chunk
+                            if active_chunk is None:
+                                raise RuntimeError("S6 action queue lost its active chunk")
+                            executed_action_index = active_chunk.next_action_index
+                            active_s6_queue.mark_executed()
+                            _emit_s6_event(
+                                "action_step_executed",
+                                state_from=s6_log.SafeState.NORMAL,
+                                state_to=s6_log.SafeState.NORMAL,
+                                correlation=_s6_correlation(policy, active_s6_queue),
+                                queued_actions_before=active_s6_queue.remaining_actions + 1,
+                                queued_actions_after=active_s6_queue.remaining_actions,
+                                details={
+                                    "episode": episode_index,
+                                    "environment_step_after": completed_steps + 1,
+                                    "action_index": executed_action_index,
+                                    "post_fault_old_action_steps": active_s6_queue.post_fault_old_action_steps,
+                                },
+                            )
                         completed_steps += 1
                         rewards_finite &= bool(torch.isfinite(rewards).all())
+                        if args.s6_safety and not rewards_finite:
+                            raise s6_action_safety.ActionSafetyError(
+                                "simulation_nonfinite_reward",
+                                "Simulation returned a NaN or infinite reward during S6 execution",
+                            )
                         step_reset = bool(terminated.any()) or bool(truncated.any())
                         unexpected_reset |= step_reset
+                        if args.s6_safety and step_reset:
+                            raise s6_action_safety.ActionSafetyError(
+                                "simulation_unexpected_reset",
+                                "Simulation terminated or truncated during an S6 action chunk",
+                            )
                         pick_cube = bool(observations["subtask_terms"]["pick_cube"][0].item())
                         ever_grasped |= pick_cube
                         cube_z = float(cube.data.root_pos_w[0, 2].item())
@@ -608,6 +1048,20 @@ def main() -> int:
                         if step_reset:
                             break
 
+                if args.s6_safety and active_s6_queue is not None and active_s6_queue.chunk is not None:
+                    discard_correlation = _s6_correlation(policy, active_s6_queue)
+                    queued_before, queued_after = active_s6_queue.discard()
+                    if queued_before:
+                        _emit_s6_event(
+                            "action_queue_discarded",
+                            state_from=s6_log.SafeState.NORMAL,
+                            state_to=s6_log.SafeState.NORMAL,
+                            correlation=discard_correlation,
+                            queued_actions_before=queued_before,
+                            queued_actions_after=queued_after,
+                            details={"reason": "normal_episode_boundary"},
+                        )
+
                 settled_inside = stable_steps >= args.success_stable_steps
                 success = bool(settled_inside and ever_lifted and rewards_finite and not unexpected_reset)
                 successes += int(success)
@@ -624,6 +1078,10 @@ def main() -> int:
                     "completed_steps": completed_steps,
                     "inference_count": inference_count,
                     "mean_inference_latency_ms": float(np.mean(inference_latencies_ms)),
+                    "s6_safety_enabled": args.s6_safety,
+                    "s6_post_fault_old_action_steps": (
+                        None if active_s6_queue is None else active_s6_queue.post_fault_old_action_steps
+                    ),
                     "policy_action_clip_count": clip_count,
                     "policy_action_clip_count_by_joint": clip_count_by_joint.tolist(),
                     "policy_action_max_clip_rad": maximum_clip_rad,
@@ -674,16 +1132,42 @@ def main() -> int:
             )
         print("RED_CUBE_TO_BOX_POLICY_ROLLOUT_OK", flush=True)
         status = 0
-    except Exception:
+    except Exception as exc:
+        if args.s6_safety and active_s6_queue is not None:
+            try:
+                s6_fault_context = _enter_s6_safe_state(
+                    exc=exc,
+                    queue=active_s6_queue,
+                    policy=policy,
+                    env=env,
+                    robot=robot,
+                    joint_ids=joint_ids,
+                    dynamic_gripper_reset=dynamic_gripper_reset,
+                    torch_module=torch_module,
+                    detection_started_ns=s6_operation_started_ns,
+                )
+            except Exception as safe_state_exc:
+                print(
+                    f"S6_SAFE_STATE_HANDLER_FAILED:{type(safe_state_exc).__name__}:{safe_state_exc}",
+                    flush=True,
+                )
         traceback.print_exc()
         print("RED_CUBE_TO_BOX_POLICY_ROLLOUT_FAILED", flush=True)
     finally:
         if policy is not None:
-            policy.close()
+            try:
+                policy.close()
+            except Exception as close_exc:
+                print(f"S6_POLICY_CLOSE_FAILED:{type(close_exc).__name__}:{close_exc}", flush=True)
         if env is not None:
-            env.close()
+            try:
+                env.close()
+            except Exception as close_exc:
+                print(f"S6_ENV_CLOSE_FAILED:{type(close_exc).__name__}:{close_exc}", flush=True)
         print("RED_CUBE_TO_BOX_POLICY_PHASE=immediate_close", flush=True)
         simulation_app.close(skip_cleanup=True)
+        if s6_fault_context is not None:
+            _emit_s6_terminated(s6_fault_context)
     return status
 
 

@@ -45,3 +45,9 @@ def test_fake_server_rejects_nonfinite_configuration() -> None:
     args = fake_policy_server.build_parser().parse_args(["--delay-s", "nan"])
     with pytest.raises(ValueError, match="finite"):
         fake_policy_server.validate_args(args)
+
+
+def test_fake_server_rejects_nonpositive_mid_chunk_disconnect_delay() -> None:
+    args = fake_policy_server.build_parser().parse_args(["--disconnect-after-response-s", "0"])
+    with pytest.raises(ValueError, match="disconnect-after-response-s"):
+        fake_policy_server.validate_args(args)

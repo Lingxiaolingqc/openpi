@@ -97,9 +97,9 @@ camera capture 或数据 converter。action queue 中止、仿真 safe hold、ca
 
 这些验证不包含 Isaac Sim，也没有验证 chunk 执行中断流时的最大旧动作步数。
 
-## 下一批边界
+## 第一批结束时的下一批边界
 
-下一批才修改 `red_cube_to_box_policy_rollout.py`，建议只以可选 `--s6-safety` 模式接入：
+以下列表记录第一批结束时的计划；其中 1 到 5 已在后述阶段 C 完成，第 6 项 camera freeze 仍未完成：
 
 1. action chunk 增加来源 request/response/epoch、接收时间和 TTL；
 2. 每个 `env.step()` 前检查 client watchdog 状态、chunk epoch 和 TTL；
@@ -116,3 +116,34 @@ Linux 按 README 运行 `uv run python examples/so101/s6/probe_client.py` 时，
 其他 SO-101 命令行脚本的入口方式：仅当作为文件直接执行时，根据 `__file__` 将仓库根目录加入
 `sys.path`；作为 package 导入或使用 `python -m` 时不修改路径。新增子进程回归测试，在没有仓库根目录
 `PYTHONPATH` 的条件下执行 `probe_client.py --help`，验证直接文件入口可以完成所有导入。
+
+## 阶段 C：action chunk fail-closed 执行（2026-08-20）
+
+新增 `action_safety.py`，将每个计划执行的 action chunk 绑定 protocol v1 的 request ID、response ID、
+observation ID、client session、connection epoch、服务端时间戳、接收时间和有限 TTL。queue 不允许在旧 chunk
+仍有剩余 action 时被新 chunk 覆盖，不允许 epoch 变化或 TTL 过期后的 action 离开队列；fault cancellation
+将剩余数量原子变为零，检测后任何 action 标记都会作为独立安全不变量违规。
+
+`red_cube_to_box_policy_rollout.py` 新增 opt-in `--s6-safety`：
+
+- 强制 WebSocket protocol v1，并向 adapter 传入有限 connect/send/recv/heartbeat/close timeout；
+- 每个 `env.step()` 前同步执行 heartbeat，再检查 chunk epoch 和 TTL；
+- shape、empty、NaN/Inf 和 soft-limit 越界全部拒绝；S6 不进入原有 clip 路径，也禁止与
+  `--match_expert_dynamics` 同时启用；
+- 每个 chunk 和 action step 输出 request/response/observation/chunk ID 及时间关联 `S6_EVENT`；
+- 任意 fault 后记录 `fault_detected → action_queue_cancelled → safe_hold → simulation_terminated →
+  recovery_required`，queue 清零后执行一次 measured-pose hold，再关闭环境和 SimulationApp；
+- 不调用 reconnect。恢复只能重新启动进程并再次显式传入 `--s6-safety`。
+
+fake server 新增 `disconnect-after-response`：先返回合法 10 步 chunk，再经过有限延迟关闭连接，用于在下一步
+heartbeat 验证 queue cancellation。由于同步 heartbeat 与 `env.step()` 之间仍存在竞态，物理断流到检测的
+理论上界是一帧；fault 检测后旧 action 执行上界为零步。
+
+无 Isaac 测试覆盖 TTL、epoch、correlation、queue replacement、严格越界拒绝和完整 safe-state 顺序。
+本机真实 WebSocket 验证得到：服务端返回 10 步 chunk 后 50 ms 断开，下一次 heartbeat 检测
+`disconnected`，client 状态为 `faulted`，queue `10 → 0`，`post_fault_old_action_steps=0`。本批未启动 Isaac
+Sim；Windows 原生 LeIsaac 动态证据仍需按 `s6/README.md` 命令生成。
+
+提交前验证：Ruff check 和 format check 通过；`websockets 16.0` 的完整 client/server/S6/rollout 相关测试
+`65 passed`；Windows LeIsaac Python 下不启动 Isaac 的新增 action-safety/rollout 测试 `23 passed`。这些结果
+不能替代 Windows 原生 LeIsaac 中途断流动态验收。

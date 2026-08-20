@@ -33,6 +33,7 @@ class FaultMode(enum.Enum):
     INFERENCE_TIMEOUT = "inference-timeout"
     DROP_RESPONSE = "drop-response"
     DISCONNECT = "disconnect"
+    DISCONNECT_AFTER_RESPONSE = "disconnect-after-response"
     SERVER_EXIT = "server-exit"
     BAD_SHAPE = "bad-shape"
     NAN_ACTION = "nan-action"
@@ -158,6 +159,15 @@ class FakePolicyServer:
                     self._log_injection(request_metadata)
                     response[protocol.ENVELOPE_KEY]["request_id"] = f"stale-{request_metadata['request_id']}"
                 await self._send(websocket, response)
+                if inject and self._mode is FaultMode.DISCONNECT_AFTER_RESPONSE:
+                    self._log_injection(
+                        request_metadata,
+                        response_id=response[protocol.ENVELOPE_KEY]["response_id"],
+                        disconnect_after_response_s=self._args.disconnect_after_response_s,
+                    )
+                    await asyncio.sleep(self._args.disconnect_after_response_s)
+                    await websocket.close(code=1011, reason="injected mid-chunk disconnect")
+                    return
                 if inject and self._mode is FaultMode.DUPLICATE_RESPONSE:
                     self._log_injection(request_metadata, response_id=response[protocol.ENVELOPE_KEY]["response_id"])
                     await self._send(websocket, response)
@@ -189,6 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--jitter-min-s", type=float, default=0.05)
     parser.add_argument("--jitter-max-s", type=float, default=0.50)
     parser.add_argument("--stall-s", type=float, default=60.0)
+    parser.add_argument("--disconnect-after-response-s", type=float, default=0.05)
     parser.add_argument("--send-timeout-s", type=float, default=5.0)
     parser.add_argument("--action-horizon", type=int, default=10)
     parser.add_argument("--action-dim", type=int, default=6)
@@ -207,6 +218,7 @@ def validate_args(args: argparse.Namespace) -> None:
         args.jitter_min_s,
         args.jitter_max_s,
         args.stall_s,
+        args.disconnect_after_response_s,
         args.send_timeout_s,
         args.action_value,
     )
@@ -214,8 +226,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("delay, jitter, stall, send timeout, and action value must be finite")
     if args.delay_s < 0.0 or args.jitter_min_s < 0.0 or args.jitter_max_s < args.jitter_min_s:
         raise ValueError("delay and jitter bounds are invalid")
-    if args.stall_s <= 0.0 or args.send_timeout_s <= 0.0:
-        raise ValueError("stall-s and send-timeout-s must be positive")
+    if args.stall_s <= 0.0 or args.disconnect_after_response_s <= 0.0 or args.send_timeout_s <= 0.0:
+        raise ValueError("stall-s, disconnect-after-response-s, and send-timeout-s must be positive")
 
 
 def main() -> int:

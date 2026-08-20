@@ -1061,8 +1061,8 @@ ForEach-Object { "$($_.LineNumber):$($_.Line)" }
 
 ### S6 local policy-service fault harness
 
-The first S6 implementation is isolated under [`s6/`](s6/). It adds a versioned WebSocket request/response envelope,
-bounded client waits, typed transport/protocol faults, stale/duplicate response rejection, a local fake policy server,
-and a command-line probe. Start with [`s6/README.md`](s6/README.md). These tools do not start Isaac Sim and must not be
-used to inject faults into a powered robot. Action-chunk cancellation and LeIsaac safe-state integration remain a
-separate follow-up gate; the current S6 work does not replace S5 closed-loop checkpoint acceptance.
+S6 is isolated under [`s6/`](s6/). It includes the versioned protocol, bounded client waits, fake server/probe, and the
+opt-in rollout `--s6-safety` path with action-chunk TTL, per-step watchdog, strict invalid-action rejection, queue clear,
+measured-pose hold, simulation termination, and manual recovery requirement. Start with [`s6/README.md`](s6/README.md).
+Fault injection remains fake-server plus Windows-native simulation only and must not be used on a powered robot. S6 does
+not replace S5 closed-loop checkpoint acceptance.
