@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import argparse
 import math
+from pathlib import Path
+import sys
 import time
 
 import numpy as np
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
 from openpi_client import websocket_client_policy
 from openpi_client import websocket_policy_protocol as protocol
 

@@ -11,6 +11,10 @@
 - `safety_log.py`：统一 `S6_EVENT` JSON 日志；
 - `IMPLEMENTATION.md`：本批代码边界、安全不变量、测试结果和未完成项。
 
+`probe_client.py` 同时支持本文档使用的文件路径直接执行和
+`python -m examples.so101.s6.probe_client` 模块执行。直接执行时会从脚本位置解析仓库根目录，不依赖当前
+shell 已额外配置 `PYTHONPATH`；命令仍应从 OpenPI 仓库根目录运行，以便路径和环境保持一致。
+
 ## Windows 准备
 
 在 PowerShell 中把仓库的 `openpi-client` 安装到指定 LeIsaac 环境。该操作只安装 Python client 依赖，不运行

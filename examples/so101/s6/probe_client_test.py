@@ -1,9 +1,37 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 
 from examples.so101.s6 import probe_client
+
+
+def test_direct_script_entrypoint_resolves_repo_package() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    environment = os.environ.copy()
+    client_source = str(repo_root / "packages" / "openpi-client" / "src")
+    existing_pythonpath = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = (
+        client_source if not existing_pythonpath else os.pathsep.join((client_source, existing_pythonpath))
+    )
+
+    completed = subprocess.run(
+        [sys.executable, str(repo_root / "examples" / "so101" / "s6" / "probe_client.py"), "--help"],
+        cwd=repo_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Exercise the S6 WebSocket client" in completed.stdout
 
 
 def test_validate_action_chunk_accepts_finite_in_range_actions() -> None:

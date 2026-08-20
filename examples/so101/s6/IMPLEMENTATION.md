@@ -108,3 +108,11 @@ camera capture 或数据 converter。action queue 中止、仿真 safe hold、ca
 5. 越界 action 在 S6 模式下直接拒绝，不走现有 S5 clipping 路径；
 6. 使用 camera sensor frame counter 和 observation fingerprint 注入/检测冻结；
 7. 以 `actions_per_inference=10` 证明 fault 后旧动作继续执行为零步，或给出明确的一步检测上界。
+
+## 直接执行入口修复（2026-08-20）
+
+Linux 按 README 运行 `uv run python examples/so101/s6/probe_client.py` 时，Python 只把脚本目录加入
+`sys.path`，导致 `from examples.so101.s6 import safety_log` 在导入阶段失败。`probe_client.py` 现在沿用仓库
+其他 SO-101 命令行脚本的入口方式：仅当作为文件直接执行时，根据 `__file__` 将仓库根目录加入
+`sys.path`；作为 package 导入或使用 `python -m` 时不修改路径。新增子进程回归测试，在没有仓库根目录
+`PYTHONPATH` 的条件下执行 `probe_client.py --help`，验证直接文件入口可以完成所有导入。
