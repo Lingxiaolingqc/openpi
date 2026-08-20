@@ -99,7 +99,8 @@ camera capture 或数据 converter。action queue 中止、仿真 safe hold、ca
 
 ## 第一批结束时的下一批边界
 
-以下列表记录第一批结束时的计划；其中 1 到 5 已在后述阶段 C 完成，第 6 项 camera freeze 仍未完成：
+以下列表记录第一批结束时的计划；1 到 7 均已进入代码，其中第 6 项 camera freeze 仍需 Linux LeIsaac 动态
+证据：
 
 1. action chunk 增加来源 request/response/epoch、接收时间和 TTL；
 2. 每个 `env.step()` 前检查 client watchdog 状态、chunk epoch 和 TTL；
@@ -160,3 +161,25 @@ Linux 从仓库根目录直接执行 `uv run pytest` 时，pytest console script
 `10.0`，并对通过 S6 shape/finite/soft-limit 检查的 raw target 原值执行；任何越界 target 先抛出
 `invalid_action_out_of_range`，不会 clip、入 queue 或调用 `env.step()`。新增纯 Python 回归测试覆盖组合模式的
 合法 raw target 不变，以及 `reject / execute_raw / clip` 三种启动日志语义。
+
+## 阶段 D：camera freeze observation safety（2026-08-21）
+
+新增 `camera_safety.py`，不修改 LeIsaac camera 或任务物理：
+
+- 从当前 IsaacLab 2.x `SensorBase._timestamp_last_update` 读取最后一次完成 camera buffer 更新的 token；若未来
+  sensor 提供 public frame counter，则优先读取 public counter；缺失、空值或非有限 token 都 fail closed；
+- 对每个 policy camera 取固定 16×16 RGB grid 并计算 BLAKE2 fingerprint，避免每个控制步把完整 640×480
+  GPU frame 搬到 CPU；只有 update token 与 fingerprint 同时不变才累计 stale step；
+- LeIsaac camera 为 30 FPS、control 为 60 FPS，`--s6-camera-max-stale-steps` 默认允许一次重复；第二次连续
+  重复触发 `camera_freeze`；`detection_latency_ms` 从第一个可观测 stale observation 起算，检测前旧动作
+  保守上界为 2 步，检测后旧动作为 0；
+- 每个 episode reset 后建立 camera baseline；每次 `env.step()` 返回并标记当前 action 已执行后立即检查新
+  observation，检查完成前不会授权下一步 action；
+- `--s6-inject-camera-freeze-after-step N` 只在 simulation rollout 中冻结送给 policy/freshness monitor 的
+  camera tensor 和监控 token，保留 joint、subtask 等 observation，不改变真实 sensor buffer、render 或物理；
+- 正常路径记录 `camera_monitor_initialized` 和 `camera_observation_checked`；注入记录
+  `camera_freeze_injected`；检测后复用既有 queue clear、measured-pose hold、terminate 和 manual recovery 链。
+
+纯 Python 测试覆盖 token 提取、缺失 token fail-closed、fingerprint、正常 30/60 FPS cadence、两信号联合判定、
+注入范围、有限步检测以及 camera 特定旧动作上界进入统一 fault 日志。Linux LeIsaac 仍需分别运行 normal
+transport 回归和 camera-freeze 注入，确认 normal 无误报且注入 case queue 清零。

@@ -9,6 +9,7 @@ import pytest
 
 from examples.so101 import red_cube_to_box_policy_rollout as rollout
 from examples.so101.s6 import action_safety
+from examples.so101.s6 import camera_safety
 from examples.so101.s6 import safety_log
 
 
@@ -226,6 +227,48 @@ def test_s6_fault_path_clears_queue_holds_pose_and_requires_recovery(capsys) -> 
     phase_line = output_lines.index("RED_CUBE_TO_BOX_POLICY_PHASE=immediate_close")
     close_line = output_lines.index("FAKE_SIMULATION_APP_CLOSE")
     assert recovery_line < phase_line < close_line
+
+
+def test_s6_fault_path_preserves_camera_detection_step_bound(monkeypatch) -> None:
+    events: list[tuple[str, dict[str, object]]] = []
+
+    def capture_event(event: str, **kwargs) -> None:
+        events.append((event, kwargs))
+
+    monkeypatch.setattr(rollout, "_emit_s6_event", capture_event)
+    monkeypatch.setattr(rollout.time, "monotonic_ns", lambda: 2_000_001)
+    queue = action_safety.S6ActionQueue()
+    queue.load(_guarded_chunk())
+    for _ in range(2):
+        queue.peek_next(current_connection_epoch=0, now_monotonic_ns=2_100)
+        queue.mark_executed()
+    context = rollout._enter_s6_safe_state(  # noqa: SLF001
+        exc=camera_safety.CameraSafetyError(
+            "camera_freeze",
+            "injected camera freeze",
+            details={"max_undetected_old_action_steps": 2, "stale_observation_steps": 2},
+            detection_started_monotonic_ns=1,
+        ),
+        queue=queue,
+        policy=None,
+        env=None,
+        robot=None,
+        joint_ids=None,
+        dynamic_gripper_reset=None,
+        torch_module=None,
+        detection_started_ns=None,
+    )
+
+    assert events[0][0] == "rollout_fault_detected"
+    assert events[0][1]["fault_type"] == "camera_freeze"
+    assert events[0][1]["details"]["max_undetected_old_action_steps"] == 2
+    assert events[0][1]["details"]["stale_observation_steps"] == 2
+    assert events[0][1]["detection_latency_ms"] == pytest.approx(2.0)
+    assert events[0][1]["queued_actions_before"] == 8
+    assert events[1][0] == "action_queue_cancelled"
+    assert events[1][1]["queued_actions_before"] == 8
+    assert events[1][1]["queued_actions_after"] == 0
+    assert context["post_fault_old_action_steps"] == 0
 
 
 def test_simulation_close_survives_terminal_s6_log_failure(monkeypatch, capsys) -> None:

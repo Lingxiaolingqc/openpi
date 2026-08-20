@@ -19,6 +19,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from examples.so101.s6 import action_safety as s6_action_safety
+from examples.so101.s6 import camera_safety as s6_camera_safety
 from examples.so101.s6 import safety_log as s6_log
 
 TASK_PROMPT = "Pick up the red cube and place it inside the green box."
@@ -331,6 +332,24 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--s6-watchdog-timeout-s", type=float, default=1.0)
     parser.add_argument("--s6-close-timeout-s", type=float, default=2.0)
     parser.add_argument("--s6-action-chunk-ttl-s", type=float, default=2.0)
+    parser.add_argument(
+        "--s6-camera-max-stale-steps",
+        type=int,
+        default=1,
+        help=(
+            "Allowed consecutive env steps with both an unchanged camera update token and unchanged RGB fingerprint. "
+            "The LeIsaac cameras run at 30 FPS while control runs at 60 FPS, so the default allows one repeated frame."
+        ),
+    )
+    parser.add_argument(
+        "--s6-inject-camera-freeze-after-step",
+        type=int,
+        default=None,
+        help=(
+            "Simulation-only S6 fault injection: after this 1-based env step, hold policy camera images and their "
+            "monitor tokens constant without modifying camera or task physics."
+        ),
+    )
     parser.add_argument("--success_stable_steps", type=int, default=30)
     parser.add_argument("--minimum_lift_m", type=float, default=0.03)
     parser.add_argument("--minimum_success_rate", type=float, default=1.0)
@@ -449,12 +468,15 @@ def _enter_s6_safe_state(
     fault_type = _s6_fault_type(exc)
     correlation = _s6_correlation(policy, queue)
     now_ns = time.monotonic_ns()
+    fault_detection_started_ns = getattr(exc, "detection_started_monotonic_ns", None)
+    if isinstance(fault_detection_started_ns, int) and not isinstance(fault_detection_started_ns, bool):
+        detection_started_ns = fault_detection_started_ns
     detection_latency_ms = (
         None if detection_started_ns is None else max(0.0, (now_ns - detection_started_ns) / 1_000_000.0)
     )
     details = {"error_type": type(exc).__name__, "message": str(exc)}
     details.update(getattr(exc, "details", {}))
-    details["max_undetected_old_action_steps"] = 1
+    details.setdefault("max_undetected_old_action_steps", 1)
     _emit_s6_event(
         "rollout_fault_detected",
         state_from=s6_log.SafeState.NORMAL,
@@ -698,6 +720,13 @@ def main() -> int:
         parser.error("--reset_camera_warmup_steps must be non-negative")
     if args.reset_camera_refreshes < 0:
         parser.error("--reset_camera_refreshes must be non-negative")
+    if args.s6_camera_max_stale_steps < 0:
+        parser.error("--s6-camera-max-stale-steps must be non-negative")
+    if args.s6_inject_camera_freeze_after_step is not None:
+        if args.s6_inject_camera_freeze_after_step < 1:
+            parser.error("--s6-inject-camera-freeze-after-step must be positive")
+        if not args.s6_safety:
+            parser.error("--s6-inject-camera-freeze-after-step requires --s6-safety")
     s6_timeout_values = (
         args.s6_connect_timeout_s,
         args.s6_connect_attempt_timeout_s,
@@ -733,6 +762,11 @@ def main() -> int:
         print(f"s6_inference_timeout_s: {args.s6_inference_timeout_s}", flush=True)
         print(f"s6_watchdog_timeout_s: {args.s6_watchdog_timeout_s}", flush=True)
         print(f"s6_action_chunk_ttl_s: {args.s6_action_chunk_ttl_s}", flush=True)
+        print(f"s6_camera_max_stale_steps: {args.s6_camera_max_stale_steps}", flush=True)
+        print(
+            f"s6_inject_camera_freeze_after_step: {args.s6_inject_camera_freeze_after_step}",
+            flush=True,
+        )
 
     from isaaclab.app import AppLauncher
 
@@ -746,6 +780,8 @@ def main() -> int:
     torch_module = None
     dynamic_gripper_reset = None
     active_s6_queue = s6_action_safety.S6ActionQueue() if args.s6_safety else None
+    camera_freshness_tracker = None
+    camera_freeze_injector = None
     s6_operation_started_ns = None
     s6_fault_context = None
     try:
@@ -791,6 +827,16 @@ def main() -> int:
             dynamic_gripper_reset=dynamic_gripper_reset,
         )
         camera_names = _validate_camera(observations)
+        if args.s6_safety:
+            camera_freshness_tracker = s6_camera_safety.CameraFreshnessTracker(
+                camera_names,
+                max_stale_steps=args.s6_camera_max_stale_steps,
+            )
+            if args.s6_inject_camera_freeze_after_step is not None:
+                camera_freeze_injector = s6_camera_safety.CameraFreezeInjector(
+                    camera_names,
+                    freeze_after_step=args.s6_inject_camera_freeze_after_step,
+                )
         s6_client_options = None
         if args.s6_safety:
             s6_client_options = {
@@ -844,6 +890,33 @@ def main() -> int:
                     )
                 s6_operation_started_ns = time.monotonic_ns()
                 policy.reset()
+                if args.s6_safety:
+                    if active_s6_queue is None or camera_freshness_tracker is None:
+                        raise RuntimeError("S6 camera monitor or action queue was not initialized")
+                    s6_operation_started_ns = time.monotonic_ns()
+                    camera_frame_tokens = s6_camera_safety.read_camera_frame_tokens(
+                        env.scene.sensors,
+                        camera_names,
+                    )
+                    camera_freshness_tracker.reset(observations["policy"], camera_frame_tokens)
+                    if camera_freeze_injector is not None:
+                        camera_freeze_injector.reset(observations["policy"], camera_frame_tokens)
+                    _emit_s6_event(
+                        "camera_monitor_initialized",
+                        state_from=s6_log.SafeState.NORMAL,
+                        state_to=s6_log.SafeState.NORMAL,
+                        correlation=_s6_correlation(policy, active_s6_queue),
+                        queued_actions_before=0,
+                        queued_actions_after=0,
+                        details={
+                            "episode": episode_index,
+                            "camera_names": list(camera_names),
+                            "max_camera_stale_steps": args.s6_camera_max_stale_steps,
+                            "max_undetected_old_action_steps": args.s6_camera_max_stale_steps + 1,
+                            "frame_tokens": {name: camera_frame_tokens[name].as_json() for name in camera_names},
+                            "fingerprint_grid_size": camera_freshness_tracker.fingerprint_grid_size,
+                        },
+                    )
                 recorder = None
                 if args.record_dir is not None:
                     recorder = _RolloutRecorder(
@@ -881,6 +954,7 @@ def main() -> int:
                 inference_latencies_ms: list[float] = []
                 rewards_finite = True
                 unexpected_reset = False
+                camera_maximum_stale_steps_observed = 0
 
                 while (
                     completed_steps < args.maximum_steps
@@ -1063,6 +1137,67 @@ def main() -> int:
                                     "post_fault_old_action_steps": active_s6_queue.post_fault_old_action_steps,
                                 },
                             )
+                            if camera_freshness_tracker is None:
+                                raise RuntimeError("S6 camera freshness tracker was not initialized")
+                            s6_operation_started_ns = time.monotonic_ns()
+                            camera_frame_tokens = s6_camera_safety.read_camera_frame_tokens(
+                                env.scene.sensors,
+                                camera_names,
+                            )
+                            injection_active = False
+                            injection_started = False
+                            if camera_freeze_injector is not None:
+                                (
+                                    injected_policy_observation,
+                                    monitored_frame_tokens,
+                                    injection_active,
+                                    injection_started,
+                                ) = camera_freeze_injector.apply(
+                                    observations["policy"],
+                                    camera_frame_tokens,
+                                    environment_step_after=completed_steps + 1,
+                                )
+                                if injection_active:
+                                    observations = dict(observations)
+                                    observations["policy"] = injected_policy_observation
+                            else:
+                                monitored_frame_tokens = camera_frame_tokens
+                            if injection_started:
+                                _emit_s6_event(
+                                    "camera_freeze_injected",
+                                    state_from=s6_log.SafeState.NORMAL,
+                                    state_to=s6_log.SafeState.NORMAL,
+                                    correlation=_s6_correlation(policy, active_s6_queue),
+                                    queued_actions_before=active_s6_queue.remaining_actions,
+                                    queued_actions_after=active_s6_queue.remaining_actions,
+                                    details={
+                                        "episode": episode_index,
+                                        "environment_step_after": completed_steps + 1,
+                                        "camera_names": list(camera_names),
+                                        "freeze_after_step": args.s6_inject_camera_freeze_after_step,
+                                        "injection_scope": "policy_observation_and_monitor_token_only",
+                                        "camera_or_task_physics_modified": False,
+                                    },
+                                )
+                            camera_check = camera_freshness_tracker.observe(
+                                observations["policy"],
+                                monitored_frame_tokens,
+                                environment_step_after=completed_steps + 1,
+                                injection_active=injection_active,
+                            )
+                            camera_maximum_stale_steps_observed = max(
+                                camera_maximum_stale_steps_observed,
+                                int(camera_check["maximum_stale_steps_observed"]),
+                            )
+                            _emit_s6_event(
+                                "camera_observation_checked",
+                                state_from=s6_log.SafeState.NORMAL,
+                                state_to=s6_log.SafeState.NORMAL,
+                                correlation=_s6_correlation(policy, active_s6_queue),
+                                queued_actions_before=active_s6_queue.remaining_actions,
+                                queued_actions_after=active_s6_queue.remaining_actions,
+                                details=camera_check,
+                            )
                         completed_steps += 1
                         rewards_finite &= bool(torch.isfinite(rewards).all())
                         if args.s6_safety and not rewards_finite:
@@ -1129,6 +1264,11 @@ def main() -> int:
                     "s6_post_fault_old_action_steps": (
                         None if active_s6_queue is None else active_s6_queue.post_fault_old_action_steps
                     ),
+                    "s6_camera_max_stale_steps_allowed": (args.s6_camera_max_stale_steps if args.s6_safety else None),
+                    "s6_camera_max_stale_steps_observed": (
+                        camera_maximum_stale_steps_observed if args.s6_safety else None
+                    ),
+                    "s6_camera_freeze_injection_after_step": args.s6_inject_camera_freeze_after_step,
                     "policy_action_clip_count": clip_count,
                     "policy_action_clip_count_by_joint": clip_count_by_joint.tolist(),
                     "policy_action_max_clip_rad": maximum_clip_rad,

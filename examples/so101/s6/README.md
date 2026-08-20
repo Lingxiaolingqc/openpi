@@ -11,6 +11,7 @@ S5 rollout 路径。
 - `probe_client.py`：protocol v1 client、action 检查和预期 fault 判定；
 - `safety_log.py`：统一 `S6_EVENT` JSON 日志；
 - `action_safety.py`：带 request/response/epoch/TTL 的 action chunk 和 fail-closed queue；
+- `camera_safety.py`：基于 sensor update token 和采样 RGB fingerprint 的相机冻结检测与仿真注入；
 - `IMPLEMENTATION.md`：本批代码边界、安全不变量、测试结果和未完成项。
 
 `probe_client.py` 同时支持本文档使用的文件路径直接执行和
@@ -126,6 +127,7 @@ Set-Location $env:OPENPI_ROOT
   packages\openpi-client\src\openpi_client\websocket_client_policy_test.py `
   examples\so101\s6\safety_log_test.py `
   examples\so101\s6\action_safety_test.py `
+  examples\so101\s6\camera_safety_test.py `
   examples\so101\s6\fake_policy_server_test.py `
   examples\so101\s6\probe_client_test.py `
   examples\so101\red_cube_to_box_policy_rollout_test.py
@@ -253,6 +255,7 @@ uv run python -m pytest -q \
   src/openpi/serving/websocket_policy_server_test.py \
   examples/so101/s6/safety_log_test.py \
   examples/so101/s6/action_safety_test.py \
+  examples/so101/s6/camera_safety_test.py \
   examples/so101/s6/fake_policy_server_test.py \
   examples/so101/s6/probe_client_test.py \
   examples/so101/red_cube_to_box_policy_rollout_test.py
@@ -414,6 +417,23 @@ grep -nE \
 `post_fault_old_action_steps=0`，且 `rollout_fault_detected` 后没有新的 `action_step_executed`。出现 traceback 或
 `RED_CUBE_TO_BOX_POLICY_ROLLOUT_FAILED` 本身不构成通过证据。
 
+### Camera freeze 注入
+
+Camera freeze 是 observation-side fault，不由 policy fake server 生成。终端 A 使用新的 normal fake-server
+进程；终端 B 复用 normal transport rollout，并增加：
+
+```bash
+  --s6-camera-max-stale-steps 1 \
+  --s6-inject-camera-freeze-after-step 1 \
+```
+
+注入层只冻结交给 policy 和 freshness monitor 的 camera observation/token，不修改 LeIsaac camera sensor、任务
+物理或非相机 observation。LeIsaac camera 为 30 FPS、控制为 60 FPS，因此允许一个连续重复 observation；第二个
+连续重复 observation 触发 `fault_type=camera_freeze`。检测前旧动作的保守上界为 2 步，检测后必须为 0 步。
+日志必须依次包含 `camera_monitor_initialized`、`camera_freeze_injected`、`rollout_fault_detected`、
+`action_queue_cancelled`、`safe_hold_applied`、`simulation_terminated` 和 `recovery_required`，并满足
+`queued_actions_before>0`、`queued_actions_after=0`、`post_fault_old_action_steps=0`。
+
 ## 日志提取
 
 probe 和 fake server 默认直接输出到当前终端。若一次正式验证已经由外层运行流程保存为 `$env:S6_LOG`，以下
@@ -441,6 +461,6 @@ grep -nE \
   单元测试及真实 localhost socket 证据，原生 Linux 或 Windows LeIsaac 动态证据仍需按上面的命令生成。
 - 当前逐步 heartbeat 是同步检查；网络若恰好在 pong 后、`env.step()` 期间断开，会在下一步前检测，因此
   物理断流到检测最多存在一个 action step，检测后旧 action 为零步。
-- camera freeze 尚未进入本批 fake server；后续应使用 LeIsaac camera frame counter 和 observation fingerprint
-  验证，而不是修改相机或任务物理逻辑。
+- camera freeze 已进入 rollout observation-side 注入与检测，但仍需在 Linux LeIsaac 生成动态证据；它不属于
+  policy fake server，且不得通过修改相机或任务物理逻辑模拟。
 - 不允许把本目录的 fault case 直接用于已上电真实机械臂。
