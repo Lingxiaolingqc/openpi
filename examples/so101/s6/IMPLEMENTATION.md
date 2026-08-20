@@ -181,5 +181,7 @@ Linux 从仓库根目录直接执行 `uv run pytest` 时，pytest console script
   `camera_freeze_injected`；检测后复用既有 queue clear、measured-pose hold、terminate 和 manual recovery 链。
 
 纯 Python 测试覆盖 token 提取、缺失 token fail-closed、fingerprint、正常 30/60 FPS cadence、两信号联合判定、
-注入范围、有限步检测以及 camera 特定旧动作上界进入统一 fault 日志。Linux LeIsaac 仍需分别运行 normal
-transport 回归和 camera-freeze 注入，确认 normal 无误报且注入 case queue 清零。
+注入范围、有限步检测以及 camera 特定旧动作上界进入统一 fault 日志。Linux LeIsaac normal transport 和
+camera-freeze 注入均已生成会话日志摘录：normal 最大 stale step 为 1 且无误报，freeze case 在 22.036 ms 检测并
+将 queue `8 -> 0`，检测后旧 action 为 0。完整 Phase D 状态、correlation key 和待补案例见
+[`PHASE_D_EVIDENCE.md`](PHASE_D_EVIDENCE.md)。
