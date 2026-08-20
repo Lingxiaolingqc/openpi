@@ -133,7 +133,7 @@ Set-Location $env:OPENPI_ROOT
 通用 server 测试需要仓库使用的 `websockets 15.x` OpenPI 环境，而不是 LeIsaac 的 12.x 环境：
 
 ```powershell
-uv run pytest -q -p no:cacheprovider `
+uv run python -m pytest -q -p no:cacheprovider `
   --confcutdir src\openpi\serving `
   src\openpi\serving\websocket_policy_server_test.py
 ```
@@ -179,6 +179,7 @@ Set-Location $env:OPENPI_ROOT
   --seed 42 `
   --maximum_steps 100 `
   --actions_per_inference 10 `
+  --match_expert_dynamics `
   --s6-safety `
   --s6-inference-timeout-s 1 `
   --s6-watchdog-timeout-s 0.10 `
@@ -190,6 +191,21 @@ Set-Location $env:OPENPI_ROOT
 `safe_hold_applied`、`simulation_terminated` 和 `recovery_required`。验收字段为
 `queued_actions_after=0`、`post_fault_old_action_steps=0`，且没有自动 reconnect。heartbeat 通过后到下一次
 heartbeat 前存在最多一个仿真 action step 的未检测窗口；fault 被检测后旧 action 上界严格为零步。
+
+`--s6-safety` 可以并且建议与 `--match_expert_dynamics` 同时启用。组合模式保留专家采集动力学：robot gravity
+关闭、joint damping 为 `10.0`，且合法 target 保持原值执行；但 S6 会在选择动作前拒绝任何 soft-limit 越界，
+不会 clip 或执行非法 target。启动日志必须显示：
+
+```text
+policy_match_expert_dynamics: True
+s6_safety_enabled: True
+policy_action_out_of_range_behavior: reject
+policy_action_soft_limit_clip_enabled: False
+```
+
+同 checkpoint 成功率 A/B 应固定 seed、episode 数、`actions_per_inference`、camera refresh、maximum steps 和初始
+条件，只改变是否附加 `--s6-safety`：baseline 使用 `--match_expert_dynamics`，安全组使用
+`--match_expert_dynamics --s6-safety`。S6 结果不能替代 S5 checkpoint 闭环验收。
 
 要做正常网络 transport smoke，终端 A 改成 `--fault normal`；终端 B 保留 `--s6-safety`，把
 `--maximum_steps` 改为 `20` 并增加 `--minimum_success_rate 0.0`。该 smoke 只检查 S6 协议、watchdog 和 queue
@@ -226,7 +242,7 @@ Linux 单元测试：
 
 ```bash
 cd /path/to/openpi
-uv run pytest -q \
+uv run python -m pytest -q \
   packages/openpi-client/src/openpi_client/websocket_policy_protocol_test.py \
   packages/openpi-client/src/openpi_client/websocket_client_policy_test.py \
   src/openpi/serving/websocket_policy_server_test.py \

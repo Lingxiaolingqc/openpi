@@ -92,6 +92,51 @@ def test_s6_soft_limit_violation_is_rejected_without_clipping() -> None:
     assert caught.value.details["maximum_soft_limit_violation_rad"] == pytest.approx(0.25)
 
 
+def test_s6_and_match_expert_dynamics_preserve_valid_raw_targets() -> None:
+    raw = np.array([[[0.125, -0.25, 0.5, -0.75, 1.0, 0.25]]], dtype=np.float32)
+    clipped = raw.copy()
+
+    selected = rollout.select_action_chunk_for_execution(
+        raw,
+        clipped,
+        s6_safety=True,
+        match_expert_dynamics=True,
+    )
+
+    assert selected is raw
+    np.testing.assert_array_equal(selected, raw)
+    assert (
+        rollout.policy_action_out_of_range_behavior(
+            s6_safety=True,
+            match_expert_dynamics=True,
+        )
+        == "reject"
+    )
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        ((True, False), "reject"),
+        ((True, True), "reject"),
+        ((False, True), "execute_raw"),
+        ((False, False), "clip"),
+    ],
+)
+def test_policy_action_out_of_range_behavior_is_auditable(
+    flags: tuple[bool, bool],
+    expected: str,
+) -> None:
+    s6_safety, match_expert_dynamics = flags
+    assert (
+        rollout.policy_action_out_of_range_behavior(
+            s6_safety=s6_safety,
+            match_expert_dynamics=match_expert_dynamics,
+        )
+        == expected
+    )
+
+
 def _guarded_chunk(horizon: int = 10) -> action_safety.GuardedActionChunk:
     request = {
         "request_id": "request-1",

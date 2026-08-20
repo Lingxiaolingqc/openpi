@@ -128,8 +128,9 @@ observation ID、client session、connection epoch、服务端时间戳、接收
 
 - 强制 WebSocket protocol v1，并向 adapter 传入有限 connect/send/recv/heartbeat/close timeout；
 - 每个 `env.step()` 前同步执行 heartbeat，再检查 chunk epoch 和 TTL；
-- shape、empty、NaN/Inf 和 soft-limit 越界全部拒绝；S6 不进入原有 clip 路径，也禁止与
-  `--match_expert_dynamics` 同时启用；
+- shape、empty、NaN/Inf 和 soft-limit 越界全部拒绝；S6 不进入原有 clip 路径；
+- 允许与 `--match_expert_dynamics` 同时启用：保留 gravity、damping 和合法 raw target 执行语义，但严格拒绝
+  越界 raw target 后才允许动作进入 queue；
 - 每个 chunk 和 action step 输出 request/response/observation/chunk ID 及时间关联 `S6_EVENT`；
 - 任意 fault 后记录 `fault_detected → action_queue_cancelled → safe_hold → simulation_terminated →
   recovery_required`，queue 清零后执行一次 measured-pose hold，再关闭环境和 SimulationApp；
@@ -147,3 +148,15 @@ Sim；Windows 原生 LeIsaac 动态证据仍需按 `s6/README.md` 命令生成�
 提交前验证：Ruff check 和 format check 通过；`websockets 16.0` 的完整 client/server/S6/rollout 相关测试
 `65 passed`；Windows LeIsaac Python 下不启动 Isaac 的新增 action-safety/rollout 测试 `23 passed`。这些结果
 不能替代 Windows 原生 LeIsaac 中途断流动态验收。
+
+## Linux 测试入口与同动力学 A/B 修正（2026-08-21）
+
+Linux 从仓库根目录直接执行 `uv run pytest` 时，pytest console script 所在目录可能排在仓库根目录之前，导致
+测试收集阶段无法导入 namespace package `examples.so101`。README 中的 Linux 和通用 server 测试入口统一改为
+`uv run python -m pytest`，由 Python 把当前仓库根目录放入 `sys.path`；不通过全局 `PYTHONPATH` 或修改任务包
+结构掩盖入口问题。
+
+删除 `--s6-safety` 与 `--match_expert_dynamics` 的参数互斥。组合模式仍关闭 robot gravity、写入 joint damping
+`10.0`，并对通过 S6 shape/finite/soft-limit 检查的 raw target 原值执行；任何越界 target 先抛出
+`invalid_action_out_of_range`，不会 clip、入 queue 或调用 `env.step()`。新增纯 Python 回归测试覆盖组合模式的
+合法 raw target 不变，以及 `reject / execute_raw / clip` 三种启动日志语义。

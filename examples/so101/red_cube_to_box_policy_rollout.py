@@ -120,6 +120,32 @@ def reject_s6_soft_limit_violations(
     )
 
 
+def policy_action_out_of_range_behavior(*, s6_safety: bool, match_expert_dynamics: bool) -> str:
+    """Describe how raw policy targets outside simulator soft limits are handled."""
+
+    if s6_safety:
+        return "reject"
+    if match_expert_dynamics:
+        return "execute_raw"
+    return "clip"
+
+
+def select_action_chunk_for_execution(
+    raw_actions: np.ndarray,
+    clipped_actions: np.ndarray,
+    *,
+    s6_safety: bool,
+    match_expert_dynamics: bool,
+) -> np.ndarray:
+    """Select validated raw targets for S6/expert dynamics, otherwise the legacy clipped targets."""
+
+    if raw_actions.shape != clipped_actions.shape:
+        raise ValueError("Raw and clipped action chunks must have identical shapes")
+    if s6_safety or match_expert_dynamics:
+        return raw_actions
+    return clipped_actions
+
+
 def reset_with_camera_warmup(
     env,
     robot,
@@ -672,10 +698,6 @@ def main() -> int:
     )
     if any(not math.isfinite(value) or value <= 0.0 for value in s6_timeout_values):
         parser.error("all S6 timeout and action chunk TTL values must be finite and positive")
-    if args.s6_safety and args.match_expert_dynamics:
-        parser.error(
-            "--s6-safety cannot be combined with --match_expert_dynamics because S6 rejects out-of-range actions"
-        )
     if not 0.0 <= args.minimum_success_rate <= 1.0:
         parser.error("--minimum_success_rate must be between 0 and 1")
     assets_root = Path(args.assets_root).expanduser().resolve()
@@ -690,6 +712,11 @@ def main() -> int:
     print(f"actions_per_inference: {args.actions_per_inference}", flush=True)
     print(f"policy_match_expert_dynamics: {args.match_expert_dynamics}", flush=True)
     print(f"s6_safety_enabled: {args.s6_safety}", flush=True)
+    print(
+        "policy_action_out_of_range_behavior: "
+        f"{policy_action_out_of_range_behavior(s6_safety=args.s6_safety, match_expert_dynamics=args.match_expert_dynamics)}",
+        flush=True,
+    )
     if args.s6_safety:
         print(f"s6_inference_timeout_s: {args.s6_inference_timeout_s}", flush=True)
         print(f"s6_watchdog_timeout_s: {args.s6_watchdog_timeout_s}", flush=True)
@@ -780,7 +807,10 @@ def main() -> int:
         print(f"soft_joint_upper_rad: {_rounded(soft_limits[:, 1])}", flush=True)
         print(f"policy_robot_gravity_disabled: {args.match_expert_dynamics}", flush=True)
         print(f"policy_joint_damping_override: {10.0 if args.match_expert_dynamics else None}", flush=True)
-        print(f"policy_action_soft_limit_clip_enabled: {not args.match_expert_dynamics}", flush=True)
+        print(
+            f"policy_action_soft_limit_clip_enabled: {not args.s6_safety and not args.match_expert_dynamics}",
+            flush=True,
+        )
         print(f"policy_protocol_v1_required: {args.s6_safety}", flush=True)
         print("RED_CUBE_TO_BOX_POLICY_PHASE=evaluating", flush=True)
 
@@ -874,8 +904,13 @@ def main() -> int:
                             violation_count_by_joint=chunk_violation_by_joint,
                             maximum_violation_by_joint_rad=chunk_max_violation_by_joint,
                         )
-                    if args.match_expert_dynamics:
-                        action_chunk = raw_action_chunk
+                    action_chunk = select_action_chunk_for_execution(
+                        raw_action_chunk,
+                        clipped_action_chunk,
+                        s6_safety=args.s6_safety,
+                        match_expert_dynamics=args.match_expert_dynamics,
+                    )
+                    if args.s6_safety or args.match_expert_dynamics:
                         chunk_clip_count = 0
                         chunk_max_clip = 0.0
                         chunk_clip_by_joint = np.zeros(len(JOINT_NAMES), dtype=np.int64)
