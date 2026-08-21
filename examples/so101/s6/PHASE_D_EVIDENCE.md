@@ -40,6 +40,7 @@ baseline 成功率没有明显回退”仍必须连接真实 policy server/check
 | --- | --- | ---: | ---: | ---: | --- | --- |
 | camera freeze after step 1 | `camera_freeze` | 22.036 ms | `8 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）** |
 | heartbeat timeout with active chunk | `heartbeat_timeout` | 104.382 ms | `8 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）** |
+| disconnect after response | `disconnected` | 0.467 ms | `7 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）**；当前 commit 的完整重跑 |
 | inference/recv timeout | `inference_timeout` | 103.114 ms | `0 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）** |
 | disconnect before response | `disconnected` | 6.833 ms | `0 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）** |
 | server exit | `disconnected` | 5.065 ms | `0 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）** |
@@ -48,11 +49,10 @@ baseline 成功率没有明显回退”仍必须连接真实 policy server/check
 | bad action shape | `invalid_action_shape` | 6.804 ms | `0 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）** |
 | NaN action | `invalid_action_nonfinite` | 5.318 ms | `0 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）** |
 | out-of-range action | `invalid_action_out_of_range` | 6.421 ms | `0 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）**；60 个越界值被拒绝，没有 clip 或 `env.step()` |
-| disconnect after response（修复前摘录） | `disconnected` | 0.521 ms | `8 -> 0` | 0 | 摘录到 `safe_hold_applied`，未包含 `T -> R` | **部分通过**；应在当前 commit 重跑完整终态 |
 
-queue 非空清除已经由 camera freeze 和 heartbeat timeout 两个当前完整案例证明：检测时均剩余 8 个 action，取消后
-立即变为 0，且 `rollout_fault_detected` 后旧 chunk 的执行数为 0。queue 原本为空的案例证明 response/action 在
-进入执行队列之前被拒绝，不能替代非空 queue cancellation 证据。
+queue 非空清除已经由 camera freeze、heartbeat timeout 和 disconnect-after-response 三个当前完整案例证明：
+检测时分别剩余 8、8 和 7 个 action，取消后立即变为 0，且 `rollout_fault_detected` 后旧 chunk 的执行数为 0。
+queue 原本为空的案例证明 response/action 在进入执行队列之前被拒绝，不能替代非空 queue cancellation 证据。
 
 ## Correlation 证据
 
@@ -63,6 +63,7 @@ queue 非空清除已经由 camera freeze 和 heartbeat timeout 两个当前完�
 | --- | --- | --- | --- | --- | ---: |
 | camera freeze | `73a47ec9` | `a6d7d923` | `b2c9bc60` | `b2c9bc60` | 0 |
 | heartbeat timeout | `cb073f37` | `2c899a31` | `169ed9d7` | `169ed9d7` | 0 |
+| disconnect after response | `fd1eb356` | `bf21ee53` | `071678df` | `071678df` | 0 |
 | inference timeout | `e2cb6203` | `1628cdaa` | `-` | `-` | 0 |
 | disconnect | `0c8415cf` | `fb8e8b1a` | `-` | `-` | 0 |
 | server exit | `775a60f4` | `2dcdaea4` | `-` | `-` | 0 |
@@ -79,7 +80,6 @@ request/response ID。shape、NaN 和越界案例保留合法 transport response
 
 | 项目 | 当前证据 | 下一步 |
 | --- | --- | --- |
-| 当前 commit 的 `disconnect-after-response` | 修复前运行已证明 queue `8 -> 0` 和 hold，但摘录缺少完整 `T -> R` | 用新 fake-server 进程重跑并保存完整 `$S6_LOG` |
 | `drop-response` injector | inference-timeout fault class 已通过，但没有该 injector 的独立 Linux 摘录 | 运行 `--fault drop-response`，预期 `inference_timeout` |
 | `inf-action` injector | `invalid_action_nonfinite` fault class 已由 NaN 证明，但没有 Inf injector 的独立 Linux 摘录 | 运行 `--fault inf-action`，预期同一 fault type 且零 action 执行 |
 | connect/metadata/send timeout | 纯 Python/localhost 测试覆盖有限等待；当前矩阵只有 recv 和 heartbeat 的 LeIsaac 动态证据 | 若 Phase B 要求逐项 Linux 动态证据，分别保存 connect/metadata/send case 日志 |
@@ -91,5 +91,4 @@ request/response ID。shape、NaN 和越界案例保留合法 transport response
 
 camera normal/freeze、非空 queue clear、检测后零旧 action、measured-pose hold、受控仿真终止和人工恢复要求均有
 Linux LeIsaac 动态证据。当前不能把 Phase D 标记为完全关闭：至少还缺真实 policy baseline；若验收口径要求
-fake server 的每个 injector 都必须独立运行，还需补 `drop-response`、`inf-action` 和当前 commit 的
-`disconnect-after-response` 完整日志。
+fake server 的每个 injector 都必须独立运行，还需补 `drop-response` 和 `inf-action` 完整日志。
