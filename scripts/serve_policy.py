@@ -7,6 +7,7 @@ import tyro
 
 from openpi.policies import policy as _policy
 from openpi.policies import policy_config as _policy_config
+from openpi.serving import policy_deployment as _policy_deployment
 from openpi.serving import websocket_policy_server
 from openpi.training import config as _config
 
@@ -50,6 +51,10 @@ class Args:
     port: int = 8000
     # Record the policy's behavior for debugging.
     record: bool = False
+
+    # Optional deployment boundary advertised to clients. The simulation-only value requires an explicit confirmation.
+    deployment_scope: str | None = None
+    confirm_simulation_only: str = ""
 
     # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
     policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
@@ -98,7 +103,11 @@ def create_policy(args: Args) -> _policy.Policy:
 
 def main(args: Args) -> None:
     policy = create_policy(args)
-    policy_metadata = policy.metadata
+    policy_metadata = _policy_deployment.prepare_metadata(
+        policy.metadata,
+        deployment_scope=args.deployment_scope,
+        confirm_simulation_only=args.confirm_simulation_only,
+    )
 
     # Record the policy's behavior.
     if args.record:
@@ -107,6 +116,8 @@ def main(args: Args) -> None:
     hostname = socket.gethostname()
     local_ip = socket.gethostbyname(hostname)
     logging.info("Creating server (host: %s, ip: %s)", hostname, local_ip)
+    if args.deployment_scope == _policy_deployment.SIMULATION_ONLY_SCOPE:
+        logging.warning("Serving a simulation-only policy; real-robot deployment is forbidden")
 
     server = websocket_policy_server.WebsocketPolicyServer(
         policy=policy,

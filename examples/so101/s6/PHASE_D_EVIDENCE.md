@@ -32,7 +32,8 @@
 
 normal fake-server smoke 只证明 protocol、watchdog、queue 和 camera freshness 集成没有误报。Phase D 的“正常网络
 baseline 成功率没有明显回退”仍必须连接真实 policy server/checkpoint，以固定 seed、episode 和
-`actions_per_inference=10` 与 S6 前基线比较。
+`actions_per_inference=10` 与 S6 前基线比较。ACT 与 OpenPI 30000-step checkpoint 的四组固定条件命令见
+[`POLICY_AB_RUNBOOK.md`](POLICY_AB_RUNBOOK.md)。
 
 ## Fault rollout
 
@@ -86,7 +87,7 @@ request/response ID。shape、NaN 和越界案例保留合法 transport response
 | --- | --- | --- |
 | connect/metadata/send timeout | 纯 Python/localhost 测试覆盖有限等待；当前矩阵只有 recv 和 heartbeat 的 LeIsaac 动态证据 | 若 Phase B 要求逐项 Linux 动态证据，分别保存 connect/metadata/send case 日志 |
 | TTL 和旧 epoch chunk | 单元测试覆盖 TTL、epoch 和 reconnect 后旧 chunk 拒绝；当前无 Linux LeIsaac 动态摘录 | 仅在正式验收要求动态注入时补充，不允许自动 reconnect 掩盖旧 epoch |
-| 真实 policy baseline | fake-server normal smoke 通过，但任务成功率为 0，不能比较策略能力 | 使用真实 checkpoint、相同 seed/episode/dynamics 对比 S6 前后成功率和 latency |
+| 真实 policy baseline | fake-server normal smoke 通过，但任务成功率为 0，不能比较策略能力；四组固定条件 runbook 已就绪 | 按 `POLICY_AB_RUNBOOK.md` 运行 ACT/OpenPI 各自的 S6 off/on，保存成功率和 latency |
 | 原始日志归档 | 当前矩阵来自会话摘录 | 保存每个 case 的命令、commit、`rollout_status`、server log 和 rollout log |
 
 ## 当前结论
