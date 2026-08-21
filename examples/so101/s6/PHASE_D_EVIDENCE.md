@@ -49,6 +49,7 @@ baseline 成功率没有明显回退”仍必须连接真实 policy server/check
 | duplicate response | `duplicate_response` | 4.277 ms | `0 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）**；使用 defer-until-next-request 修复后的运行 |
 | bad action shape | `invalid_action_shape` | 6.804 ms | `0 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）** |
 | NaN action | `invalid_action_nonfinite` | 5.318 ms | `0 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）** |
+| Inf action | `invalid_action_nonfinite` | 6.424 ms | `0 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）**；保留 response ID，但没有创建 action chunk |
 | out-of-range action | `invalid_action_out_of_range` | 6.421 ms | `0 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）**；60 个越界值被拒绝，没有 clip 或 `env.step()` |
 
 queue 非空清除已经由 camera freeze、heartbeat timeout 和 disconnect-after-response 三个当前完整案例证明：
@@ -73,6 +74,7 @@ queue 原本为空的案例证明 response/action 在进入执行队列之前被
 | duplicate response | `0378d63e` | `b4e546d7` | `-` | `-` | 0 |
 | bad shape | `17cb291f` | `9082bd60` | `a0138f9a` | `-` | 0 |
 | NaN action | `9e1e83b3` | `c30dfef8` | `f8c70fdc` | `-` | 0 |
+| Inf action | `4092de4a` | `29ce2a51` | `bb4dceb4` | `-` | 0 |
 | out-of-range action | `253d58bf` | `8b342581` | `2c1427e9` | `-` | 0 |
 
 stale/duplicate response 的 fault event 保留 in-flight observation/request，错误 message 记录收到但被拒绝的
@@ -82,7 +84,6 @@ request/response ID。shape、NaN 和越界案例保留合法 transport response
 
 | 项目 | 当前证据 | 下一步 |
 | --- | --- | --- |
-| `inf-action` injector | `invalid_action_nonfinite` fault class 已由 NaN 证明，但没有 Inf injector 的独立 Linux 摘录 | 运行 `--fault inf-action`，预期同一 fault type 且零 action 执行 |
 | connect/metadata/send timeout | 纯 Python/localhost 测试覆盖有限等待；当前矩阵只有 recv 和 heartbeat 的 LeIsaac 动态证据 | 若 Phase B 要求逐项 Linux 动态证据，分别保存 connect/metadata/send case 日志 |
 | TTL 和旧 epoch chunk | 单元测试覆盖 TTL、epoch 和 reconnect 后旧 chunk 拒绝；当前无 Linux LeIsaac 动态摘录 | 仅在正式验收要求动态注入时补充，不允许自动 reconnect 掩盖旧 epoch |
 | 真实 policy baseline | fake-server normal smoke 通过，但任务成功率为 0，不能比较策略能力 | 使用真实 checkpoint、相同 seed/episode/dynamics 对比 S6 前后成功率和 latency |
@@ -91,5 +92,5 @@ request/response ID。shape、NaN 和越界案例保留合法 transport response
 ## 当前结论
 
 camera normal/freeze、非空 queue clear、检测后零旧 action、measured-pose hold、受控仿真终止和人工恢复要求均有
-Linux LeIsaac 动态证据。当前不能把 Phase D 标记为完全关闭：至少还缺真实 policy baseline；若验收口径要求
-fake server 的每个 injector 都必须独立运行，还需补 `inf-action` 完整日志。
+Linux LeIsaac 动态证据，fake server 的全部 injector 模式也都有独立运行摘录。当前仍不能把 Phase D 标记为
+完全关闭：还缺真实 policy baseline，以及命令、commit、`rollout_status`、server log 和 rollout log 的原始归档。
