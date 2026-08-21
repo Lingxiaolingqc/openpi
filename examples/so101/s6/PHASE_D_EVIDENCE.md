@@ -42,6 +42,7 @@ baseline 成功率没有明显回退”仍必须连接真实 policy server/check
 | heartbeat timeout with active chunk | `heartbeat_timeout` | 104.382 ms | `8 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）** |
 | disconnect after response | `disconnected` | 0.467 ms | `7 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）**；当前 commit 的完整重跑 |
 | inference/recv timeout | `inference_timeout` | 103.114 ms | `0 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）** |
+| drop response | `inference_timeout` | 103.319 ms | `0 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）**；没有 chunk 或 action 被接受 |
 | disconnect before response | `disconnected` | 6.833 ms | `0 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）** |
 | server exit | `disconnected` | 5.065 ms | `0 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）** |
 | stale response | `stale_response` | 6.243 ms | `0 -> 0` | 0 | `F -> Q -> H -> T -> R` | **通过（摘录）** |
@@ -65,6 +66,7 @@ queue 原本为空的案例证明 response/action 在进入执行队列之前被
 | heartbeat timeout | `cb073f37` | `2c899a31` | `169ed9d7` | `169ed9d7` | 0 |
 | disconnect after response | `fd1eb356` | `bf21ee53` | `071678df` | `071678df` | 0 |
 | inference timeout | `e2cb6203` | `1628cdaa` | `-` | `-` | 0 |
+| drop response | `caef9579` | `609b142e` | `-` | `-` | 0 |
 | disconnect | `0c8415cf` | `fb8e8b1a` | `-` | `-` | 0 |
 | server exit | `775a60f4` | `2dcdaea4` | `-` | `-` | 0 |
 | stale response | `f7db86fe` | `b2a2ee98` | `-` | `-` | 0 |
@@ -80,7 +82,6 @@ request/response ID。shape、NaN 和越界案例保留合法 transport response
 
 | 项目 | 当前证据 | 下一步 |
 | --- | --- | --- |
-| `drop-response` injector | inference-timeout fault class 已通过，但没有该 injector 的独立 Linux 摘录 | 运行 `--fault drop-response`，预期 `inference_timeout` |
 | `inf-action` injector | `invalid_action_nonfinite` fault class 已由 NaN 证明，但没有 Inf injector 的独立 Linux 摘录 | 运行 `--fault inf-action`，预期同一 fault type 且零 action 执行 |
 | connect/metadata/send timeout | 纯 Python/localhost 测试覆盖有限等待；当前矩阵只有 recv 和 heartbeat 的 LeIsaac 动态证据 | 若 Phase B 要求逐项 Linux 动态证据，分别保存 connect/metadata/send case 日志 |
 | TTL 和旧 epoch chunk | 单元测试覆盖 TTL、epoch 和 reconnect 后旧 chunk 拒绝；当前无 Linux LeIsaac 动态摘录 | 仅在正式验收要求动态注入时补充，不允许自动 reconnect 掩盖旧 epoch |
@@ -91,4 +92,4 @@ request/response ID。shape、NaN 和越界案例保留合法 transport response
 
 camera normal/freeze、非空 queue clear、检测后零旧 action、measured-pose hold、受控仿真终止和人工恢复要求均有
 Linux LeIsaac 动态证据。当前不能把 Phase D 标记为完全关闭：至少还缺真实 policy baseline；若验收口径要求
-fake server 的每个 injector 都必须独立运行，还需补 `drop-response` 和 `inf-action` 完整日志。
+fake server 的每个 injector 都必须独立运行，还需补 `inf-action` 完整日志。
