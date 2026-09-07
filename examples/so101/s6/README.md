@@ -77,21 +77,21 @@ S6_PROBE_OK: expected_fault=none observed_fault=none
 每行都使用两个终端。终端 A 在 normal 命令基础上替换 server 参数；终端 B 在 normal probe 基础上替换 probe
 参数。每次 case 使用新的 server 进程，避免 request count 和 socket 状态跨 case 残留。
 
-| Case | 终端 A 的 server 参数 | 终端 B 的 probe 参数 | 预期结果 |
-|---|---|---|---|
-| 固定延迟但未超时 | `--fault fixed-delay --delay-s 0.20` | `--inference-timeout-s 1 --expect-fault none` | 正常 response，日志含 latency |
-| jitter | `--fault jitter --jitter-min-s 0.05 --jitter-max-s 0.30` | `--inference-timeout-s 1 --expect-fault none` | 正常 response，延迟变化 |
-| inference timeout | `--fault inference-timeout --stall-s 10` | `--inference-timeout-s 0.10 --expect-fault inference_timeout` | client fault，socket 关闭 |
-| 短时丢 response | `--fault drop-response` | `--inference-timeout-s 0.10 --expect-fault inference_timeout` | client fault，不自动重试 |
-| 完全断流 | `--fault disconnect` | `--expect-fault disconnected` | disconnect fault |
-| chunk 中途断流 | `--fault disconnect-after-response --disconnect-after-response-s 0.05` | rollout `--s6-safety` | 下一步 watchdog 拒绝旧 queue |
-| server 主动退出 | `--fault server-exit` | `--expect-fault disconnected` | server 进程结束，client fault |
-| shape 错误 | `--fault bad-shape` | `--expect-fault invalid_action_shape` | action 被拒绝 |
-| NaN | `--fault nan-action` | `--expect-fault invalid_action_nonfinite` | action 被拒绝 |
-| Inf | `--fault inf-action` | `--expect-fault invalid_action_nonfinite` | action 被拒绝 |
-| 越界 | `--fault out-of-range-action` | `--max-abs-action 180 --expect-fault invalid_action_out_of_range` | action 被拒绝、不 clip |
-| stale response | `--fault stale-response` | `--expect-fault stale_response` | response 被拒绝，client fault |
-| duplicate response | `--fault duplicate-response` | `--requests 2 --expect-fault duplicate_response` | 第二次 request 拒绝遗留 duplicate |
+| Case               | 终端 A 的 server 参数                                                    | 终端 B 的 probe 参数                                                | 预期结果                          |
+| ------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------- | --------------------------------- |
+| 固定延迟但未超时   | `--fault fixed-delay --delay-s 0.20`                                   | `--inference-timeout-s 1 --expect-fault none`                     | 正常 response，日志含 latency     |
+| jitter             | `--fault jitter --jitter-min-s 0.05 --jitter-max-s 0.30`               | `--inference-timeout-s 1 --expect-fault none`                     | 正常 response，延迟变化           |
+| inference timeout  | `--fault inference-timeout --stall-s 10`                               | `--inference-timeout-s 0.10 --expect-fault inference_timeout`     | client fault，socket 关闭         |
+| 短时丢 response    | `--fault drop-response`                                                | `--inference-timeout-s 0.10 --expect-fault inference_timeout`     | client fault，不自动重试          |
+| 完全断流           | `--fault disconnect`                                                   | `--expect-fault disconnected`                                     | disconnect fault                  |
+| chunk 中途断流     | `--fault disconnect-after-response --disconnect-after-response-s 0.05` | rollout `--s6-safety`                                             | 下一步 watchdog 拒绝旧 queue      |
+| server 主动退出    | `--fault server-exit`                                                  | `--expect-fault disconnected`                                     | server 进程结束，client fault     |
+| shape 错误         | `--fault bad-shape`                                                    | `--expect-fault invalid_action_shape`                             | action 被拒绝                     |
+| NaN                | `--fault nan-action`                                                   | `--expect-fault invalid_action_nonfinite`                         | action 被拒绝                     |
+| Inf                | `--fault inf-action`                                                   | `--expect-fault invalid_action_nonfinite`                         | action 被拒绝                     |
+| 越界               | `--fault out-of-range-action`                                          | `--max-abs-action 180 --expect-fault invalid_action_out_of_range` | action 被拒绝、不 clip            |
+| stale response     | `--fault stale-response`                                               | `--expect-fault stale_response`                                   | response 被拒绝，client fault     |
+| duplicate response | `--fault duplicate-response`                                           | `--requests 2 --expect-fault duplicate_response`                  | 第二次 request 拒绝遗留 duplicate |
 
 示例：验证 inference timeout。
 

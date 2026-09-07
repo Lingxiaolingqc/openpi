@@ -161,6 +161,8 @@ dmypy.json
 cython_debug/
 
 # Local SO-101 remote-teleoperation runtime (not project source)
+/tmp/
+/.codex_tmp_*/
 /tmp/leisaac-v0.4.0/
 /tmp/leisaac-remote-env/
 /tmp/leisaac-remote-*.json

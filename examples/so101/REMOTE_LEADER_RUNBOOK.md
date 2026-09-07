@@ -200,7 +200,7 @@ timeout --signal=KILL 30m \
   2>&1 | tee "$REMOTE_WEB_TELEOP_LOG"
 ```
 
-Wait for `REMOTE_WEB_TELEOP_READY`, then open <http://127.0.0.1:5557> on Windows. `Start / Resume` applies
+Wait for `REMOTE_WEB_TELEOP_READY`, then open [http://127.0.0.1:5557](http://127.0.0.1:5557) on Windows. `Start / Resume` applies
 Leader actions; `Success + Reset` and `Discard + Reset` reset the preview environment; `Stop Server` exits.
 Without `--dataset_file`, the status page reports `recording_enabled: false` and no dataset is written.
 

@@ -814,6 +814,7 @@ relative_position_error = norm(p_cube_in_gripper_live - p_cube_in_gripper_at_ret
 
 最终双证据版本需重新通过 polar 静态回归和 Windows seed-42 smoke；是否把服务器 `44/50` 提高到目标门槛，
 仍需用同一 seed 的 50 回合 batch 动态验证，静态检查不能替代动力学结论。
+
 ## 28. 从成功率验证进入 S4 时，不能直接保存状态机的 8D action
 
 RedCube 状态机输入环境的是 7D Cartesian pose 加 1D gripper 命令，但 OpenPI SO-101 policy 的训练 action 是

@@ -1,5 +1,5 @@
 [dataset]
-repo_id = "local/so101-redcube-polar-s4-frame0-pilot20"
+repo_id = "local/so101-redcube-polar-s4-frame0-100"
 action_semantics = "absolute_joint_position_target_motor_degrees"
 expected_camera_keys = ["observation.images.front"]
 
