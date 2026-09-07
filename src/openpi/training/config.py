@@ -22,6 +22,7 @@ import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.franka_policy as franka_policy
 import openpi.policies.libero_policy as libero_policy
+import openpi.policies.piper_policy as piper_policy
 import openpi.policies.so101_policy as so101_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
@@ -41,6 +42,7 @@ SO101_LIFTCUBE_REPO_ID = os.environ.get(
     "local/leisaac-so101-liftcube-smoke-20260808",
 )
 FRANKA_REPO_ID = os.environ.get("OPENPI_FRANKA_REPO_ID", "local/franka-generic-v1")
+PIPER_REPO_ID = os.environ.get("OPENPI_PIPER_REPO_ID", "local/piper-red-cube-to-box-v1")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -433,6 +435,37 @@ class LeRobotFrankaDataConfig(DataConfigFactory):
         if self.use_delta_joint_actions:
             # Store and serve absolute targets while teaching the model seven state-relative joint deltas.
             delta_action_mask = _transforms.make_bool_mask(7, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=self.repack_transforms,
+            data_transforms=data_transforms,
+            model_transforms=ModelTransformFactory()(model_config),
+            action_sequence_keys=self.action_sequence_keys,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotPiperDataConfig(DataConfigFactory):
+    """Configure the single-camera, seven-dimensional PiPER simulation contract."""
+
+    use_delta_joint_actions: bool = True
+    repack_transforms: tyro.conf.Suppress[_transforms.Group] = dataclasses.field(
+        default=_transforms.Group(inputs=[piper_policy.RepackPiperData()])
+    )
+    action_sequence_keys: Sequence[str] = ("action",)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        data_transforms = _transforms.Group(
+            inputs=[piper_policy.PiperInputs(model_type=model_config.model_type)],
+            outputs=[piper_policy.PiperOutputs()],
+        )
+        if self.use_delta_joint_actions:
+            delta_action_mask = _transforms.make_bool_mask(6, -1)
             data_transforms = data_transforms.push(
                 inputs=[_transforms.DeltaActions(delta_action_mask)],
                 outputs=[_transforms.AbsoluteActions(delta_action_mask)],
@@ -932,6 +965,50 @@ _CONFIGS = [
             "action_layout": [*franka_policy.FRANKA_JOINT_NAMES, "gripper_width_m"],
             "action_semantics": "absolute_joint_position_and_gripper_width",
             "camera_roles": {"base": "required", "wrist": "optional"},
+            "real_robot_deployment_allowed": False,
+        },
+    ),
+    # MuJoCo-only AgileX PiPER smoke config. Override num_train_steps from the audited train frame count.
+    TrainConfig(
+        name="pi05_piper_lora",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotPiperDataConfig(
+            repo_id=PIPER_REPO_ID,
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        batch_size=8,
+        num_workers=0,
+        num_train_steps=100,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=10,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        policy_metadata={
+            "interface_version": 1,
+            "policy_config": "pi05_piper_lora",
+            "robot_type": "agilex_piper",
+            "end_effector": "menagerie_parallel_gripper",
+            "physics_hz": 500,
+            "control_hz": 20,
+            "action_horizon": 10,
+            "action_dim": 7,
+            "state_layout": list(piper_policy.PIPER_STATE_NAMES),
+            "action_layout": list(piper_policy.PIPER_STATE_NAMES),
+            "action_semantics": "absolute_joint_positions_and_normalized_gripper",
+            "training_transform": "first_six_state_relative_deltas_gripper_absolute",
+            "camera_roles": {"base": "required", "wrist": "absent"},
+            "deployment_scope": "simulation-only",
             "real_robot_deployment_allowed": False,
         },
     ),

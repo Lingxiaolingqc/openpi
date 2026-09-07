@@ -1,0 +1,6 @@
+numpy>=1.22.4,<2.0.0
+mujoco>=2.3.4,<4
+h5py>=3.11
+imageio>=2.36.1
+imageio-ffmpeg>=0.5
+matplotlib>=3.10
